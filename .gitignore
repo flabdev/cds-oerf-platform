@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.env
+.env.*
+
+# PyCharm / IntelliJ
+.idea/
+
+# macOS
+.DS_Store
+
+# AWS CDK
+cdk.out/
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Build
+build/
+dist/
+*.egg-info/
+.codevector.json
