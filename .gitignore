@@ -28,3 +28,7 @@ dist/
 .codevector.json
 opencode.json
 .cline/providers.json
+
+# Local-only project guidance and Claude settings
+.claude/settings.local.json
+/OERF_Initial_CDK_Foundation_Guide.md

@@ -13,7 +13,7 @@ OerfDataStack(
         account=os.environ["CDK_DEFAULT_ACCOUNT"],
         region=os.environ.get(
             "CDK_DEFAULT_REGION",
-            "ap-south-1",
+            "us-east-1",
         ),
     ),
 )

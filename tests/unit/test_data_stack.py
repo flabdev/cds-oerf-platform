@@ -12,7 +12,7 @@ from aws_cdk.assertions import Template
 from infra.stacks.data_stack import OerfDataStack
 
 ACCOUNT = "123456789012"
-REGION = "ap-south-1"
+REGION = "us-east-1"
 
 EXPECTED_TABLE_NAMES = (
     "PlatformTable",
