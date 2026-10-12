@@ -1,9 +1,12 @@
 from aws_cdk import (
     RemovalPolicy,
     Stack,
+    CfnOutput,
     aws_dynamodb as dynamodb,
     aws_events as events,
     aws_s3 as s3,
+    aws_cognito as cognito,
+    aws_iam as iam,
 )
 from constructs import Construct
 
@@ -132,3 +135,57 @@ class OerfDataStack(Stack):
             "OerfEventBus",
             event_bus_name="oerf-events",
         )
+
+        # ---------------------------------------------------------
+        # Cognito: User Pool for Dashboard Auth
+        # ---------------------------------------------------------
+        self.user_pool = cognito.UserPool(
+            self, 
+            "OerfUserPool",
+            user_pool_name="oerf-users",
+            self_sign_up_enabled=False,
+            auto_verify=cognito.AutoVerifiedAttrs(email=True),
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        
+        cognito.CfnUserPoolGroup(self, "PlatformAdminGroup", user_pool_id=self.user_pool.user_pool_id, group_name="platform_admin")
+        cognito.CfnUserPoolGroup(self, "TenantAdminGroup", user_pool_id=self.user_pool.user_pool_id, group_name="tenant_admin")
+        cognito.CfnUserPoolGroup(self, "OpsUserGroup", user_pool_id=self.user_pool.user_pool_id, group_name="ops_user")
+
+        # ---------------------------------------------------------
+        # IAM: GitHub OIDC Provider for CI/CD
+        # ---------------------------------------------------------
+        github_domain = "token.actions.githubusercontent.com"
+        github_provider = iam.OpenIdConnectProvider(
+            self, 
+            "GithubOIDCProvider",
+            url=f"https://{github_domain}",
+            client_ids=["sts.amazonaws.com"],
+        )
+        
+        github_role = iam.Role(
+            self, 
+            "GitHubDeployRole",
+            role_name="OerfGitHubDeployRole",
+            assumed_by=iam.OpenIdConnectPrincipal(github_provider, conditions={
+                "StringLike": {
+                    f"{github_domain}:sub": "repo:flabdev/cds-oerf-platform:*"
+                }
+            }),
+            description="Role assumed by GitHub Actions to deploy CDK",
+        )
+        github_role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("AdministratorAccess"))
+
+        # ---------------------------------------------------------
+        # Stack Outputs
+        # ---------------------------------------------------------
+        CfnOutput(self, "GitHubDeployRoleArn", value=github_role.role_arn)
+        CfnOutput(self, "PlatformTableName", value=self.platform_table.table_name)
+        CfnOutput(self, "TenantTableName", value=self.tenant_table.table_name)
+        CfnOutput(self, "IncidentTableName", value=self.incident_table.table_name)
+        CfnOutput(self, "RoutingTableName", value=self.routing_table.table_name)
+        CfnOutput(self, "EvidenceBucketName", value=self.evidence_bucket.bucket_name)
+        CfnOutput(self, "ReportBucketName", value=self.report_bucket.bucket_name)
+        CfnOutput(self, "CognitoUserPoolId", value=self.user_pool.user_pool_id)
+        CfnOutput(self, "EventBusArn", value=self.event_bus.event_bus_arn)
+

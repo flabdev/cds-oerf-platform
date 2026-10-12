@@ -30,3 +30,7 @@ line-length = 88
 [tool.ruff.lint.isort]
 combine-as-imports = true
 
+[tool.setuptools]
+packages = ["infra", "tests"]
+
+
