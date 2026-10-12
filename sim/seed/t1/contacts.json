@@ -1,0 +1,72 @@
+[
+  {
+    "tenant_id": "t1",
+    "PK": "TENANT#t1",
+    "SK": "CONTACT#C-T1-DRV",
+    "contact_id": "C-T1-DRV",
+    "party_role": "driver",
+    "label": "Driver (T1)",
+    "whatsapp": "${PHONE_T1_DRIVER}",
+    "sms": "${PHONE_T1_DRIVER}",
+    "email": null,
+    "opt_in": true,
+    "scripted": false,
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "tenant_id": "t1",
+    "PK": "TENANT#t1",
+    "SK": "CONTACT#C-T1-OPS",
+    "contact_id": "C-T1-OPS",
+    "party_role": "ops_manager",
+    "label": "Ops manager (T1)",
+    "whatsapp": "${PHONE_T1_OPS}",
+    "sms": "${PHONE_T1_OPS}",
+    "email": null,
+    "opt_in": true,
+    "scripted": false,
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "tenant_id": "t1",
+    "PK": "TENANT#t1",
+    "SK": "CONTACT#C-T1-QA",
+    "contact_id": "C-T1-QA",
+    "party_role": "qa",
+    "label": "QA (T1)",
+    "whatsapp": "${PHONE_T1_QA}",
+    "sms": "${PHONE_T1_QA}",
+    "email": "qa@example.com",
+    "opt_in": true,
+    "scripted": false,
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "tenant_id": "t1",
+    "PK": "TENANT#t1",
+    "SK": "CONTACT#C-T1-FACA",
+    "contact_id": "C-T1-FACA",
+    "party_role": "facility",
+    "label": "Facility A (T1)",
+    "whatsapp": "${PHONE_T1_FACA}",
+    "sms": "${PHONE_T1_FACA}",
+    "email": null,
+    "opt_in": true,
+    "scripted": false,
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "tenant_id": "t1",
+    "PK": "TENANT#t1",
+    "SK": "CONTACT#C-T1-FACB",
+    "contact_id": "C-T1-FACB",
+    "party_role": "facility",
+    "label": "Facility B (T1)",
+    "whatsapp": "${PHONE_T1_FACB}",
+    "sms": "${PHONE_T1_FACB}",
+    "email": null,
+    "opt_in": true,
+    "scripted": false,
+    "timezone": "Asia/Kolkata"
+  }
+]
