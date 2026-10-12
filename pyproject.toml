@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cds-oerf-platform"
+version = "0.1.0"
+description = "Operational Exception Resolution Framework"
+requires-python = ">=3.11"
+
+dependencies = [
+    "aws-cdk-lib>=2.0.0",
+    "constructs>=10.0.0,<11.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.6.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
