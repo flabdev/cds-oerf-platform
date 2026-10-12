@@ -7,6 +7,7 @@ from aws_cdk import (
     aws_s3 as s3,
     aws_cognito as cognito,
     aws_iam as iam,
+    aws_stepfunctions as sfn,
 )
 from constructs import Construct
 
@@ -135,7 +136,21 @@ class OerfDataStack(Stack):
             "OerfEventBus",
             event_bus_name="oerf-events",
         )
-
+        # ---------------------------------------------------------
+        # Step Functions: Cold-Chain Workflow
+        # ---------------------------------------------------------
+        self.cold_chain_state_machine = sfn.StateMachine(
+            self,
+            "OerfColdChainStateMachine",
+            state_machine_name="oerf-cold-chain",
+            state_machine_type=sfn.StateMachineType.STANDARD,
+            definition_body=sfn.DefinitionBody.from_chainable(
+                sfn.Pass(
+                    self,
+                    "InitializeColdChainWorkflow",
+                )
+            ),
+        )
         # ---------------------------------------------------------
         # Cognito: User Pool for Dashboard Auth
         # ---------------------------------------------------------
@@ -191,4 +206,5 @@ class OerfDataStack(Stack):
         CfnOutput(self, "ReportBucketName", value=self.report_bucket.bucket_name)
         CfnOutput(self, "CognitoUserPoolId", value=self.user_pool.user_pool_id)
         CfnOutput(self, "EventBusArn", value=self.event_bus.event_bus_arn)
+        CfnOutput(self, "ColdChainStateMachineArn", value=self.cold_chain_state_machine.state_machine_arn)
 
