@@ -19,6 +19,9 @@ dev = [
     "ruff>=0.6.0",
 ]
 
+[tool.setuptools]
+packages = ["infra", "platform", "domains", "sim", "tests"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

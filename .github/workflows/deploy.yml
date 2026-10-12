@@ -1,0 +1,43 @@
+name: Deploy OERF Platform
+
+on:
+  push:
+    branches:
+      - main
+      - feature/* # Allowing it to trigger on feature branches for testing
+
+permissions:
+  id-token: write # Required for GitHub OIDC
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to AWS via CDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: . # Team repo has CDK at root via cdk.json
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          role-to-assume: arn:aws:iam::906048429638:role/OerfGitHubDeployRole
+          aws-region: us-east-1
+
+      - name: Install dependencies
+        run: |
+          npm install -g aws-cdk
+          pip install -e .
+
+      - name: CDK Deploy
+        run: |
+          cdk deploy --all --require-approval never
