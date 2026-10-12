@@ -168,9 +168,12 @@ class OerfDataStack(Stack):
             "GitHubDeployRole",
             role_name="OerfGitHubDeployRole",
             assumed_by=iam.OpenIdConnectPrincipal(github_provider, conditions={
+                "StringEquals": {
+                    f"{github_domain}:aud": "sts.amazonaws.com",
+                },
                 "StringLike": {
-                    f"{github_domain}:sub": "repo:flabdev/cds-oerf-platform:*"
-                }
+                    f"{github_domain}:sub": "repo:flabdev/cds-oerf-platform:*",
+                },
             }),
             description="Role assumed by GitHub Actions to deploy CDK",
         )
