@@ -2,6 +2,7 @@
 
 import json
 import shutil
+from importlib.resources import files
 from pathlib import Path
 
 import pytest
@@ -99,6 +100,18 @@ def test_subscribed_domain_without_template_is_rejected(tmp_path: Path) -> None:
             domain="missing_domain",
             repository=FileConfigRepository(root),
         )
+
+
+def test_domain_and_seed_files_are_package_resources() -> None:
+    defaults = files("domains").joinpath("cold_chain_excursion", "defaults.json")
+    schema = files("domains").joinpath("cold_chain_excursion", "schema.json")
+    tenant = files("sim").joinpath("seed", "t1", "tenant.json")
+
+    assert defaults.is_file()
+    assert schema.is_file()
+    assert tenant.is_file()
+    repository = FileConfigRepository()
+    assert repository.read_defaults("cold_chain_excursion")["domain"] == "cold_chain_excursion"
 
 
 def _copy_config_tree(tmp_path: Path) -> Path:

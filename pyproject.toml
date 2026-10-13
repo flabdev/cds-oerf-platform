@@ -2,7 +2,7 @@
 name = "cds-oerf-platform"
 version = "0.1.0"
 description = "Operational Exception Resolution Framework"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "aws-cdk-lib>=2.0.0",
     "constructs>=10.0.0,<11.0.0",
@@ -21,7 +21,11 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["oerf*"]
+include = ["oerf*", "sim*", "domains*"]
+
+[tool.setuptools.package-data]
+domains = ["*/*.json"]
+sim = ["seed/*/*.json", "seed/*/*/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -29,7 +33,7 @@ pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

@@ -26,8 +26,4 @@ def load_seed(tenant_id: str, root: Path | None = None) -> dict[str, Any]:
 def _seed_root(root: Path | None) -> Path:
     if root is not None:
         return root
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / "sim" / "seed"
-        if candidate.is_dir() and (parent / "pyproject.toml").is_file():
-            return candidate
-    raise FileNotFoundError("seed directory not found")
+    return Path(__file__).resolve().parent
