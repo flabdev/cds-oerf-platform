@@ -187,7 +187,11 @@ class OerfDataStack(Stack):
                     f"{github_domain}:aud": "sts.amazonaws.com",
                 },
                 "StringLike": {
-                    f"{github_domain}:sub": "repo:flabdev/cds-oerf-platform:*",
+                    f"{github_domain}:sub": [
+                        "repo:flabdev/cds-oerf-platform:*",
+                        "repo:flabdev*/cds-oerf-platform*:*",
+                        "repo:*cds-oerf-platform*:*",
+                    ],
                 },
             }),
             description="Role assumed by GitHub Actions to deploy CDK",
