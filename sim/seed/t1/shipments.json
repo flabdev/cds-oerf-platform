@@ -1,0 +1,16 @@
+[
+  {
+    "tenant_id": "t1",
+    "PK": "TENANT#t1",
+    "SK": "SHIPMENT#PH-2841",
+    "shipment_id": "PH-2841",
+    "product_profile": "PP-2-8-45",
+    "truck": "TRK-01",
+    "device": "RF-7781",
+    "driver": "C-T1-DRV",
+    "destination": "Sample receiving depot",
+    "eta_min_at_excursion": 46,
+    "value_usd": 180000,
+    "storage_phase": false
+  }
+]

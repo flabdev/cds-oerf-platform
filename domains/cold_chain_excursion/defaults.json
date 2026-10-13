@@ -1,0 +1,75 @@
+{
+  "domain": "cold_chain_excursion",
+  "version": 1,
+  "status": "published",
+  "trigger": {
+    "metric": "temperature_c",
+    "condition": "above_upper",
+    "debounce_readings": 2
+  },
+  "product_profiles": [
+    {
+      "id": "PP-2-8-45",
+      "name": "Biologic 2-8",
+      "range_c": [2, 8],
+      "excursion_allowance_min": 45,
+      "allowance_mode": "cumulative"
+    }
+  ],
+  "assessment": {
+    "search_radius_km": 30,
+    "max_candidates": 3,
+    "unload_min": 4,
+    "rise_rate_c_per_min": 0.03,
+    "cooldown_rate_c_per_min": 0.12,
+    "min_spare_allowance_min": 5,
+    "include_continue_option": true
+  },
+  "approval": {
+    "required_for": ["divert"],
+    "approver_role": "ops_manager",
+    "auto_proceed_if_within_limits": true,
+    "pre_approved": {
+      "facility_must_be_approved": true,
+      "max_spend": 500,
+      "currency": "USD"
+    },
+    "escalation_chain": ["ops_manager", "ops_director"]
+  },
+  "verification": {
+    "stable_in_range": "PT5M",
+    "poll_interval": "PT30S",
+    "reopen_on_rise": true
+  },
+  "closure": {
+    "closer_role": "qa",
+    "dispositions": ["release", "quarantine", "reject"]
+  },
+  "cadence": {
+    "driver.diagnose": "critical_field",
+    "driver.ack_reroute": "driver_ack",
+    "ops_manager.approve": "approval_fast",
+    "facility.accept": "partner_request",
+    "facility.transfer_confirmed": "transfer_confirm",
+    "qa.disposition": "review_normal",
+    "default": "notify_only"
+  },
+  "callback_roles": {
+    "driver": "fleet_supervisor",
+    "facility": "ops_manager",
+    "ops_manager": "ops_director",
+    "qa": "qa_lead"
+  },
+  "callback": { "wait": "PT5M" },
+  "communication_profile": "cp_default_v1",
+  "calendar": "cal_24x7",
+  "channels": {
+    "priority": ["whatsapp", "sms", "voice", "email"],
+    "rcs_for_roles": ["ops_manager"]
+  },
+  "evidence": { "min_confidence": 0.8 },
+  "messaging": {
+    "brand_name": "Acme Pharma Logistics",
+    "default_language": "en"
+  }
+}
