@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -188,38 +189,47 @@ class ConfigRepository(Protocol):
 
 
 class FileConfigRepository:
-    """Read domain templates and tenant overrides from the repository tree."""
+    """Read domain templates and tenant overrides shipped with the package.
+
+    Pass ``root`` only in tests that use a temporary checkout layout
+    (``root/domains`` and ``root/sim/seed``). The default reads the installed
+    ``domains`` and ``sim`` packages.
+    """
 
     def __init__(self, root: Path | None = None) -> None:
-        self.root = root or find_repo_root()
+        if root is None:
+            self.domains_dir = _package_path("domains")
+            self.seed_dir = _package_path("sim") / "seed"
+        else:
+            self.domains_dir = root / "domains"
+            self.seed_dir = root / "sim" / "seed"
 
     def list_tenant_ids(self) -> set[str]:
-        seed = self.root / "sim" / "seed"
-        if not seed.is_dir():
+        if not self.seed_dir.is_dir():
             return set()
-        return {path.name for path in seed.iterdir() if (path / "tenant.json").is_file()}
+        return {path.name for path in self.seed_dir.iterdir() if (path / "tenant.json").is_file()}
 
     def subscribed_domains(self, tenant_id: str) -> set[str]:
-        document = _read_json(self.root / "sim" / "seed" / tenant_id / "tenant.json")
+        document = _read_json(self.seed_dir / tenant_id / "tenant.json")
         domains = document.get("domains", [])
         if not isinstance(domains, list):
             raise ConfigInvalid(f"tenant {tenant_id!r} has an invalid domains list")
         return {str(domain) for domain in domains}
 
     def read_defaults(self, domain: str) -> dict[str, Any]:
-        path = self.root / "domains" / domain / "defaults.json"
+        path = self.domains_dir / domain / "defaults.json"
         if not path.is_file():
             raise DomainNotFound(f"domain {domain!r} does not exist")
         return _read_object(path, kind="defaults")
 
     def read_schema(self, domain: str) -> dict[str, Any]:
-        path = self.root / "domains" / domain / "schema.json"
+        path = self.domains_dir / domain / "schema.json"
         if not path.is_file():
             raise ConfigInvalid(f"domain {domain!r} has no schema")
         return _read_object(path, kind="schema")
 
     def read_tenant_config(self, tenant_id: str, domain: str) -> dict[str, Any]:
-        path = self.root / "sim" / "seed" / tenant_id / "domains" / f"{domain}.json"
+        path = self.seed_dir / tenant_id / "domains" / f"{domain}.json"
         if not path.is_file():
             return {}
         document = _read_object(path, kind="tenant config")
@@ -275,6 +285,12 @@ def deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str
         else:
             merged[key] = value
     return merged
+
+
+def _package_path(package: str) -> Path:
+    """Return the installed directory for a data package."""
+
+    return Path(str(files(package)))
 
 
 def find_repo_root() -> Path:
