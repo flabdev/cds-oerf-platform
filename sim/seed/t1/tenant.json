@@ -1,0 +1,10 @@
+{
+  "tenant_id": "t1",
+  "PK": "TENANT#t1",
+  "SK": "META",
+  "brand_name": "Acme Pharma Logistics",
+  "timezone": "Asia/Kolkata",
+  "demo": true,
+  "clock_multiplier": 20,
+  "domains": ["cold_chain_excursion"]
+}

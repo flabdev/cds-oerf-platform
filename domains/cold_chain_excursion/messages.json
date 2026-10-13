@@ -1,0 +1,39 @@
+{
+  "domain": "cold_chain_excursion",
+  "messages": {
+    "driver_checkin": {
+      "sms": "Temperature alert {shipment_id}. Pull over safely and check WhatsApp."
+    },
+    "driver_reminder": {},
+    "driver_call": {},
+    "supervisor_escalation": {},
+    "ops_approval": {},
+    "approval_reminder": {},
+    "facility_request": {},
+    "facility_reminder": {},
+    "driver_reroute": {},
+    "transfer_confirm_request": {},
+    "qa_report_ready": {},
+    "qa_reminder": {},
+    "final_question": {},
+    "evidence_confirm": {},
+    "evidence_unreadable": {},
+    "concern_reply": {},
+    "evidence_resubmitted": {},
+    "status_update": {},
+    "disambiguation": {},
+    "auto_proceed_notice": {},
+    "voice_note_unsupported": {},
+    "ops_escalation_options": {},
+    "qa_prewarn": {},
+    "reopen_alert": {},
+    "callback_request": {},
+    "callback_ack": {},
+    "transfer_escalation": {},
+    "reroute_ack_escalation": {},
+    "incident_cancelled": {},
+    "judge_welcome": {},
+    "sandbox_full": {},
+    "reopened_late_reply": {}
+  }
+}

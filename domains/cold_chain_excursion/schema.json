@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oerf.local/domains/cold_chain_excursion/schema.json",
+  "title": "Cold-chain excursion domain configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "domain",
+    "version",
+    "status",
+    "trigger",
+    "product_profiles",
+    "assessment",
+    "approval",
+    "verification",
+    "closure",
+    "cadence",
+    "callback_roles",
+    "callback",
+    "communication_profile",
+    "calendar",
+    "channels",
+    "evidence",
+    "messaging"
+  ],
+  "properties": {
+    "domain": { "const": "cold_chain_excursion" },
+    "version": { "type": "integer", "minimum": 1 },
+    "status": { "enum": ["draft", "published"] },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "condition", "debounce_readings"],
+      "properties": {
+        "metric": { "type": "string", "minLength": 1 },
+        "condition": { "enum": ["above_upper", "outside_range"] },
+        "debounce_readings": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "product_profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "range_c", "excursion_allowance_min", "allowance_mode"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "range_c": {
+            "type": "array",
+            "prefixItems": [{ "type": "number" }, { "type": "number" }],
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "excursion_allowance_min": { "type": "number", "exclusiveMinimum": 0 },
+          "allowance_mode": { "enum": ["cumulative"] }
+        }
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "search_radius_km",
+        "max_candidates",
+        "unload_min",
+        "rise_rate_c_per_min",
+        "cooldown_rate_c_per_min",
+        "min_spare_allowance_min",
+        "include_continue_option"
+      ],
+      "properties": {
+        "search_radius_km": { "type": "number", "exclusiveMinimum": 0 },
+        "max_candidates": { "type": "integer", "minimum": 1 },
+        "unload_min": { "type": "number", "minimum": 0 },
+        "rise_rate_c_per_min": { "type": "number", "exclusiveMinimum": 0 },
+        "cooldown_rate_c_per_min": { "type": "number", "exclusiveMinimum": 0 },
+        "min_spare_allowance_min": { "type": "number", "minimum": 0 },
+        "include_continue_option": { "type": "boolean" }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required_for",
+        "approver_role",
+        "auto_proceed_if_within_limits",
+        "pre_approved",
+        "escalation_chain"
+      ],
+      "properties": {
+        "required_for": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "approver_role": { "type": "string", "minLength": 1 },
+        "auto_proceed_if_within_limits": { "type": "boolean" },
+        "pre_approved": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["facility_must_be_approved", "max_spend", "currency"],
+          "properties": {
+            "facility_must_be_approved": { "type": "boolean" },
+            "max_spend": { "type": "number", "minimum": 0 },
+            "currency": { "type": "string", "minLength": 1 }
+          }
+        },
+        "escalation_chain": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stable_in_range", "poll_interval", "reopen_on_rise"],
+      "properties": {
+        "stable_in_range": { "type": "string", "minLength": 1 },
+        "poll_interval": { "type": "string", "minLength": 1 },
+        "reopen_on_rise": { "type": "boolean" }
+      }
+    },
+    "closure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["closer_role", "dispositions"],
+      "properties": {
+        "closer_role": { "type": "string", "minLength": 1 },
+        "dispositions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "enum": ["release", "quarantine", "reject"] }
+        }
+      }
+    },
+    "cadence": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "callback_roles": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "callback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wait"],
+      "properties": {
+        "wait": { "type": "string", "minLength": 1 }
+      }
+    },
+    "communication_profile": { "type": "string", "minLength": 1 },
+    "calendar": { "type": "string", "minLength": 1 },
+    "channels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["priority", "rcs_for_roles"],
+      "properties": {
+        "priority": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "enum": ["whatsapp", "sms", "voice", "email", "rcs"] }
+        },
+        "rcs_for_roles": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_confidence"],
+      "properties": {
+        "min_confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "messaging": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["brand_name", "default_language"],
+      "properties": {
+        "brand_name": { "type": "string", "minLength": 1 },
+        "default_language": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
