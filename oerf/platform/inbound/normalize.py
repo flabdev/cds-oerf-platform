@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-Channel = Literal["WHATSAPP", "SMS", "RCS", "EMAIL"]
+Channel = Literal["whatsapp", "sms", "rcs", "email", "dashboard"]
 
 
 class NormalizationError(ValueError):
@@ -64,7 +64,7 @@ def _normalize_whatsapp(payload: dict[str, object]) -> NormalizedMessage:
         raise NormalizationError("text must be a string")
     return NormalizedMessage(
         provider_msg_id=message_id.strip(),
-        channel="WHATSAPP",
+        channel="whatsapp",
         sender=sender.strip(),
         received_at=timestamp.strip(),
         text=text,

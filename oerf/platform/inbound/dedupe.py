@@ -1,13 +1,16 @@
 """Accept each provider message once.
 
-Records use the ``INMSG#`` key. ``expires_at`` is seven days after receipt,
-which a later DynamoDB adapter maps to the item TTL.
+Records use the ``INMSG#`` key. ``expires_at`` is seven days after the record
+is accepted, measured by the clock. A later DynamoDB adapter maps that value
+to the item TTL. Provider retries often repeat the original timestamp, so
+expiry is compared with the clock rather than ``received_at``.
 """
 
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timedelta
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel, ConfigDict
 
@@ -23,9 +26,10 @@ class DedupeResult(BaseModel):
 class InboundDedupe:
     """Conditional insert keyed by provider message id."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Callable[[], datetime] | None = None) -> None:
         self._items: dict[tuple[str, str], tuple[str, datetime]] = {}
         self._guard = threading.Lock()
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     def register(
         self,
@@ -34,14 +38,21 @@ class InboundDedupe:
         channel: str,
         received_at: datetime,
     ) -> DedupeResult:
+        """Record the message unless an unexpired copy is already stored.
+
+        ``received_at`` is the provider timestamp. Retention is measured from
+        the clock, because a retry usually repeats the original timestamp.
+        """
+
         if not message_id.strip():
             raise ValueError("message_id must be a non-empty string")
         key = (f"INMSG#{message_id.strip()}", "META")
         with self._guard:
+            now = self._clock()
             current = self._items.get(key)
-            if current is not None and current[1] > received_at:
+            if current is not None and current[1] > now:
                 return DedupeResult(is_duplicate=True)
-            self._items[key] = (channel, received_at + RETENTION)
+            self._items[key] = (channel, now + RETENTION)
             return DedupeResult(is_duplicate=False)
 
     def stored(self, message_id: str) -> dict[str, object] | None:
