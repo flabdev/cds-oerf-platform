@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "cds-oerf-platform"
 version = "0.1.0"
@@ -16,12 +20,8 @@ dev = [
     "ruff>=0.6",
 ]
 
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
 [tool.setuptools.packages.find]
-include = ["oerf*", "sim*", "domains*"]
+include = ["infra*", "platform*", "domains*", "sim*", "oerf*"]
 
 [tool.setuptools.package-data]
 domains = ["*/*.json"]
