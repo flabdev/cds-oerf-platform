@@ -7,17 +7,17 @@ from oerf.platform.inbound.dedupe import RETENTION, InboundDedupe
 
 
 def test_first_delivery_is_accepted() -> None:
-    dedupe = InboundDedupe()
     received = datetime(2026, 10, 8, 10, 0, tzinfo=UTC)
+    dedupe = InboundDedupe(clock=lambda: received)
 
-    result = dedupe.register(message_id="wamid-123", channel="WHATSAPP", received_at=received)
+    result = dedupe.register(message_id="wamid-123", channel="whatsapp", received_at=received)
 
     assert result.is_duplicate is False
     stored = dedupe.stored("wamid-123")
     assert stored is not None
     assert stored["pk"] == "INMSG#wamid-123"
     assert stored["sk"] == "META"
-    assert stored["channel"] == "WHATSAPP"
+    assert stored["channel"] == "whatsapp"
     assert stored["expires_at"] == received + RETENTION
     assert RETENTION == timedelta(days=7)
 
@@ -25,25 +25,37 @@ def test_first_delivery_is_accepted() -> None:
 def test_repeat_delivery_is_a_duplicate() -> None:
     dedupe = InboundDedupe()
     received = datetime(2026, 10, 8, 10, 0, tzinfo=UTC)
-    dedupe.register(message_id="wamid-123", channel="WHATSAPP", received_at=received)
+    dedupe.register(message_id="wamid-123", channel="whatsapp", received_at=received)
 
-    result = dedupe.register(message_id="wamid-123", channel="WHATSAPP", received_at=received)
+    result = dedupe.register(message_id="wamid-123", channel="whatsapp", received_at=received)
 
     assert result.is_duplicate is True
 
 
-def test_expired_message_can_be_accepted_again() -> None:
-    dedupe = InboundDedupe()
+def test_retry_keeps_original_timestamp_until_retention_ends() -> None:
     received = datetime(2026, 10, 8, 10, 0, tzinfo=UTC)
-    dedupe.register(message_id="wamid-123", channel="WHATSAPP", received_at=received)
+    now = {"at": received}
+    dedupe = InboundDedupe(clock=lambda: now["at"])
+    dedupe.register(message_id="wamid-123", channel="whatsapp", received_at=received)
 
-    later = dedupe.register(
+    now["at"] = received + timedelta(days=6)
+    still_held = dedupe.register(
         message_id="wamid-123",
-        channel="WHATSAPP",
-        received_at=received + RETENTION,
+        channel="whatsapp",
+        received_at=received,
     )
+    assert still_held.is_duplicate is True
 
-    assert later.is_duplicate is False
+    now["at"] = received + RETENTION
+    expired = dedupe.register(
+        message_id="wamid-123",
+        channel="whatsapp",
+        received_at=received,
+    )
+    assert expired.is_duplicate is False
+    stored = dedupe.stored("wamid-123")
+    assert stored is not None
+    assert stored["expires_at"] == received + RETENTION + RETENTION
 
 
 def test_concurrent_deliveries_accept_one() -> None:
@@ -55,7 +67,7 @@ def test_concurrent_deliveries_accept_one() -> None:
     def attempt() -> None:
         barrier.wait()
         results.append(
-            dedupe.register(message_id="wamid-123", channel="WHATSAPP", received_at=received)
+            dedupe.register(message_id="wamid-123", channel="whatsapp", received_at=received)
         )
 
     threads = [threading.Thread(target=attempt) for _ in range(2)]

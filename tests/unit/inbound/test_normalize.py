@@ -18,7 +18,7 @@ def test_whatsapp_text_is_normalized() -> None:
 
     assert message.model_dump() == {
         "provider_msg_id": "wamid-123",
-        "channel": "WHATSAPP",
+        "channel": "whatsapp",
         "sender": "+919999999999",
         "received_at": "2026-10-08T10:00:00Z",
         "text": "E17 compressor error",

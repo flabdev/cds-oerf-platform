@@ -39,6 +39,11 @@ def test_create_and_get_incident() -> None:
     assert loaded.state == "OPEN"
     assert loaded.pk == "TENANT#t1#INC#INC-000001"
     assert loaded.sk == "META"
+    assert repository.lock.get_lock("t1", "PH-2841") == {
+        "pk": "TENANT#t1#SHIP#PH-2841",
+        "sk": "OPEN_INCIDENT",
+        "incident_id": "INC-000001",
+    }
 
 
 def test_valid_transition_appends_a_timeline_event() -> None:
@@ -101,11 +106,53 @@ def test_stale_transition_does_not_overwrite() -> None:
     assert repository.get("t1", incident.incident_id).state == "DIAGNOSING"
 
 
+def test_second_create_appends_to_the_open_incident() -> None:
+    repository = IncidentRepository(clock=_clock)
+    first = _open(repository)
+
+    second = repository.create(
+        tenant_id="t1",
+        shipment_id="PH-2841",
+        reason="TEMPERATURE_STILL_ABOVE_MAX",
+    )
+
+    assert second.incident_id == first.incident_id
+    events = repository.events("t1", first.incident_id)
+    assert len(events) == 1
+    assert events[0].state == "OPEN"
+    assert events[0].previous_state == "OPEN"
+    assert events[0].reason == "TEMPERATURE_STILL_ABOVE_MAX"
+    stored = repository.lock.get_lock("t1", "PH-2841")
+    assert stored is not None
+    assert stored["incident_id"] == first.incident_id
+
+
+def test_concurrent_creates_open_one_incident() -> None:
+    repository = IncidentRepository(clock=_clock)
+    barrier = threading.Barrier(2)
+    created: list[str] = []
+
+    def attempt() -> None:
+        barrier.wait()
+        created.append(_open(repository).incident_id)
+
+    threads = [threading.Thread(target=attempt) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert created == ["INC-000001", "INC-000001"]
+    assert len(repository.events("t1", "INC-000001")) == 1
+    stored = repository.lock.get_lock("t1", "PH-2841")
+    assert stored is not None
+    assert stored["incident_id"] == "INC-000001"
+
+
 def test_close_releases_the_shipment_lock() -> None:
     lock = OpenIncidentLock()
     repository = IncidentRepository(lock, clock=_clock)
     incident = _open(repository)
-    lock.acquire_lock("t1", "PH-2841", incident.incident_id)
     _walk(repository, incident.incident_id, PATH_TO_CLOSED)
 
     assert repository.get("t1", incident.incident_id).state == "CLOSED"
@@ -116,7 +163,6 @@ def test_cancel_releases_the_shipment_lock() -> None:
     lock = OpenIncidentLock()
     repository = IncidentRepository(lock, clock=_clock)
     incident = _open(repository)
-    lock.acquire_lock("t1", "PH-2841", incident.incident_id)
 
     repository.transition("t1", incident.incident_id, from_state="OPEN", to_state="CANCELLED")
 

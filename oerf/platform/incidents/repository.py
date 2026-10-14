@@ -1,8 +1,9 @@
 """Incident records and allowed state transitions.
 
-Items use the incident-table keys. A transition is applied only when the
-stored state still matches ``from_state``. Closing or cancelling releases the
-shipment lock.
+Items use the incident-table keys. Creating an incident puts the shipment
+lock and the incident record together. A later create for that shipment
+appends to the open incident. A transition is applied only when the stored
+state still matches ``from_state``. Closing or cancelling releases the lock.
 """
 
 from __future__ import annotations
@@ -72,6 +73,7 @@ class TimelineEvent(BaseModel):
     sk: str
     previous_state: str
     state: str
+    reason: str | None = None
 
 
 class TransitionResult(BaseModel):
@@ -102,26 +104,35 @@ class IncidentRepository:
         self._guard = threading.Lock()
 
     def create(self, *, tenant_id: str, shipment_id: str, reason: str) -> Incident:
+        """Open an incident, or append to the one already locked for this shipment.
+
+        The lock acquire and the incident write share one critical section, so
+        concurrent callers cannot both create an incident.
+        """
+
         context = TenantContext(tenant_id=tenant_id)
         shipment = _required(shipment_id, "shipment_id")
         cause = _required(reason, "reason")
-        incident_id = self._next_id()
-        pk = f"TENANT#{context.tenant_id}#INC#{incident_id}"
-        incident = Incident(
-            incident_id=incident_id,
-            tenant_id=context.tenant_id,
-            shipment_id=shipment,
-            state="OPEN",
-            reason=cause,
-            opened_at=_iso_z(self._clock()),
-            pk=pk,
-        )
-        key = (pk, "META")
         with self._guard:
+            incident_id = self._next_id()
+            acquired = self.lock.acquire_lock(context.tenant_id, shipment, incident_id)
+            if not acquired.created:
+                return self._append_open(context.tenant_id, acquired.incident_id, cause)
+            pk = f"TENANT#{context.tenant_id}#INC#{incident_id}"
+            incident = Incident(
+                incident_id=incident_id,
+                tenant_id=context.tenant_id,
+                shipment_id=shipment,
+                state="OPEN",
+                reason=cause,
+                opened_at=_iso_z(self._clock()),
+                pk=pk,
+            )
+            key = (pk, "META")
             self._incidents[key] = incident
             self._events[key] = []
             self._event_seq[key] = 0
-        return incident
+            return incident
 
     def get(self, tenant_id: str, incident_id: str) -> Incident:
         context = TenantContext(tenant_id=tenant_id)
@@ -183,6 +194,25 @@ class IncidentRepository:
             previous_state=from_state,
             state=to_state,
         )
+
+
+    def _append_open(self, tenant_id: str, incident_id: str, reason: str) -> Incident:
+        key = _meta_key(tenant_id, incident_id)
+        incident = self._incidents.get(key)
+        if incident is None:
+            raise IncidentNotFound(f"incident {incident_id!r} does not exist")
+        sequence = self._event_seq[key] + 1
+        self._event_seq[key] = sequence
+        stamp = _iso_z(self._clock())
+        self._events[key].append(
+            TimelineEvent(
+                sk=f"EVT#{stamp}#{sequence:04d}",
+                previous_state=incident.state,
+                state=incident.state,
+                reason=reason,
+            )
+        )
+        return incident
 
 
 def _meta_key(tenant_id: str, incident_id: str) -> tuple[str, str]:
