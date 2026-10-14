@@ -2,6 +2,7 @@ import os
 
 import aws_cdk as cdk
 
+from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
 
 # The CDK CLI exports CDK_DEFAULT_ACCOUNT / CDK_DEFAULT_REGION to the app process.
@@ -19,16 +20,25 @@ if not account:
 
 app = cdk.App()
 
-OerfDataStack(
+cdk_env = cdk.Environment(
+    account=account,
+    region=os.environ.get(
+        "CDK_DEFAULT_REGION",
+        "us-east-1",
+    ),
+)
+
+data_stack = OerfDataStack(
     app,
     "OerfDataStack",
-    env=cdk.Environment(
-        account=account,
-        region=os.environ.get(
-            "CDK_DEFAULT_REGION",
-            "us-east-1",
-        ),
-    ),
+    env=cdk_env,
+)
+
+compute_stack = OerfComputeStack(
+    app,
+    "OerfComputeStack",
+    data_stack=data_stack,
+    env=cdk_env,
 )
 
 app.synth()

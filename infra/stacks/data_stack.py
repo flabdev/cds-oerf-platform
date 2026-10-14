@@ -81,6 +81,7 @@ class OerfDataStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            stream=dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
         )

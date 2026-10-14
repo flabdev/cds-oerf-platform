@@ -51,3 +51,5 @@ def test_app_synthesizes_stack_when_account_is_resolved(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "OerfDataStack.template.json").exists()
+    assert (tmp_path / "OerfComputeStack.template.json").exists()
+
