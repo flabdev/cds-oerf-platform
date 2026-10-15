@@ -1,0 +1,47 @@
+{
+  "policies": [
+    {
+      "policy_id": "critical_field",
+      "urgency": "critical",
+      "respect_quiet_hours": false,
+      "exhaust_after": "PT4M",
+      "exhaust_action": { "type": "continue_without", "record": "cause_unknown" },
+      "final_question": null,
+      "rungs": [
+        { "after": "PT0S", "anchor": "engagement_start", "action": "send", "channel": "whatsapp", "message": "driver_checkin" },
+        { "after": "PT1M", "anchor": "engagement_start", "action": "send", "channel": "whatsapp", "message": "driver_reminder" },
+        { "after": "PT90S", "anchor": "engagement_start", "action": "send", "channel": "sms", "message": "driver_reminder" },
+        { "after": "PT2M", "anchor": "engagement_start", "action": "call", "channel": "voice", "message": "driver_call" },
+        { "after": "PT3M", "anchor": "engagement_start", "action": "escalate", "channel": "whatsapp", "message": "supervisor_escalation", "to_role": "fleet_supervisor" }
+      ]
+    },
+    {
+      "policy_id": "partner_request",
+      "urgency": "normal",
+      "respect_quiet_hours": true,
+      "exhaust_after": "PT5M",
+      "exhaust_action": { "type": "decline_next_facility" },
+      "final_question": null,
+      "rungs": [
+        { "after": "PT0S", "anchor": "engagement_start", "action": "send", "channel": "whatsapp", "message": "facility_request" },
+        { "after": "PT90S", "anchor": "engagement_start", "action": "send", "channel": "whatsapp", "message": "facility_reminder" },
+        { "after": "PT150S", "anchor": "engagement_start", "action": "send", "channel": "sms", "message": "facility_reminder" },
+        { "after": "PT3M", "anchor": "engagement_start", "action": "escalate", "channel": "whatsapp", "message": "ops_escalation", "to_role": "ops_manager" }
+      ]
+    },
+    {
+      "policy_id": "approval_fast",
+      "urgency": "normal",
+      "respect_quiet_hours": true,
+      "exhaust_after": "PT2M",
+      "exhaust_action": { "type": "auto_proceed_or_escalate" },
+      "final_question": null,
+      "rungs": [
+        { "after": "PT0S", "anchor": "engagement_start", "action": "send", "channel": "whatsapp", "message": "ops_approval" },
+        { "after": "PT1M", "anchor": "engagement_start", "action": "send", "channel": "whatsapp", "message": "approval_reminder" },
+        { "after": "PT90S", "anchor": "engagement_start", "action": "send", "channel": "email", "message": "approval_reminder" },
+        { "after": "PT2M", "anchor": "engagement_start", "action": "escalate", "channel": "whatsapp", "message": "ops_escalation", "to_role": "ops_director" }
+      ]
+    }
+  ]
+}

@@ -11,6 +11,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -23,11 +24,29 @@ class DedupeResult(BaseModel):
     is_duplicate: bool
 
 
+@runtime_checkable
+class MessageDedupePort(Protocol):
+    """Accept a provider message id once inside the retention window."""
+
+    def register(
+        self,
+        *,
+        message_id: str,
+        channel: str,
+        received_at: datetime,
+        tenant_id: str | None = None,
+    ) -> DedupeResult:
+        """Return a duplicate result when an unexpired row already exists."""
+
+    def stored(self, message_id: str) -> dict[str, object] | None:
+        """Return the stored dedupe row, including an expired one."""
+
+
 class InboundDedupe:
     """Conditional insert keyed by provider message id."""
 
     def __init__(self, *, clock: Callable[[], datetime] | None = None) -> None:
-        self._items: dict[tuple[str, str], tuple[str, datetime]] = {}
+        self._items: dict[tuple[str, str], tuple[str, datetime, str | None]] = {}
         self._guard = threading.Lock()
         self._clock = clock or (lambda: datetime.now(UTC))
 
@@ -37,6 +56,7 @@ class InboundDedupe:
         message_id: str,
         channel: str,
         received_at: datetime,
+        tenant_id: str | None = None,
     ) -> DedupeResult:
         """Record the message unless an unexpired copy is already stored.
 
@@ -52,7 +72,7 @@ class InboundDedupe:
             current = self._items.get(key)
             if current is not None and current[1] > now:
                 return DedupeResult(is_duplicate=True)
-            self._items[key] = (channel, now + RETENTION)
+            self._items[key] = (channel, now + RETENTION, tenant_id)
             return DedupeResult(is_duplicate=False)
 
     def stored(self, message_id: str) -> dict[str, object] | None:
@@ -61,5 +81,11 @@ class InboundDedupe:
             current = self._items.get(key)
         if current is None:
             return None
-        channel, expires_at = current
-        return {"pk": key[0], "sk": key[1], "channel": channel, "expires_at": expires_at}
+        channel, expires_at, tenant = current
+        return {
+            "pk": key[0],
+            "sk": key[1],
+            "channel": channel,
+            "expires_at": expires_at,
+            "tenant_id": tenant,
+        }
