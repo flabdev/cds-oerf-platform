@@ -4,6 +4,8 @@ These tests assert on the synthesized CloudFormation template only and never
 make real AWS calls (see guide section 24).
 """
 
+import json
+
 import aws_cdk as cdk
 import pytest
 from aws_cdk import aws_dynamodb as dynamodb
@@ -104,6 +106,63 @@ def test_oerf_event_bus_is_created(template: Template) -> None:
         "AWS::Events::EventBus",
         {"Name": "oerf-events"},
     )
+
+
+def test_cold_chain_state_machine_is_wired(template: Template) -> None:
+    template.resource_count_is("AWS::StepFunctions::StateMachine", 1)
+    template.has_resource_properties(
+        "AWS::StepFunctions::StateMachine",
+        {"StateMachineName": "oerf-cold-chain", "StateMachineType": "STANDARD"},
+    )
+
+
+def test_cold_chain_workflow_has_a_stub_lambda(template: Template) -> None:
+    functions = template.find_resources(
+        "AWS::Lambda::Function",
+        {"Properties": {"Handler": "workflow_stub.handler"}},
+    )
+    assert len(functions) == 1
+    assert functions[next(iter(functions))]["Properties"]["Runtime"] == "python3.11"
+
+
+def test_cold_chain_state_machine_wires_every_task_to_the_stub(
+    template: Template,
+) -> None:
+    machines = template.find_resources("AWS::StepFunctions::StateMachine")
+    assert len(machines) == 1
+    definition = machines[next(iter(machines))]["Properties"]["DefinitionString"]
+    definition_string = json.dumps(definition)
+
+    assert "__STUB_ARN__" not in definition_string
+    assert "cold_chain_excursion_v1" in definition_string
+    for state in (
+        "OPEN",
+        "GatherContext",
+        "Diagnose",
+        "Assess",
+        "SecureFacility",
+        "Act",
+        "VerifyLoop",
+        "GenerateReport",
+        "QA",
+        "Close",
+        "RecordFailure",
+        "Escalate",
+    ):
+        assert state in definition_string, state
+
+
+def test_cold_chain_workflow_tasks_retry_and_catch_failures(
+    template: Template,
+) -> None:
+    machines = template.find_resources("AWS::StepFunctions::StateMachine")
+    definition_string = json.dumps(
+        machines[next(iter(machines))]["Properties"]["DefinitionString"]
+    )
+
+    assert "Lambda.TooManyRequestsException" in definition_string
+    assert "States.ALL" in definition_string
+    assert "RecordFailure" in definition_string
 
 
 def test_dynamodb_tables_use_on_demand_billing(template: Template) -> None:
