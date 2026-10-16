@@ -67,9 +67,13 @@ class MemoryPhoneRegistry:
         opt_in: bool = True,
     ) -> ContactMatch:
         match = _match(tenant_id, contact_id, role, e164, opt_in=opt_in)
+        previous = self.get_contact(match.tenant_id, match.contact_id)
         self._contacts[(match.tenant_id, match.contact_id)] = match
-        refs = self._by_phone.setdefault(match.e164, [])
         ref = (match.tenant_id, match.contact_id)
+        if previous is not None and previous.e164 != match.e164:
+            old_refs = self._by_phone.get(previous.e164, [])
+            self._by_phone[previous.e164] = [item for item in old_refs if item != ref]
+        refs = self._by_phone.setdefault(match.e164, [])
         if ref not in refs:
             refs.append(ref)
         return match
@@ -112,6 +116,12 @@ class DynamoPhoneRegistry:
         opt_in: bool = True,
     ) -> ContactMatch:
         match = _match(tenant_id, contact_id, role, e164, opt_in=opt_in)
+        previous = self.get_contact(match.tenant_id, match.contact_id)
+        if previous is not None and previous.e164 != match.e164:
+            self._client.delete_item(
+                TableName=self._routing,
+                Key=key(phone_pk(previous.e164), contact_sk(match.tenant_id, match.contact_id)),
+            )
         self._client.put_item(TableName=self._tenant, Item=_contact_item(match))
         self._client.put_item(TableName=self._routing, Item=_phone_item(match))
         return match
@@ -120,6 +130,8 @@ class DynamoPhoneRegistry:
         number = required_text(e164, "e164")
         response = self._client.query(
             TableName=self._routing,
+            KeyConditionExpression="#pk = :pk AND begins_with(#sk, :prefix)",
+            ExpressionAttributeNames={"#pk": "pk", "#sk": "sk"},
             ExpressionAttributeValues={":pk": s(phone_pk(number)), ":prefix": s("TENANT#")},
         )
         matches = [_match_from_item(item) for item in response.get("Items", [])]

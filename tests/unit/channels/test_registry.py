@@ -43,6 +43,21 @@ def test_unknown_sender_is_explicit(registry) -> None:
     assert resolved.matches == []
 
 
+def test_reregister_drops_the_previous_number(registry) -> None:
+    registry.register_contact("t1", "C-T1-DRV", "driver", "+910000000101")
+    registry.register_contact("t2", "C-T2-DRV", "driver", "+910000000101")
+
+    registry.register_contact("t1", "C-T1-DRV", "driver", "+910000000109")
+
+    old = registry.resolve_sender("+910000000101")
+    new = registry.resolve_sender("+910000000109")
+    assert [match.contact_id for match in old.matches] == ["C-T2-DRV"]
+    assert [(match.tenant_id, match.e164) for match in new.matches] == [("t1", "+910000000109")]
+    contact = registry.get_contact("t1", "C-T1-DRV")
+    assert contact is not None
+    assert contact.e164 == "+910000000109"
+
+
 def test_opt_out_updates_the_contact(registry) -> None:
     registry.register_contact("t1", "C-T1-FACA", "facility", "+910000000141", opt_in=True)
 
