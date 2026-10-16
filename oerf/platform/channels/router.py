@@ -24,8 +24,9 @@ logger.setLevel(logging.INFO)
 # Environment variables
 ROUTING_TABLE_NAME = os.environ.get("ROUTING_TABLE_NAME", "")
 SES_SOURCE_EMAIL = os.environ.get("SES_SOURCE_EMAIL", "")
-USE_MOCK_WHATSAPP = os.environ.get("USE_MOCK_WHATSAPP", "true").lower() == "true"
-USE_MOCK_SMS = os.environ.get("USE_MOCK_SMS", "true").lower() == "true"
+WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
+USE_MOCK_WHATSAPP = os.environ.get("USE_MOCK_WHATSAPP", "false").lower() == "true"
+USE_MOCK_SMS = os.environ.get("USE_MOCK_SMS", "false").lower() == "true"
 
 # Lazy-loaded AWS clients
 _dynamodb = None
@@ -61,7 +62,8 @@ def record_outbound_message(
         return
 
     table = get_dynamodb().Table(ROUTING_TABLE_NAME)
-    ttl = int(time.time()) + (7 * 86400)  # 7-day TTL
+    now = int(time.time())
+    ttl = now + (7 * 86400)  # 7-day TTL
 
     item = {
         "pk": f"TENANT#{tenant_id}#INCIDENT#{incident_id}",
@@ -72,11 +74,28 @@ def record_outbound_message(
         "channel": channel,
         "recipient": recipient,
         "status": status,
-        "created_at": int(time.time()),
+        "created_at": now,
         "ttl": ttl,
     }
     if task_token:
         item["task_token"] = task_token
+
+        # Store active task token under the canonical ACTIVE_TASK_TOKEN key
+        # so that action_handler can retrieve it to resume Step Functions
+        table.put_item(
+            Item={
+                "pk": f"TENANT#{tenant_id}#INCIDENT#{incident_id}",
+                "sk": "ACTIVE_TASK_TOKEN",
+                "task_token": task_token,
+                "incident_id": incident_id,
+                "tenant_id": tenant_id,
+                "channel": channel,
+                "message_id": message_id,
+                "created_at": now,
+                "ttl": ttl,
+            }
+        )
+
         # Also store reverse lookup by message_id for inbound webhooks
         table.put_item(
             Item={
@@ -93,24 +112,44 @@ def record_outbound_message(
 
 
 def send_whatsapp(recipient: str, message: str) -> Dict[str, Any]:
-    """Send WhatsApp message or simulate if in development mode."""
+    """Send WhatsApp message via AWS End User Messaging Social or simulate if explicitly configured."""
     msg_id = f"wa-{uuid.uuid4().hex[:12]}"
     if USE_MOCK_WHATSAPP:
         logger.info("[SIMULATED WHATSAPP] To: %s | Message: %s", recipient, message)
         return {"success": True, "message_id": msg_id, "channel": "WHATSAPP", "status": "SIMULATED"}
 
+    if not WHATSAPP_PHONE_NUMBER_ID:
+        logger.warning("WHATSAPP_PHONE_NUMBER_ID not configured, falling back to next notification channel")
+        return {
+            "success": False,
+            "error": "WHATSAPP_PHONE_NUMBER_ID not configured",
+            "channel": "WHATSAPP",
+        }
+
     # Live integration via AWS End User Messaging (Social Messaging)
     try:
         eum = boto3.client("socialmessaging")
-        # In live mode, call send_whatsapp_message
-        return {"success": True, "message_id": msg_id, "channel": "WHATSAPP", "status": "SENT"}
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": recipient,
+            "type": "text",
+            "text": {"preview_url": False, "body": message},
+        }
+        resp = eum.send_whatsapp_message(
+            originationPhoneNumberId=WHATSAPP_PHONE_NUMBER_ID,
+            metaApiVersion="v20.0",
+            message=json.dumps(payload).encode("utf-8"),
+        )
+        actual_msg_id = resp.get("messageId") or msg_id
+        return {"success": True, "message_id": actual_msg_id, "channel": "WHATSAPP", "status": "SENT"}
     except Exception as exc:
-        logger.error("Failed to send WhatsApp message: %s", exc)
+        logger.error("Failed to send WhatsApp message via socialmessaging: %s", exc)
         return {"success": False, "error": str(exc), "channel": "WHATSAPP"}
 
 
 def send_sms(recipient: str, message: str) -> Dict[str, Any]:
-    """Send SMS message or simulate if in development mode."""
+    """Send SMS message via Amazon SNS or simulate if explicitly configured."""
     msg_id = f"sms-{uuid.uuid4().hex[:12]}"
     if USE_MOCK_SMS:
         logger.info("[SIMULATED SMS] To: %s | Message: %s", recipient, message)
@@ -118,10 +157,11 @@ def send_sms(recipient: str, message: str) -> Dict[str, Any]:
 
     try:
         sns = boto3.client("sns")
-        sns.publish(PhoneNumber=recipient, Message=message)
-        return {"success": True, "message_id": msg_id, "channel": "SMS", "status": "SENT"}
+        resp = sns.publish(PhoneNumber=recipient, Message=message)
+        actual_msg_id = resp.get("MessageId") or msg_id
+        return {"success": True, "message_id": actual_msg_id, "channel": "SMS", "status": "SENT"}
     except Exception as exc:
-        logger.error("Failed to send SMS: %s", exc)
+        logger.error("Failed to send SMS via SNS: %s", exc)
         return {"success": False, "error": str(exc), "channel": "SMS"}
 
 

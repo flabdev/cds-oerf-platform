@@ -48,8 +48,8 @@ def deserialize_dynamodb_image(image: Dict[str, Any]) -> Dict[str, Any]:
     return {k: _deserializer.deserialize(v) for k, v in image.items()}
 
 
-def get_tenant_connections(tenant_id: str) -> List[str]:
-    """Fetch active connection IDs subscribed to this tenant."""
+def get_tenant_connections(tenant_id: str, incident_id: Optional[str] = None) -> List[str]:
+    """Fetch active connection IDs subscribed to this tenant and incident."""
     if not ROUTING_TABLE_NAME:
         return []
 
@@ -59,7 +59,16 @@ def get_tenant_connections(tenant_id: str) -> List[str]:
             KeyConditionExpression="pk = :pk",
             ExpressionAttributeValues={":pk": f"WS_SUB#{tenant_id}"},
         )
-        return [item["connection_id"] for item in response.get("Items", []) if "connection_id" in item]
+        recipients = []
+        for item in response.get("Items", []):
+            cid = item.get("connection_id")
+            if not cid:
+                continue
+            sub_incident = item.get("incident_id", "ALL")
+            # Deliver if subscribed to all incidents or specifically to this incident
+            if sub_incident in ("ALL", "*") or (incident_id and sub_incident == incident_id):
+                recipients.append(cid)
+        return recipients
     except Exception as exc:
         logger.error("Failed to query WebSocket connections: %s", exc)
         return []
@@ -104,7 +113,7 @@ def handler(event: Dict[str, Any], context: Any) -> None:
             }
         ).encode("utf-8")
 
-        connection_ids = get_tenant_connections(tenant_id)
+        connection_ids = get_tenant_connections(tenant_id, incident_id)
         for conn_id in connection_ids:
             try:
                 apigw.post_to_connection(ConnectionId=conn_id, Data=broadcast_payload)

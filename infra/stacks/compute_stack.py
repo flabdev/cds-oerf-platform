@@ -14,11 +14,13 @@ Provisions:
 
 from __future__ import annotations
 
+import os
 from aws_cdk import (
     CfnOutput,
     Duration,
     Stack,
     aws_apigatewayv2 as apigwv2,
+    aws_apigatewayv2_authorizers as authorizers,
     aws_apigatewayv2_integrations as integrations,
     aws_iam as iam,
     aws_lambda as lambda_,
@@ -40,9 +42,28 @@ class OerfComputeStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
 
         # ---------------------------------------------------------
-        # Shared Lambda Code Asset (packaged once from oerf/)
+        # Shared Lambda Code Asset (packaged from root to preserve
+        # oerf.* package structure and avoid shadowing stdlib platform)
         # ---------------------------------------------------------
-        lambda_code = lambda_.Code.from_asset("oerf")
+        lambda_code = lambda_.Code.from_asset(
+            ".",
+            exclude=[
+                "cdk.out",
+                ".git",
+                ".github",
+                ".venv",
+                "venv",
+                "tests",
+                "web",
+                "sim",
+                "node_modules",
+                "**/*.pyc",
+                "**/__pycache__",
+                ".pytest_cache",
+                "*.md",
+                "cds_oerf_platform.egg-info",
+            ],
+        )
 
         # ---------------------------------------------------------
         # 1. Channel Router Lambda (ADR-008)
@@ -52,13 +73,14 @@ class OerfComputeStack(Stack):
             "ChannelRouterFunction",
             function_name="oerf-channel-router",
             runtime=lambda_.Runtime.PYTHON_3_11,
-            handler="platform.channels.router.handler",
+            handler="oerf.platform.channels.router.handler",
             code=lambda_code,
             timeout=Duration.seconds(30),
             environment={
                 "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
-                "USE_MOCK_WHATSAPP": "true",
-                "USE_MOCK_SMS": "true",
+                "USE_MOCK_WHATSAPP": "false",
+                "USE_MOCK_SMS": "false",
+                "WHATSAPP_PHONE_NUMBER_ID": os.environ.get("WHATSAPP_PHONE_NUMBER_ID", ""),
             },
         )
         data_stack.routing_table.grant_read_write_data(self.channel_router_fn)
@@ -77,7 +99,7 @@ class OerfComputeStack(Stack):
             "EvidenceAnalyzerFunction",
             function_name="oerf-evidence-analyzer",
             runtime=lambda_.Runtime.PYTHON_3_11,
-            handler="platform.evidence.vision.handler",
+            handler="oerf.platform.evidence.vision.handler",
             code=lambda_code,
             timeout=Duration.seconds(60),
             environment={
@@ -103,7 +125,7 @@ class OerfComputeStack(Stack):
             "ReportGeneratorFunction",
             function_name="oerf-report-generator",
             runtime=lambda_.Runtime.PYTHON_3_11,
-            handler="platform.report.generator.handler",
+            handler="oerf.platform.report.generator.handler",
             code=lambda_code,
             timeout=Duration.seconds(30),
             environment={
@@ -128,7 +150,7 @@ class OerfComputeStack(Stack):
             "WsHandlerFunction",
             function_name="oerf-ws-handler",
             runtime=lambda_.Runtime.PYTHON_3_11,
-            handler="platform.api.ws_handler.handler",
+            handler="oerf.platform.api.ws_handler.handler",
             code=lambda_code,
             timeout=Duration.seconds(10),
             environment={
@@ -166,7 +188,6 @@ class OerfComputeStack(Stack):
             auto_deploy=True,
         )
 
-        # Construct management API callback endpoint URL
         ws_callback_url = f"https://{self.ws_api.api_id}.execute-api.{self.region}.amazonaws.com/{self.ws_stage.stage_name}"
 
         # ---------------------------------------------------------
@@ -177,7 +198,7 @@ class OerfComputeStack(Stack):
             "StreamBroadcasterFunction",
             function_name="oerf-stream-broadcaster",
             runtime=lambda_.Runtime.PYTHON_3_11,
-            handler="platform.api.stream_broadcaster.handler",
+            handler="oerf.platform.api.stream_broadcaster.handler",
             code=lambda_code,
             timeout=Duration.seconds(15),
             environment={
@@ -211,7 +232,7 @@ class OerfComputeStack(Stack):
             "ActionHandlerFunction",
             function_name="oerf-action-handler",
             runtime=lambda_.Runtime.PYTHON_3_11,
-            handler="platform.api.action_handler.handler",
+            handler="oerf.platform.api.action_handler.handler",
             code=lambda_code,
             timeout=Duration.seconds(15),
             environment={
@@ -221,7 +242,7 @@ class OerfComputeStack(Stack):
             },
         )
         data_stack.incident_table.grant_read_write_data(self.action_handler_fn)
-        data_stack.routing_table.grant_read_data(self.action_handler_fn)
+        data_stack.routing_table.grant_read_write_data(self.action_handler_fn)
         data_stack.cold_chain_state_machine.grant_start_execution(self.action_handler_fn)
         self.action_handler_fn.add_to_role_policy(
             iam.PolicyStatement(
@@ -246,21 +267,38 @@ class OerfComputeStack(Stack):
             ),
         )
 
+        # Add UserPoolClient to UserPool for HTTP API Authorizer
+        user_pool_client = data_stack.user_pool.add_client(
+            "OerfHttpApiClient",
+            user_pool_client_name="oerf-http-api-client",
+            generate_secret=False,
+        )
+
+        http_authorizer = authorizers.HttpUserPoolAuthorizer(
+            "OerfHttpAuthorizer",
+            pool=data_stack.user_pool,
+            user_pool_clients=[user_pool_client],
+            identity_source=["$request.header.Authorization"],
+        )
+
         action_integration = integrations.HttpLambdaIntegration("ActionIntegration", self.action_handler_fn)
         self.http_api.add_routes(
             path="/incidents/trigger",
             methods=[apigwv2.HttpMethod.POST],
             integration=action_integration,
+            authorizer=http_authorizer,
         )
         self.http_api.add_routes(
             path="/incidents/{id}/action",
             methods=[apigwv2.HttpMethod.POST],
             integration=action_integration,
+            authorizer=http_authorizer,
         )
         self.http_api.add_routes(
             path="/incidents/{id}",
             methods=[apigwv2.HttpMethod.GET],
             integration=action_integration,
+            authorizer=http_authorizer,
         )
 
         # ---------------------------------------------------------
@@ -268,6 +306,7 @@ class OerfComputeStack(Stack):
         # ---------------------------------------------------------
         CfnOutput(self, "WebSocketApiUrl", value=self.ws_stage.url)
         CfnOutput(self, "HttpApiUrl", value=self.http_api.url or "")
+        CfnOutput(self, "CognitoAppClientId", value=user_pool_client.user_pool_client_id)
         CfnOutput(self, "ChannelRouterArn", value=self.channel_router_fn.function_arn)
         CfnOutput(self, "EvidenceAnalyzerArn", value=self.evidence_analyzer_fn.function_arn)
         CfnOutput(self, "ReportGeneratorArn", value=self.report_generator_fn.function_arn)

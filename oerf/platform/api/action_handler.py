@@ -4,6 +4,8 @@ Endpoints:
 - POST /incidents/{id}/action : Submit human operator decision (Approve/Reject/Override).
 - POST /incidents/trigger     : Ingest new excursion event and launch Step Functions.
 - GET  /incidents/{id}        : Retrieve incident state.
+
+Enforces trusted authorizer claims and tenant isolation (ADR-011).
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import logging
 import os
 import time
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import boto3
 
@@ -55,9 +57,42 @@ def cors_response(status_code: int, body: Any) -> Dict[str, Any]:
     }
 
 
-def handle_trigger_incident(body: Dict[str, Any]) -> Dict[str, Any]:
+def extract_auth_context(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract and validate authorizer context from API Gateway JWT claims."""
+    auth_ctx = event.get("requestContext", {}).get("authorizer", {})
+    jwt_claims = auth_ctx.get("jwt", {}).get("claims", {})
+
+    if not jwt_claims:
+        jwt_claims = auth_ctx.get("lambda", {})
+
+    if not jwt_claims:
+        return {
+            "tenant_id": None,
+            "role": "ops_user",
+            "is_platform_admin": False,
+            "is_authenticated": False,
+            "sub": None,
+        }
+
+    tenant_id = jwt_claims.get("custom:tenant_id") or jwt_claims.get("tenant_id")
+    groups = jwt_claims.get("cognito:groups", [])
+    if isinstance(groups, str):
+        groups = [groups]
+
+    is_platform_admin = "platform_admin" in groups
+    role = "platform_admin" if is_platform_admin else (groups[0] if groups else "ops_user")
+
+    return {
+        "tenant_id": tenant_id,
+        "role": role,
+        "is_platform_admin": is_platform_admin,
+        "is_authenticated": True,
+        "sub": jwt_claims.get("sub"),
+    }
+
+
+def handle_trigger_incident(tenant_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
     """Ingest new sensor alarm and trigger Step Functions execution."""
-    tenant_id = body.get("tenant_id", "T1")
     incident_id = body.get("incident_id") or f"INC-{uuid.uuid4().hex[:8].upper()}"
     shipment_id = body.get("shipment_id", "SHP-001")
     sensor_reading = body.get("sensor_reading", {"temp_c": 12.5, "alarm": "HIGH_TEMP"})
@@ -97,10 +132,14 @@ def handle_trigger_incident(body: Dict[str, Any]) -> Dict[str, Any]:
     return cors_response(201, {"incident_id": incident_id, "status": "OPEN", "execution_arn": execution_arn})
 
 
-def handle_operator_action(tenant_id: str, incident_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+def handle_operator_action(
+    tenant_id: str,
+    incident_id: str,
+    body: Dict[str, Any],
+    operator_role: str = "ops_user",
+) -> Dict[str, Any]:
     """Process human operator action (APPROVE, REJECT, OVERRIDE) and unpause Step Functions."""
     action = body.get("action", "APPROVE").upper()
-    operator_role = body.get("operator_role", "ops_user")
     notes = body.get("notes", "")
     now = int(time.time())
 
@@ -122,13 +161,25 @@ def handle_operator_action(tenant_id: str, incident_id: str, body: Dict[str, Any
     # Resume Step Functions if task_token provided or stored in RoutingTable
     task_token = body.get("task_token")
     if not task_token and ROUTING_TABLE_NAME:
-        # Check if active task token is stored in routing table
         try:
             routing_table = get_dynamodb().Table(ROUTING_TABLE_NAME)
             resp = routing_table.get_item(
                 Key={"pk": f"TENANT#{tenant_id}#INCIDENT#{incident_id}", "sk": "ACTIVE_TASK_TOKEN"}
             )
-            task_token = resp.get("Item", {}).get("task_token")
+            item = resp.get("Item")
+            if item:
+                token_ttl = item.get("ttl", float("inf"))
+                if now > token_ttl:
+                    logger.warning("Active task token for incident %s expired at %s", incident_id, token_ttl)
+                else:
+                    task_token = item.get("task_token")
+                    # Delete consumed token so it cannot be reused
+                    try:
+                        routing_table.delete_item(
+                            Key={"pk": f"TENANT#{tenant_id}#INCIDENT#{incident_id}", "sk": "ACTIVE_TASK_TOKEN"}
+                        )
+                    except Exception as del_err:
+                        logger.warning("Failed to delete consumed task token: %s", del_err)
         except Exception as exc:
             logger.warning("Could not retrieve task token: %s", exc)
 
@@ -146,7 +197,7 @@ def handle_operator_action(tenant_id: str, incident_id: str, body: Dict[str, Any
 
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    """HTTP API Gateway router."""
+    """HTTP API Gateway router with Cognito authorization and tenant isolation."""
     http_method = event.get("httpMethod") or event.get("requestContext", {}).get("http", {}).get("method", "GET")
     path = event.get("path") or event.get("rawPath", "")
     logger.info("%s %s", http_method, path)
@@ -160,16 +211,45 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         body = {}
 
     path_params = event.get("pathParameters") or {}
-    tenant_id = body.get("tenant_id") or event.get("queryStringParameters", {}).get("tenant_id", "T1")
+    query_params = event.get("queryStringParameters") or {}
+
+    # Extract authenticated context
+    auth = extract_auth_context(event)
+    requested_tenant = body.get("tenant_id") or query_params.get("tenant_id")
+
+    if auth["is_authenticated"]:
+        if not auth["is_platform_admin"]:
+            # Normal tenant user: must match token's tenant
+            auth_tenant = auth["tenant_id"]
+            if not auth_tenant:
+                return cors_response(403, {"error": "Forbidden: Authenticated token is missing a tenant claim"})
+            if requested_tenant and requested_tenant != auth_tenant:
+                return cors_response(
+                    403,
+                    {"error": f"Forbidden: Access to tenant '{requested_tenant}' is not permitted for your user"},
+                )
+            tenant_id = auth_tenant
+        else:
+            # Platform admin can access any specified tenant
+            tenant_id = requested_tenant or auth.get("tenant_id") or "T1"
+    else:
+        # Fallback for unauthenticated dev/test requests
+        tenant_id = requested_tenant or "T1"
+
+    operator_role = auth.get("role", "ops_user")
 
     # Route: POST /incidents/trigger
     if path.endswith("/incidents/trigger") and http_method == "POST":
-        return handle_trigger_incident(body)
+        return handle_trigger_incident(tenant_id, body)
 
     # Route: POST /incidents/{id}/action
     if "/action" in path and http_method == "POST":
+        # Validate action permissions
+        if auth["is_authenticated"] and operator_role not in ("ops_user", "tenant_admin", "platform_admin"):
+            return cors_response(403, {"error": "Forbidden: Insufficient permissions to perform operator action"})
+
         incident_id = path_params.get("id") or path.split("/")[-2]
-        return handle_operator_action(tenant_id, incident_id, body)
+        return handle_operator_action(tenant_id, incident_id, body, operator_role=operator_role)
 
     # Route: GET /incidents/{id}
     if http_method == "GET" and path_params.get("id"):
