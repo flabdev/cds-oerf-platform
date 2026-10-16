@@ -1,6 +1,7 @@
 """Deterministic cold-chain temperature readings.
 
-The events match the TemperatureReading contract. Publishing them is a later step.
+Events use the EventBridge PutEvents field names. Tenant and shipment live in
+``Detail``. This module prints JSON. It does not call PutEvents.
 """
 
 from __future__ import annotations
@@ -39,20 +40,16 @@ def generate_temperature_events(
     for index, (offset_min, temperature_c) in enumerate(samples, start=1):
         moment = origin + timedelta(minutes=offset_min)
         events.append(
-            {
-                "source": "sim.reefer",
-                "detail-type": "TemperatureReading",
-                "tenant_id": tenant_id,
-                "shipment_id": shipment_id,
-                "detail": {
-                    "device_id": device_id,
-                    "ts": _iso_z(moment),
-                    "temperature_c": temperature_c,
-                    "lat": 17.44,
-                    "lon": round(78.38 + (index - 1) * 0.001, 6),
-                    "seq": index,
-                },
-            }
+            temperature_event(
+                tenant_id=tenant_id,
+                shipment_id=shipment_id,
+                device_id=device_id,
+                moment=moment,
+                temperature_c=temperature_c,
+                seq=index,
+                lat=17.44,
+                lon=round(78.38 + (index - 1) * 0.001, 6),
+            )
         )
     return events
 
@@ -76,6 +73,38 @@ def main(argv: list[str] | None = None) -> int:
     json.dump(events, sys.stdout, indent=2)
     sys.stdout.write("\n")
     return 0
+
+
+def temperature_event(
+    *,
+    tenant_id: str,
+    shipment_id: str,
+    device_id: str,
+    moment: datetime,
+    temperature_c: float,
+    seq: int,
+    lat: float,
+    lon: float,
+) -> dict[str, object]:
+    """One PutEvents record. ``Detail`` is an object so tests can read the fields."""
+
+    stamp = _iso_z(moment)
+    return {
+        "Source": "sim.reefer",
+        "DetailType": "TemperatureReading",
+        "EventBusName": "oerf-events",
+        "Time": stamp,
+        "Detail": {
+            "tenant_id": tenant_id,
+            "shipment_id": shipment_id,
+            "device_id": device_id,
+            "ts": stamp,
+            "temperature_c": temperature_c,
+            "lat": lat,
+            "lon": lon,
+            "seq": seq,
+        },
+    }
 
 
 def _samples(scenario: str) -> list[tuple[float, float]]:
