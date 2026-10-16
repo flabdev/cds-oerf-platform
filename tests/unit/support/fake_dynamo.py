@@ -53,9 +53,12 @@ class FakeDynamoClient:
         self,
         *,
         TableName: str,
+        KeyConditionExpression: str,
         ExpressionAttributeValues: dict[str, dict[str, str]],
         **_: Any,
     ) -> dict[str, Any]:
+        if ":pk" not in KeyConditionExpression or ":prefix" not in KeyConditionExpression:
+            raise client_error("ValidationException")
         pk = ExpressionAttributeValues[":pk"]["S"]
         prefix = ExpressionAttributeValues[":prefix"]["S"]
         with self._guard:

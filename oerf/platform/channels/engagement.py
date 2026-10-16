@@ -323,6 +323,8 @@ class DynamoEngagementStore:
         message_id = required_text(provider_msg_id, "provider_msg_id")
         response = self._client.query(
             TableName=self._routing,
+            KeyConditionExpression="#pk = :pk AND begins_with(#sk, :prefix)",
+            ExpressionAttributeNames={"#pk": "pk", "#sk": "sk"},
             ExpressionAttributeValues={":pk": s(outmsg_pk(message_id)), ":prefix": s("ENG#")},
         )
         now = int(self._clock().timestamp())
@@ -367,6 +369,8 @@ class DynamoEngagementStore:
         contact = required_text(contact_id, "contact_id")
         response = self._client.query(
             TableName=self._routing,
+            KeyConditionExpression="#pk = :pk AND begins_with(#sk, :prefix)",
+            ExpressionAttributeNames={"#pk": "pk", "#sk": "sk"},
             ExpressionAttributeValues={
                 ":pk": s(f"CONTACTENG#{context.tenant_id}#{contact}"),
                 ":prefix": s("ENG#"),
@@ -437,6 +441,8 @@ class DynamoEngagementStore:
     def _correlation(self, provider_msg_id: str) -> Engagement | None:
         response = self._client.query(
             TableName=self._routing,
+            KeyConditionExpression="#pk = :pk AND begins_with(#sk, :prefix)",
+            ExpressionAttributeNames={"#pk": "pk", "#sk": "sk"},
             ExpressionAttributeValues={":pk": s(outmsg_pk(provider_msg_id)), ":prefix": s("ENG#")},
         )
         items = response.get("Items", [])
