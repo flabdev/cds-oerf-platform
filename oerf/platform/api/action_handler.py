@@ -15,9 +15,18 @@ import logging
 import os
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any
 
 import boto3
+
+from oerf.platform.api.claims import (
+    DEFAULT_ROLE,
+    GROUPS_CLAIM,
+    PLATFORM_ADMIN_GROUP,
+    TENANT_CLAIM,
+    parse_cognito_groups,
+    resolve_role,
+)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -44,7 +53,7 @@ def get_sfn():
     return _sfn
 
 
-def cors_response(status_code: int, body: Any) -> Dict[str, Any]:
+def cors_response(status_code: int, body: Any) -> dict[str, Any]:
     return {
         "statusCode": status_code,
         "headers": {
@@ -57,7 +66,7 @@ def cors_response(status_code: int, body: Any) -> Dict[str, Any]:
     }
 
 
-def extract_auth_context(event: Dict[str, Any]) -> Dict[str, Any]:
+def extract_auth_context(event: dict[str, Any]) -> dict[str, Any]:
     """Extract and validate authorizer context from API Gateway JWT claims."""
     auth_ctx = event.get("requestContext", {}).get("authorizer", {})
     jwt_claims = auth_ctx.get("jwt", {}).get("claims", {})
@@ -68,30 +77,28 @@ def extract_auth_context(event: Dict[str, Any]) -> Dict[str, Any]:
     if not jwt_claims:
         return {
             "tenant_id": None,
-            "role": "ops_user",
+            "role": DEFAULT_ROLE,
             "is_platform_admin": False,
             "is_authenticated": False,
             "sub": None,
         }
 
-    tenant_id = jwt_claims.get("custom:tenant_id") or jwt_claims.get("tenant_id")
-    groups = jwt_claims.get("cognito:groups", [])
-    if isinstance(groups, str):
-        groups = [groups]
-
-    is_platform_admin = "platform_admin" in groups
-    role = "platform_admin" if is_platform_admin else (groups[0] if groups else "ops_user")
+    tenant_id = jwt_claims.get(TENANT_CLAIM) or jwt_claims.get("tenant_id")
+    # The authorizer forwards cognito:groups as a string claim, so it is
+    # normalised before the role is resolved.
+    groups = parse_cognito_groups(jwt_claims.get(GROUPS_CLAIM))
+    role = resolve_role(groups)
 
     return {
         "tenant_id": tenant_id,
         "role": role,
-        "is_platform_admin": is_platform_admin,
+        "is_platform_admin": role == PLATFORM_ADMIN_GROUP,
         "is_authenticated": True,
         "sub": jwt_claims.get("sub"),
     }
 
 
-def handle_trigger_incident(tenant_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+def handle_trigger_incident(tenant_id: str, body: dict[str, Any]) -> dict[str, Any]:
     """Ingest new sensor alarm and trigger Step Functions execution."""
     incident_id = body.get("incident_id") or f"INC-{uuid.uuid4().hex[:8].upper()}"
     shipment_id = body.get("shipment_id", "SHP-001")
@@ -109,7 +116,11 @@ def handle_trigger_incident(tenant_id: str, body: Dict[str, Any]) -> Dict[str, A
         "updated_at": now,
         "sensor_reading": sensor_reading,
         "timeline": [
-            {"time": now, "event": "INCIDENT_CREATED", "details": f"Temperature alarm triggered: {sensor_reading}"}
+            {
+                "time": now,
+                "event": "INCIDENT_CREATED",
+                "details": f"Temperature alarm triggered: {sensor_reading}",
+            }
         ],
     }
 
@@ -123,21 +134,30 @@ def handle_trigger_incident(tenant_id: str, body: Dict[str, Any]) -> Dict[str, A
             resp = sfn.start_execution(
                 stateMachineArn=STATE_MACHINE_ARN,
                 name=f"{tenant_id}_{incident_id}_{now}",
-                input=json.dumps({"tenant_id": tenant_id, "incident_id": incident_id, "shipment_id": shipment_id}),
+                input=json.dumps(
+                    {
+                        "tenant_id": tenant_id,
+                        "incident_id": incident_id,
+                        "shipment_id": shipment_id,
+                    }
+                ),
             )
             execution_arn = resp.get("executionArn", "")
         except Exception as exc:
             logger.error("Failed to start Step Functions execution: %s", exc)
 
-    return cors_response(201, {"incident_id": incident_id, "status": "OPEN", "execution_arn": execution_arn})
+    return cors_response(
+        201,
+        {"incident_id": incident_id, "status": "OPEN", "execution_arn": execution_arn},
+    )
 
 
 def handle_operator_action(
     tenant_id: str,
     incident_id: str,
-    body: Dict[str, Any],
-    operator_role: str = "ops_user",
-) -> Dict[str, Any]:
+    body: dict[str, Any],
+    operator_role: str = DEFAULT_ROLE,
+) -> dict[str, Any]:
     """Process human operator action (APPROVE, REJECT, OVERRIDE) and unpause Step Functions."""
     action = body.get("action", "APPROVE").upper()
     notes = body.get("notes", "")
@@ -148,57 +168,92 @@ def handle_operator_action(
         table = get_dynamodb().Table(INCIDENT_TABLE_NAME)
         table.update_item(
             Key={"pk": f"TENANT#{tenant_id}", "sk": f"INCIDENT#{incident_id}"},
-            UpdateExpression="SET #st = :st, updated_at = :u, timeline = list_append(if_not_exists(timeline, :empty), :tl)",
+            UpdateExpression=(
+                "SET #st = :st, updated_at = :u, "
+                "timeline = list_append(if_not_exists(timeline, :empty), :tl)"
+            ),
             ExpressionAttributeNames={"#st": "status"},
             ExpressionAttributeValues={
                 ":st": f"ACTION_{action}",
                 ":u": now,
                 ":empty": [],
-                ":tl": [{"time": now, "event": f"HUMAN_{action}", "operator": operator_role, "notes": notes}],
+                ":tl": [
+                    {
+                        "time": now,
+                        "event": f"HUMAN_{action}",
+                        "operator": operator_role,
+                        "notes": notes,
+                    }
+                ],
             },
         )
 
-    # Resume Step Functions if task_token provided or stored in RoutingTable
+    # Resume Step Functions if a task token was supplied or stored for this incident
     task_token = body.get("task_token")
-    if not task_token and ROUTING_TABLE_NAME:
+    token_key = {
+        "pk": f"TENANT#{tenant_id}#INCIDENT#{incident_id}",
+        "sk": "ACTIVE_TASK_TOKEN",
+    }
+    stored_token = False
+    routing_table = (
+        get_dynamodb().Table(ROUTING_TABLE_NAME) if ROUTING_TABLE_NAME else None
+    )
+
+    if not task_token and routing_table is not None:
         try:
-            routing_table = get_dynamodb().Table(ROUTING_TABLE_NAME)
-            resp = routing_table.get_item(
-                Key={"pk": f"TENANT#{tenant_id}#INCIDENT#{incident_id}", "sk": "ACTIVE_TASK_TOKEN"}
-            )
-            item = resp.get("Item")
-            if item:
-                token_ttl = item.get("ttl", float("inf"))
-                if now > token_ttl:
-                    logger.warning("Active task token for incident %s expired at %s", incident_id, token_ttl)
-                else:
-                    task_token = item.get("task_token")
-                    # Delete consumed token so it cannot be reused
-                    try:
-                        routing_table.delete_item(
-                            Key={"pk": f"TENANT#{tenant_id}#INCIDENT#{incident_id}", "sk": "ACTIVE_TASK_TOKEN"}
-                        )
-                    except Exception as del_err:
-                        logger.warning("Failed to delete consumed task token: %s", del_err)
+            item = routing_table.get_item(Key=token_key).get("Item")
         except Exception as exc:
             logger.warning("Could not retrieve task token: %s", exc)
+            item = None
+
+        if item:
+            token_ttl = item.get("ttl", float("inf"))
+            if now > token_ttl:
+                logger.warning(
+                    "Active task token for incident %s expired at %s", incident_id, token_ttl
+                )
+            else:
+                task_token = item.get("task_token")
+                stored_token = bool(task_token)
 
     if task_token:
         try:
             get_sfn().send_task_success(
                 taskToken=task_token,
-                output=json.dumps({"action": action, "operator_role": operator_role, "notes": notes}),
+                output=json.dumps(
+                    {"action": action, "operator_role": operator_role, "notes": notes}
+                ),
             )
-            logger.info("Sent task success for incident %s", incident_id)
         except Exception as exc:
-            logger.error("Failed to send task success: %s", exc)
+            # The callback is the only way to resume the workflow: report the
+            # failure and keep the stored token so the action can be retried.
+            logger.error("Failed to send task success for incident %s: %s", incident_id, exc)
+            return cors_response(
+                502,
+                {
+                    "success": False,
+                    "error": "Failed to resume the incident workflow, please retry",
+                    "incident_id": incident_id,
+                    "action": action,
+                },
+            )
+
+        logger.info("Sent task success for incident %s", incident_id)
+        if stored_token and routing_table is not None:
+            # Consume the stored token only once the callback is confirmed, so a
+            # failed callback never leaves an unrecoverable workflow.
+            try:
+                routing_table.delete_item(Key=token_key)
+            except Exception as del_err:
+                logger.warning("Failed to delete consumed task token: %s", del_err)
 
     return cors_response(200, {"success": True, "action": action, "incident_id": incident_id})
 
 
-def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """HTTP API Gateway router with Cognito authorization and tenant isolation."""
-    http_method = event.get("httpMethod") or event.get("requestContext", {}).get("http", {}).get("method", "GET")
+    http_context = event.get("requestContext", {}).get("http", {})
+    http_method = event.get("httpMethod") or http_context.get("method", "GET")
     path = event.get("path") or event.get("rawPath", "")
     logger.info("%s %s", http_method, path)
 
@@ -222,11 +277,19 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             # Normal tenant user: must match token's tenant
             auth_tenant = auth["tenant_id"]
             if not auth_tenant:
-                return cors_response(403, {"error": "Forbidden: Authenticated token is missing a tenant claim"})
+                return cors_response(
+                    403,
+                    {"error": "Forbidden: Authenticated token is missing a tenant claim"},
+                )
             if requested_tenant and requested_tenant != auth_tenant:
                 return cors_response(
                     403,
-                    {"error": f"Forbidden: Access to tenant '{requested_tenant}' is not permitted for your user"},
+                    {
+                        "error": (
+                            f"Forbidden: Access to tenant '{requested_tenant}' "
+                            "is not permitted for your user"
+                        )
+                    },
                 )
             tenant_id = auth_tenant
         else:
@@ -245,8 +308,15 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     # Route: POST /incidents/{id}/action
     if "/action" in path and http_method == "POST":
         # Validate action permissions
-        if auth["is_authenticated"] and operator_role not in ("ops_user", "tenant_admin", "platform_admin"):
-            return cors_response(403, {"error": "Forbidden: Insufficient permissions to perform operator action"})
+        if auth["is_authenticated"] and operator_role not in (
+            "ops_user",
+            "tenant_admin",
+            "platform_admin",
+        ):
+            return cors_response(
+                403,
+                {"error": "Forbidden: Insufficient permissions to perform operator action"},
+            )
 
         incident_id = path_params.get("id") or path.split("/")[-2]
         return handle_operator_action(tenant_id, incident_id, body, operator_role=operator_role)
@@ -256,7 +326,9 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         incident_id = path_params["id"]
         if INCIDENT_TABLE_NAME:
             table = get_dynamodb().Table(INCIDENT_TABLE_NAME)
-            resp = table.get_item(Key={"pk": f"TENANT#{tenant_id}", "sk": f"INCIDENT#{incident_id}"})
+            resp = table.get_item(
+                Key={"pk": f"TENANT#{tenant_id}", "sk": f"INCIDENT#{incident_id}"}
+            )
             item = resp.get("Item")
             if item:
                 return cors_response(200, item)

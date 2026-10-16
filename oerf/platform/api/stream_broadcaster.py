@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, List
+from typing import Any
 
 import boto3
 from boto3.dynamodb.types import TypeDeserializer
@@ -43,12 +43,12 @@ def get_apigw():
     return _apigw_client
 
 
-def deserialize_dynamodb_image(image: Dict[str, Any]) -> Dict[str, Any]:
+def deserialize_dynamodb_image(image: dict[str, Any]) -> dict[str, Any]:
     """Convert DynamoDB Stream image to standard Python dict."""
     return {k: _deserializer.deserialize(v) for k, v in image.items()}
 
 
-def get_tenant_connections(tenant_id: str, incident_id: Optional[str] = None) -> List[str]:
+def get_tenant_connections(tenant_id: str, incident_id: str | None = None) -> list[str]:
     """Fetch active connection IDs subscribed to this tenant and incident."""
     if not ROUTING_TABLE_NAME:
         return []
@@ -74,7 +74,7 @@ def get_tenant_connections(tenant_id: str, incident_id: Optional[str] = None) ->
         return []
 
 
-def handler(event: Dict[str, Any], context: Any) -> None:
+def handler(event: dict[str, Any], context: Any) -> None:
     """Process DynamoDB stream records and broadcast to WebSocket clients."""
     records = event.get("Records", [])
     logger.info("Processing %d DynamoDB stream records", len(records))
@@ -121,6 +121,8 @@ def handler(event: Dict[str, Any], context: Any) -> None:
                 if exc.response.get("Error", {}).get("Code") == "GoneException":
                     logger.info("Pruning disconnected client %s", conn_id)
                     if table:
-                        table.delete_item(Key={"pk": f"WS_SUB#{tenant_id}", "sk": f"CONN#{conn_id}"})
+                        table.delete_item(
+                            Key={"pk": f"WS_SUB#{tenant_id}", "sk": f"CONN#{conn_id}"}
+                        )
                 else:
                     logger.error("Failed to push to connection %s: %s", conn_id, exc)
