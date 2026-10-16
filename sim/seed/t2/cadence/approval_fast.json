@@ -1,0 +1,7 @@
+{
+  "tenant_id": "t2",
+  "PK": "TENANT#t2",
+  "SK": "CADENCE#approval_fast#v1",
+  "policy_id": "approval_fast",
+  "exhaust_after": "PT1M"
+}

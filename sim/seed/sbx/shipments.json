@@ -1,0 +1,16 @@
+[
+  {
+    "tenant_id": "sbx",
+    "PK": "TENANT#sbx",
+    "SK": "SHIPMENT#SBX-0001",
+    "shipment_id": "SBX-0001",
+    "product_profile": "PP-2-8-45",
+    "truck": "TRK-SBX",
+    "device": "RF-SBX-0001",
+    "driver": "C-SBX-DRV",
+    "destination": "Sample receiving depot",
+    "eta_min_at_excursion": 46,
+    "value_usd": 180000,
+    "storage_phase": false
+  }
+]

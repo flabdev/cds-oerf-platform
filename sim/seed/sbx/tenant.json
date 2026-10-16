@@ -1,0 +1,10 @@
+{
+  "tenant_id": "sbx",
+  "PK": "TENANT#sbx",
+  "SK": "META",
+  "brand_name": "OERF Sandbox",
+  "timezone": "Asia/Kolkata",
+  "demo": true,
+  "clock_multiplier": 20,
+  "domains": ["cold_chain_excursion"]
+}

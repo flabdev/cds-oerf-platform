@@ -67,6 +67,22 @@ def debounce_pk(tenant_id: str, shipment_id: str, device_id: str) -> str:
     return f"DEBOUNCE#{tenant_id}#{shipment_id}#{device_id}"
 
 
+def engagement_sk(engagement_id: str) -> str:
+    return f"ENG#{engagement_id}"
+
+
+def outmsg_pk(provider_msg_id: str) -> str:
+    return f"OUTMSG#{provider_msg_id}"
+
+
+def phone_pk(e164: str) -> str:
+    return f"PHONE#{e164}"
+
+
+def contact_sk(tenant_id: str, contact_id: str) -> str:
+    return f"TENANT#{tenant_id}#CONTACT#{contact_id}"
+
+
 def is_conditional_failure(exc: BaseException) -> bool:
     response = getattr(exc, "response", None)
     if not isinstance(response, dict):

@@ -1,0 +1,21 @@
+{
+  "tenant_id": "t2",
+  "PK": "TENANT#t2",
+  "SK": "CONFIG#cold_chain_excursion#v1",
+  "product_profiles": [
+    {
+      "id": "PP-2-8-45",
+      "name": "Biologic 2-8",
+      "range_c": [2, 8],
+      "excursion_allowance_min": 45,
+      "allowance_mode": "cumulative"
+    },
+    {
+      "id": "PP-15-25-120",
+      "name": "Ambient 15-25",
+      "range_c": [15, 25],
+      "excursion_allowance_min": 120,
+      "allowance_mode": "cumulative"
+    }
+  ]
+}
