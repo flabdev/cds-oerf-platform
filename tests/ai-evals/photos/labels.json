@@ -1,0 +1,20 @@
+[
+  {"id": "PH-01", "file": "clear_01.png", "expected_code": "E17", "readable": true, "confidence_band": "high", "set_point_c": 5.0, "reading_c": 8.1, "variation": ["clear"], "wrong_unit": false, "ambiguity": "none"},
+  {"id": "PH-02", "file": "clear_02.png", "expected_code": "E17", "readable": true, "confidence_band": "high", "set_point_c": 5.0, "reading_c": 8.1, "variation": ["clear"], "wrong_unit": false, "ambiguity": "none"},
+  {"id": "PH-03", "file": "clear_03.png", "expected_code": "E17", "readable": true, "confidence_band": "high", "set_point_c": 5.0, "reading_c": 7.4, "variation": ["clear"], "wrong_unit": false, "ambiguity": "none"},
+  {"id": "PH-04", "file": "clear_04.png", "expected_code": "E17", "readable": true, "confidence_band": "high", "set_point_c": 5.0, "reading_c": 6.8, "variation": ["clear"], "wrong_unit": false, "ambiguity": "none"},
+  {"id": "PH-05", "file": "angled_01.png", "expected_code": "E17", "readable": true, "confidence_band": "high", "set_point_c": 5.0, "reading_c": 8.4, "variation": ["angle_15"], "wrong_unit": false, "ambiguity": "none"},
+  {"id": "PH-06", "file": "angled_02.png", "expected_code": "E17", "readable": true, "confidence_band": "low", "set_point_c": 5.0, "reading_c": 8.4, "variation": ["angle_25"], "wrong_unit": false, "ambiguity": "confirm"},
+  {"id": "PH-07", "file": "angled_03.png", "expected_code": "E17", "readable": true, "confidence_band": "low", "set_point_c": 5.0, "reading_c": 8.4, "variation": ["angle_35"], "wrong_unit": false, "ambiguity": "confirm"},
+  {"id": "PH-08", "file": "angled_04.png", "expected_code": "E17", "readable": true, "confidence_band": "high", "set_point_c": 5.0, "reading_c": 8.4, "variation": ["angle_10"], "wrong_unit": false, "ambiguity": "none"},
+  {"id": "PH-09", "file": "glare_01.png", "expected_code": "E17", "readable": true, "confidence_band": "high", "set_point_c": 5.0, "reading_c": 8.4, "variation": ["glare_low"], "wrong_unit": false, "ambiguity": "none"},
+  {"id": "PH-10", "file": "glare_02.png", "expected_code": "E17", "readable": true, "confidence_band": "low", "set_point_c": 5.0, "reading_c": 8.4, "variation": ["glare_high"], "wrong_unit": false, "ambiguity": "confirm"},
+  {"id": "PH-11", "file": "glare_03.png", "expected_code": "E17", "readable": true, "confidence_band": "low", "set_point_c": 5.0, "reading_c": 8.4, "variation": ["glare_high", "angle_20"], "wrong_unit": false, "ambiguity": "confirm"},
+  {"id": "PH-12", "file": "blur_01.png", "expected_code": null, "readable": false, "confidence_band": "low", "set_point_c": 5.0, "reading_c": null, "variation": ["blur"], "wrong_unit": false, "ambiguity": "unreadable"},
+  {"id": "PH-13", "file": "blur_02.png", "expected_code": null, "readable": false, "confidence_band": "low", "set_point_c": 5.0, "reading_c": null, "variation": ["blur", "low_light"], "wrong_unit": false, "ambiguity": "unreadable"},
+  {"id": "PH-14", "file": "blur_03.png", "expected_code": null, "readable": false, "confidence_band": "low", "set_point_c": 5.0, "reading_c": null, "variation": ["motion_blur"], "wrong_unit": false, "ambiguity": "unreadable"},
+  {"id": "PH-15", "file": "wrong_unit_01.png", "expected_code": null, "readable": true, "confidence_band": "low", "set_point_c": null, "reading_c": null, "variation": ["wrong_unit"], "wrong_unit": true, "ambiguity": "no_fault_code"},
+  {"id": "PH-16", "file": "wrong_unit_02.png", "expected_code": null, "readable": true, "confidence_band": "low", "set_point_c": null, "reading_c": null, "variation": ["wrong_unit"], "wrong_unit": true, "ambiguity": "no_fault_code"},
+  {"id": "PH-17", "file": "other_e05.png", "expected_code": "E05", "readable": true, "confidence_band": "high", "set_point_c": 5.0, "reading_c": 8.1, "variation": ["clear"], "wrong_unit": false, "ambiguity": "none"},
+  {"id": "PH-18", "file": "other_e22.png", "expected_code": "E22", "readable": true, "confidence_band": "high", "set_point_c": 5.0, "reading_c": 8.1, "variation": ["clear"], "wrong_unit": false, "ambiguity": "none"}
+]

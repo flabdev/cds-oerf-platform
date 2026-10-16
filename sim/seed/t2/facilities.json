@@ -1,0 +1,32 @@
+[
+  {
+    "tenant_id": "t2",
+    "PK": "TENANT#t2",
+    "SK": "FACILITY#FAC-A",
+    "facility_id": "FAC-A",
+    "name": "Facility A (sample cold store)",
+    "approved": true,
+    "capacity_available": true,
+    "range_c": [2, 8],
+    "distance_km": 6.8,
+    "drive_min": 9,
+    "emergency_fee_usd": 250,
+    "lat": 17.47,
+    "lon": 78.42,
+    "contact_id": "C-T2-FACA"
+  },
+  {
+    "tenant_id": "t2",
+    "PK": "TENANT#t2",
+    "SK": "FACILITY#FAC-B",
+    "facility_id": "FAC-B",
+    "name": "Facility B (sample cold store)",
+    "approved": true,
+    "capacity_available": true,
+    "range_c": [2, 8],
+    "distance_km": 14,
+    "drive_min": 21,
+    "emergency_fee_usd": 300,
+    "contact_id": "C-T2-FACB"
+  }
+]
