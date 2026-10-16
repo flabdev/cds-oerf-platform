@@ -42,7 +42,11 @@ class FakeDynamoClient:
 
     def scan(self, *, TableName: str, **_: Any) -> dict[str, Any]:
         with self._guard:
-            items = [_copy(item) for (table, _, _), item in self._items.items() if table == TableName]
+            items = [
+                _copy(item)
+                for (table, _, _), item in self._items.items()
+                if table == TableName
+            ]
         return {"Items": items}
 
     def query(

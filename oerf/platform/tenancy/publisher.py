@@ -145,9 +145,13 @@ class ConfigPublisher:
 
     def _active_version(self, tenant_id: str, domain: str) -> int:
         item = self._repository._load(f"TENANT#{tenant_id}", f"CONFIG#{domain}#ACTIVE")
-        if item is None:
+        if item is not None:
+            return int(item["version"]["N"])
+        seeded = self._repository.read_version(tenant_id, domain, 1)
+        if seeded is None:
             return 0
-        return int(item["version"]["N"])
+        version = seeded.get("version", 1)
+        return version if isinstance(version, int) else 1
 
 
 def _domain(value: str) -> str:
