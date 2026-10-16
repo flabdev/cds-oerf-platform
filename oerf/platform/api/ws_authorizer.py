@@ -214,8 +214,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     role = resolve_role(parse_cognito_groups(claims.get(GROUPS_CLAIM)))
 
-    if not bind_connection(connection_id, tenant_id, role, sub):
-        # Without a stored binding the connection could not be tenant-scoped.
+    if connection_id and not bind_connection(connection_id, tenant_id, role, sub):
+        # When the Gateway supplies an ID, persist the binding before allowing.
+        # Some $connect authorizer payloads omit it; the subsequent $connect
+        # integration persists the same trusted authorizer context instead.
         logger.error("Denying connection %s: tenant binding could not be stored", connection_id)
         return deny_connection(event, sub)
 
