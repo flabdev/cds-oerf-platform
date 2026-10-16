@@ -187,13 +187,6 @@ class OerfComputeStack(Stack):
             },
         )
         data_stack.routing_table.grant_read_write_data(self.ws_authorizer_fn)
-        self.ws_authorizer_fn.add_to_role_policy(
-            iam.PolicyStatement(
-                actions=["cognito-idp:GetUser"],
-                resources=[data_stack.user_pool.user_pool_arn],
-            )
-        )
-
         ws_authorizer = authorizers.WebSocketLambdaAuthorizer(
             "OerfWsAuthorizer",
             self.ws_authorizer_fn,

@@ -73,6 +73,33 @@ def test_websocket_authorizer_returns_policy_and_binds_verified_tenant(monkeypat
     assert table.items[("WS#conn-1", "METADATA")]["tenant_id"] == "tenant-1"
 
 
+def test_websocket_authorizer_works_when_gateway_omits_connection_id(monkeypatch):
+    claims = {"client_id": "client-1", "sub": "user-1"}
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    token = f"header.{payload}.signature"
+
+    monkeypatch.setattr(ws_authorizer, "USER_POOL_CLIENT_ID", "client-1")
+    monkeypatch.setattr(ws_authorizer, "verify_token", lambda _token: {"Username": "user-1"})
+    monkeypatch.setattr(
+        ws_authorizer,
+        "get_user_attributes",
+        lambda _user: {"custom:tenant_id": "tenant-1", "sub": "user-1"},
+    )
+    monkeypatch.setattr(ws_authorizer, "ROUTING_TABLE_NAME", "routing")
+
+    result = ws_authorizer.handler(
+        {
+            "methodArn": "arn:aws:execute-api:us-east-1:123456789012:api/stage/$connect",
+            "queryStringParameters": {"token": token},
+            "requestContext": {},
+        },
+        None,
+    )
+
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Allow"
+    assert result["context"]["tenant_id"] == "tenant-1"
+
+
 def test_websocket_authorizer_denies_invalid_token_with_policy(monkeypatch):
     monkeypatch.setattr(ws_authorizer, "verify_token", lambda _token: {})
 
