@@ -1,12 +1,12 @@
 from aws_cdk import (
+    CfnOutput,
     RemovalPolicy,
     Stack,
-    CfnOutput,
+    aws_cognito as cognito,
     aws_dynamodb as dynamodb,
     aws_events as events,
-    aws_s3 as s3,
-    aws_cognito as cognito,
     aws_iam as iam,
+    aws_s3 as s3,
     aws_stepfunctions as sfn,
 )
 from constructs import Construct
@@ -81,6 +81,7 @@ class OerfDataStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            stream=dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
         )
@@ -155,31 +156,38 @@ class OerfDataStack(Stack):
         # Cognito: User Pool for Dashboard Auth
         # ---------------------------------------------------------
         self.user_pool = cognito.UserPool(
-            self, 
+            self,
             "OerfUserPool",
             user_pool_name="oerf-users",
             self_sign_up_enabled=False,
             auto_verify=cognito.AutoVerifiedAttrs(email=True),
             removal_policy=RemovalPolicy.RETAIN,
         )
-        
-        cognito.CfnUserPoolGroup(self, "PlatformAdminGroup", user_pool_id=self.user_pool.user_pool_id, group_name="platform_admin")
-        cognito.CfnUserPoolGroup(self, "TenantAdminGroup", user_pool_id=self.user_pool.user_pool_id, group_name="tenant_admin")
-        cognito.CfnUserPoolGroup(self, "OpsUserGroup", user_pool_id=self.user_pool.user_pool_id, group_name="ops_user")
+
+        user_pool_id = self.user_pool.user_pool_id
+        cognito.CfnUserPoolGroup(
+            self, "PlatformAdminGroup", user_pool_id=user_pool_id, group_name="platform_admin"
+        )
+        cognito.CfnUserPoolGroup(
+            self, "TenantAdminGroup", user_pool_id=user_pool_id, group_name="tenant_admin"
+        )
+        cognito.CfnUserPoolGroup(
+            self, "OpsUserGroup", user_pool_id=user_pool_id, group_name="ops_user"
+        )
 
         # ---------------------------------------------------------
         # IAM: GitHub OIDC Provider for CI/CD
         # ---------------------------------------------------------
         github_domain = "token.actions.githubusercontent.com"
         github_provider = iam.OpenIdConnectProvider(
-            self, 
+            self,
             "GithubOIDCProvider",
             url=f"https://{github_domain}",
             client_ids=["sts.amazonaws.com"],
         )
-        
+
         github_role = iam.Role(
-            self, 
+            self,
             "GitHubDeployRole",
             role_name="OerfGitHubDeployRole",
             assumed_by=iam.OpenIdConnectPrincipal(github_provider, conditions={
@@ -210,5 +218,7 @@ class OerfDataStack(Stack):
         CfnOutput(self, "ReportBucketName", value=self.report_bucket.bucket_name)
         CfnOutput(self, "CognitoUserPoolId", value=self.user_pool.user_pool_id)
         CfnOutput(self, "EventBusArn", value=self.event_bus.event_bus_arn)
-        CfnOutput(self, "ColdChainStateMachineArn", value=self.cold_chain_state_machine.state_machine_arn)
+        CfnOutput(
+            self, "ColdChainStateMachineArn", value=self.cold_chain_state_machine.state_machine_arn
+        )
 
