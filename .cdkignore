@@ -1,0 +1,14 @@
+.git
+.gitignore
+.github
+.pytest_cache
+*.pyc
+__pycache__
+cdk.out
+cdk.context.json
+tests
+web
+node_modules
+.venv
+venv
+*.egg-info

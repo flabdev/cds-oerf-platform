@@ -12,6 +12,7 @@ import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from itertools import count
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -65,6 +66,8 @@ class Incident(BaseModel):
     opened_at: str
     pk: str
     sk: str = "META"
+    config_version: int | None = None
+    config_snapshot: dict[str, Any] | None = None
 
 
 class TimelineEvent(BaseModel):
@@ -82,6 +85,48 @@ class TransitionResult(BaseModel):
     incident_id: str
     previous_state: str
     state: str
+
+
+@runtime_checkable
+class IncidentStore(Protocol):
+    """Create, read, and transition incidents. Storage is hidden behind this port."""
+
+    def create(
+        self,
+        *,
+        tenant_id: str,
+        shipment_id: str,
+        reason: str,
+        config_version: int | None = None,
+        config_snapshot: dict[str, Any] | None = None,
+    ) -> Incident:
+        """Open an incident, or return the one already open for the shipment."""
+
+    def get(self, tenant_id: str, incident_id: str) -> Incident:
+        """Return the incident meta row."""
+
+    def events(self, tenant_id: str, incident_id: str) -> list[TimelineEvent]:
+        """Return timeline rows in sort-key order."""
+
+    def transition(
+        self,
+        tenant_id: str,
+        incident_id: str,
+        *,
+        from_state: str,
+        to_state: str,
+    ) -> TransitionResult:
+        """Move the incident when it is still in ``from_state``."""
+
+
+def ensure_transition(from_state: str, to_state: str) -> None:
+    """Raise ``IllegalTransition`` when the state machine has no such edge."""
+
+    allowed = TRANSITIONS.get(to_state)
+    if from_state not in TRANSITIONS or allowed is None:
+        raise IllegalTransition(f"unknown state in {from_state!r} -> {to_state!r}")
+    if to_state not in TRANSITIONS[from_state]:
+        raise IllegalTransition(f"{from_state} -> {to_state} is not allowed")
 
 
 class IncidentRepository:
@@ -103,7 +148,15 @@ class IncidentRepository:
         self._event_seq: dict[tuple[str, str], int] = {}
         self._guard = threading.Lock()
 
-    def create(self, *, tenant_id: str, shipment_id: str, reason: str) -> Incident:
+    def create(
+        self,
+        *,
+        tenant_id: str,
+        shipment_id: str,
+        reason: str,
+        config_version: int | None = None,
+        config_snapshot: dict[str, Any] | None = None,
+    ) -> Incident:
         """Open an incident, or append to the one already locked for this shipment.
 
         The lock acquire and the incident write share one critical section, so
@@ -127,6 +180,8 @@ class IncidentRepository:
                 reason=cause,
                 opened_at=_iso_z(self._clock()),
                 pk=pk,
+                config_version=config_version,
+                config_snapshot=config_snapshot,
             )
             key = (pk, "META")
             self._incidents[key] = incident
@@ -157,12 +212,7 @@ class IncidentRepository:
         from_state: str,
         to_state: str,
     ) -> TransitionResult:
-        allowed = TRANSITIONS.get(to_state)
-        if from_state not in TRANSITIONS or allowed is None:
-            raise IllegalTransition(f"unknown state in {from_state!r} -> {to_state!r}")
-        if to_state not in TRANSITIONS[from_state]:
-            raise IllegalTransition(f"{from_state} -> {to_state} is not allowed")
-
+        ensure_transition(from_state, to_state)
         context = TenantContext(tenant_id=tenant_id)
         key = _meta_key(context.tenant_id, _required(incident_id, "incident_id"))
         with self._guard:
