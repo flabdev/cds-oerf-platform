@@ -7,7 +7,7 @@ only when that key is absent.
 from __future__ import annotations
 
 import threading
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -20,6 +20,20 @@ class LockResult(BaseModel):
     created: bool
     incident_id: str
     reason: str | None = None
+
+
+@runtime_checkable
+class OpenIncidentLockPort(Protocol):
+    """Conditional shipment lock. The first acquire wins."""
+
+    def acquire_lock(self, tenant_id: str, shipment_id: str, incident_id: str) -> LockResult:
+        """Store the incident id when no open incident is locked."""
+
+    def release_lock(self, tenant_id: str, shipment_id: str) -> None:
+        """Remove the lock so a later incident can open."""
+
+    def get_lock(self, tenant_id: str, shipment_id: str) -> dict[str, Any] | None:
+        """Return the lock row, or ``None`` when the shipment is unlocked."""
 
 
 class OpenIncidentLock:

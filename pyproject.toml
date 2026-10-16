@@ -9,6 +9,7 @@ description = "Operational Exception Resolution Framework"
 requires-python = ">=3.11"
 dependencies = [
     "aws-cdk-lib>=2.0.0",
+    "boto3>=1.34",
     "constructs>=10.0.0,<11.0.0",
     "jsonschema>=4",
     "pydantic>=2",
