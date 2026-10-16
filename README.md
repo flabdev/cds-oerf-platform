@@ -21,7 +21,9 @@ Temperature path
 Reply path
   inbound/normalize.py           (WhatsApp payload -> one message shape)
     -> inbound/dedupe.py         (ignore the same provider id for 7 days)
-    -> the open incident         (not wired to state changes yet)
+    -> channels/optout.py        (STOP / UNSUBSCRIBE before correlation)
+    -> channels/engagement.py    (one lookup to the waiting engagement)
+    -> channels/registry.py      (phone number -> tenant and contact)
 ```
 
 1. The simulator builds a fixed series of `TemperatureReading` events for a tenant and shipment. It prints JSON. It does not publish to EventBridge yet.
@@ -30,7 +32,8 @@ Reply path
 4. The first trigger that should open a case calls `create`. That writes the incident in state `OPEN` and takes the shipment lock (`TENANT#{tenant}#SHIP#{shipment}` / `OPEN_INCIDENT`). A second create for the same shipment appends a timeline row to the incident already locked.
 5. Allowance and option ranking are pure functions used when the incident is assessed. They do not read telemetry. The caller supplies minutes already used, the current temperature, and facility drive times from the seed.
 6. Legal state changes go through `transition`. `CLOSED` and `CANCELLED` release the shipment lock so a later excursion can open a new incident.
-7. An inbound WhatsApp payload is normalized to channel `whatsapp`, then deduped on the provider message id. Classification and workflow resume are not in this repository yet.
+7. An inbound WhatsApp payload is normalized to channel `whatsapp`, then deduped on the provider message id. A message whose whole text is `STOP` or `UNSUBSCRIBE` sets that contact's opt-in to false and stops active engagements. It does not resume the waiting workflow. Any other reply looks up `OUTMSG#{provider message id}` and resumes only while that engagement is still `WAITING`.
+8. The simulator's scenario command writes PutEvents-shaped temperature JSON. `sim/responder.py` returns the scripted reply for a scenario, role, ask, and attempt. Neither one publishes to AWS.
 
 Closing or cancelling is the only step that removes the lock. A repeated warm reading while the lock is held updates the open incident.
 
@@ -118,6 +121,14 @@ Ops manager (`approval_fast`). Quiet hours apply. Stop at 2 minutes, then auto-p
 | `oerf/platform/inbound/dedupe.py` | In-memory dedupe and the `MessageDedupePort` interface. Keeps a provider message id for 7 days from the injected clock. |
 | `oerf/platform/inbound/dynamo.py` | DynamoDB dedupe on `INMSG#{message id}` / `META`. A retry inside the window does not write again. |
 
+### Engagements
+
+| File | Role |
+| --- | --- |
+| `oerf/platform/channels/engagement.py` | Waiting engagement on `ENG#{id}`, plus the `OUTMSG#{provider message id}` row a reply quotes. A stopped, answered, or expired row does not resume. |
+| `oerf/platform/channels/registry.py` | `PHONE#{e164}` returns every tenant and contact registered on that number. |
+| `oerf/platform/channels/optout.py` | `STOP` and `UNSUBSCRIBE`, plus configured local keywords, run before correlation. |
+
 ### Storage helpers
 
 | File | Role |
@@ -141,6 +152,8 @@ Package markers with no behavior: `oerf/__init__.py`, `oerf/platform/__init__.py
 | `sim/seed/t1/shipments.json` | Demo shipment `PH-2841`, device `RF-7781`, profile `PP-2-8-45`. |
 | `sim/seed/t1/facilities.json` | Recovery facilities A and B with drive minutes used by option ranking. |
 | `sim/seed/t1/contacts.json` | Driver, ops, QA, and facility contacts. Phone numbers are tokens, not real numbers. |
+| `sim/seed/t2/` | Tenant `t2`, brand Sample Vaccine 3PL, shipment `VX-3101`, 45-minute seed allowance, approval ladder `PT1M`, scripted contacts. |
+| `sim/seed/sbx/` | Sandbox tenant, demo clock, shipment `SBX-0001`, scripted contacts. |
 | `sim/__init__.py`, `sim/seed/__init__.py` | Package markers. |
 
 `get_config` deep-merges `defaults.json` with the tenant file. Nested objects merge. Lists and scalars in the tenant file replace the default.
@@ -161,7 +174,9 @@ A normal read loads `ACTIVE`, takes the number in `version`, and then loads that
 
 | File | Role |
 | --- | --- |
-| `sim/temperature.py` | Builds deterministic readings for `normal` (5.2°C), `excursion` (climbs to 8.1°C), and `recovery` (8.6°C back to 5.0°C). The CLI prints the JSON. `--dry-run` is accepted so the later EventBridge command line already matches; both modes print until a publisher exists. |
+| `sim/temperature.py` | Builds deterministic readings for `normal` (5.2°C), `excursion` (climbs to 8.1°C), and `recovery` (8.6°C back to 5.0°C). Each record uses `Source`, `DetailType`, `EventBusName`, `Time`, and a `Detail` object that holds the tenant, shipment, device, time, temperature, coordinates, and sequence. The CLI prints the JSON. `--dry-run` is accepted; both modes print until a publisher exists. |
+| `sim/scenarios.py` | Named scenario curves, including the happy path, a facility decline, a one-reading blip, and a false alarm. `--emit eventbridge` writes that JSON. The start time is an argument. |
+| `sim/responder.py` | Deterministic reply for a scenario, role, ask, and attempt. A silent party returns no reply. No provider call. |
 
 ## Infrastructure
 

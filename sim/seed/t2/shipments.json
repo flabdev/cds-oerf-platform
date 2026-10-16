@@ -1,0 +1,16 @@
+[
+  {
+    "tenant_id": "t2",
+    "PK": "TENANT#t2",
+    "SK": "SHIPMENT#VX-3101",
+    "shipment_id": "VX-3101",
+    "product_profile": "PP-2-8-45",
+    "truck": "TRK-02",
+    "device": "RF-7782",
+    "driver": "C-T2-DRV",
+    "destination": "Sample receiving depot",
+    "eta_min_at_excursion": 46,
+    "value_usd": 180000,
+    "storage_phase": false
+  }
+]

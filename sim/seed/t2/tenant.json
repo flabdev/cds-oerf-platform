@@ -1,0 +1,10 @@
+{
+  "tenant_id": "t2",
+  "PK": "TENANT#t2",
+  "SK": "META",
+  "brand_name": "Sample Vaccine 3PL",
+  "timezone": "Asia/Kolkata",
+  "demo": true,
+  "clock_multiplier": 20,
+  "domains": ["cold_chain_excursion"]
+}
