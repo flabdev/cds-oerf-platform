@@ -11,7 +11,7 @@ import base64
 import json
 import logging
 import os
-from typing import Any, Dict
+from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
@@ -42,7 +42,9 @@ def get_s3():
 def get_bedrock():
     global _bedrock
     if _bedrock is None:
-        _bedrock = boto3.client("bedrock-runtime", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+        _bedrock = boto3.client(
+            "bedrock-runtime", region_name=os.environ.get("AWS_REGION", "us-east-1")
+        )
     return _bedrock
 
 
@@ -53,7 +55,8 @@ def get_dynamodb():
     return _dynamodb
 
 
-VISION_SYSTEM_PROMPT = """You are an expert cold-chain diagnostics AI for refrigerated transport (reefer) systems.
+VISION_SYSTEM_PROMPT = """You are an expert cold-chain diagnostics AI for
+refrigerated transport (reefer) systems.
 Analyze the provided photograph of the reefer control panel / digital display carefully.
 Extract the following exact fields in JSON:
 {
@@ -69,7 +72,7 @@ Extract the following exact fields in JSON:
 Return ONLY valid raw JSON with no markdown backticks or explanation."""
 
 
-def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Lambda entry point for evidence image analysis.
     
     Expected event payload:
@@ -96,7 +99,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             "door_alarm_status": "CLOSED",
             "power_status": "RUNNING",
             "confidence_score": 0.95,
-            "display_readout_summary": "Simulated analysis: High temp alarm AL02 active, ambient 12.8C vs setpoint 4.0C",
+            "display_readout_summary": (
+                "Simulated analysis: High temp alarm AL02 active, "
+                "ambient 12.8C vs setpoint 4.0C"
+            ),
         }
         return {"success": True, "analysis": mock_result, "source": "mock"}
 
@@ -132,7 +138,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                         },
                         {
                             "type": "text",
-                            "text": "Please extract the telemetry from this reefer display according to your instructions.",
+                            "text": (
+                                "Please extract the telemetry from this reefer display "
+                                "according to your instructions."
+                            ),
                         },
                     ],
                 }
@@ -148,7 +157,12 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 body=json.dumps(payload),
             )
         except ClientError as exc:
-            logger.warning("Primary Bedrock model %s failed, attempting fallback %s: %s", BEDROCK_MODEL_ID, FALLBACK_MODEL_ID, exc)
+            logger.warning(
+                "Primary Bedrock model %s failed, attempting fallback %s: %s",
+                BEDROCK_MODEL_ID,
+                FALLBACK_MODEL_ID,
+                exc,
+            )
             response = bedrock.invoke_model(
                 modelId=FALLBACK_MODEL_ID,
                 contentType="application/json",

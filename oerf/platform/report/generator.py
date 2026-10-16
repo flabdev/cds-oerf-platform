@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, Dict
+from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
@@ -49,13 +49,14 @@ def get_ses():
     return _ses
 
 
-def format_report_markdown(incident: Dict[str, Any]) -> str:
+def format_report_markdown(incident: dict[str, Any]) -> str:
     """Render a clean GxP-compliant incident report."""
     tenant_id = incident.get("tenant_id", "Unknown")
     incident_id = incident.get("incident_id", "Unknown")
     shipment_id = incident.get("shipment_id", "Unknown")
     status = incident.get("status", "RESOLVED")
-    created_at = time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime(incident.get("created_at", time.time())))
+    created_epoch = incident.get("created_at", time.time())
+    created_at = time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime(created_epoch))
     closed_at = time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime())
 
     evidence = incident.get("evidence_analysis", {})
@@ -97,7 +98,7 @@ def format_report_markdown(incident: Dict[str, Any]) -> str:
 """
 
 
-def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Lambda entry point for report generation.
     
     Expected event payload:
@@ -151,7 +152,12 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 Destination={"ToAddresses": [qa_email]},
                 Content={
                     "Simple": {
-                        "Subject": {"Data": f"OERF Incident Report: {incident_id} [{incident.get('status', 'RESOLVED')}]"},
+                        "Subject": {
+                            "Data": (
+                                f"OERF Incident Report: {incident_id} "
+                                f"[{incident.get('status', 'RESOLVED')}]"
+                            )
+                        },
                         "Body": {"Text": {"Data": markdown_report}},
                     }
                 },

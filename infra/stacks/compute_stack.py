@@ -15,6 +15,7 @@ Provisions:
 from __future__ import annotations
 
 import os
+
 from aws_cdk import (
     CfnOutput,
     Duration,
@@ -81,6 +82,8 @@ class OerfComputeStack(Stack):
                 "USE_MOCK_WHATSAPP": "false",
                 "USE_MOCK_SMS": "false",
                 "WHATSAPP_PHONE_NUMBER_ID": os.environ.get("WHATSAPP_PHONE_NUMBER_ID", ""),
+                "SES_SOURCE_EMAIL": os.environ.get("SES_SOURCE_EMAIL", ""),
+                "USE_MOCK_EMAIL": "false",
             },
         )
         data_stack.routing_table.grant_read_write_data(self.channel_router_fn)
@@ -142,6 +145,14 @@ class OerfComputeStack(Stack):
             )
         )
 
+        # Cognito app client shared by the HTTP API authorizer and by the
+        # WebSocket $connect authorizer.
+        user_pool_client = data_stack.user_pool.add_client(
+            "OerfHttpApiClient",
+            user_pool_client_name="oerf-http-api-client",
+            generate_secret=False,
+        )
+
         # ---------------------------------------------------------
         # 4. WebSocket Handler & API Gateway (ADR-010)
         # ---------------------------------------------------------
@@ -159,25 +170,65 @@ class OerfComputeStack(Stack):
         )
         data_stack.routing_table.grant_read_write_data(self.ws_handler_fn)
 
+        # $connect authorizer: verifies the Cognito access token supplied as the
+        # ?token= query parameter and binds the connection to its tenant.
+        self.ws_authorizer_fn = lambda_.Function(
+            self,
+            "WsAuthorizerFunction",
+            function_name="oerf-ws-authorizer",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            handler="oerf.platform.api.ws_authorizer.handler",
+            code=lambda_code,
+            timeout=Duration.seconds(10),
+            environment={
+                "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
+                "USER_POOL_ID": data_stack.user_pool.user_pool_id,
+                "USER_POOL_CLIENT_ID": user_pool_client.user_pool_client_id,
+            },
+        )
+        data_stack.routing_table.grant_read_write_data(self.ws_authorizer_fn)
+        self.ws_authorizer_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["cognito-idp:GetUser"],
+                resources=[data_stack.user_pool.user_pool_arn],
+            )
+        )
+
+        ws_authorizer = authorizers.WebSocketLambdaAuthorizer(
+            "OerfWsAuthorizer",
+            self.ws_authorizer_fn,
+            authorizer_name="oerf-ws-authorizer",
+            identity_source=["route.request.querystring.token"],
+        )
+
         # Create WebSocket API
         self.ws_api = apigwv2.WebSocketApi(
             self,
             "OerfWebSocketApi",
             api_name="oerf-ws-api",
             connect_route_options=apigwv2.WebSocketRouteOptions(
-                integration=integrations.WebSocketLambdaIntegration("ConnectIntegration", self.ws_handler_fn)
+                integration=integrations.WebSocketLambdaIntegration(
+                    "ConnectIntegration", self.ws_handler_fn
+                ),
+                authorizer=ws_authorizer,
             ),
             disconnect_route_options=apigwv2.WebSocketRouteOptions(
-                integration=integrations.WebSocketLambdaIntegration("DisconnectIntegration", self.ws_handler_fn)
+                integration=integrations.WebSocketLambdaIntegration(
+                    "DisconnectIntegration", self.ws_handler_fn
+                )
             ),
             default_route_options=apigwv2.WebSocketRouteOptions(
-                integration=integrations.WebSocketLambdaIntegration("DefaultIntegration", self.ws_handler_fn)
+                integration=integrations.WebSocketLambdaIntegration(
+                    "DefaultIntegration", self.ws_handler_fn
+                )
             ),
         )
 
         self.ws_api.add_route(
             "subscribe",
-            integration=integrations.WebSocketLambdaIntegration("SubscribeIntegration", self.ws_handler_fn),
+            integration=integrations.WebSocketLambdaIntegration(
+                "SubscribeIntegration", self.ws_handler_fn
+            ),
         )
 
         self.ws_stage = apigwv2.WebSocketStage(
@@ -268,12 +319,6 @@ class OerfComputeStack(Stack):
         )
 
         # Add UserPoolClient to UserPool for HTTP API Authorizer
-        user_pool_client = data_stack.user_pool.add_client(
-            "OerfHttpApiClient",
-            user_pool_client_name="oerf-http-api-client",
-            generate_secret=False,
-        )
-
         http_authorizer = authorizers.HttpUserPoolAuthorizer(
             "OerfHttpAuthorizer",
             pool=data_stack.user_pool,
@@ -281,7 +326,9 @@ class OerfComputeStack(Stack):
             identity_source=["$request.header.Authorization"],
         )
 
-        action_integration = integrations.HttpLambdaIntegration("ActionIntegration", self.action_handler_fn)
+        action_integration = integrations.HttpLambdaIntegration(
+            "ActionIntegration", self.action_handler_fn
+        )
         self.http_api.add_routes(
             path="/incidents/trigger",
             methods=[apigwv2.HttpMethod.POST],

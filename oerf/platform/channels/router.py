@@ -13,7 +13,7 @@ import logging
 import os
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
@@ -27,6 +27,7 @@ SES_SOURCE_EMAIL = os.environ.get("SES_SOURCE_EMAIL", "")
 WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
 USE_MOCK_WHATSAPP = os.environ.get("USE_MOCK_WHATSAPP", "false").lower() == "true"
 USE_MOCK_SMS = os.environ.get("USE_MOCK_SMS", "false").lower() == "true"
+USE_MOCK_EMAIL = os.environ.get("USE_MOCK_EMAIL", "false").lower() == "true"
 
 # Lazy-loaded AWS clients
 _dynamodb = None
@@ -54,7 +55,7 @@ def record_outbound_message(
     channel: str,
     recipient: str,
     status: str,
-    task_token: Optional[str] = None,
+    task_token: str | None = None,
 ) -> None:
     """Record outbound message in RoutingTable for audit and callback correlation."""
     if not ROUTING_TABLE_NAME:
@@ -111,15 +112,17 @@ def record_outbound_message(
     table.put_item(Item=item)
 
 
-def send_whatsapp(recipient: str, message: str) -> Dict[str, Any]:
-    """Send WhatsApp message via AWS End User Messaging Social or simulate if explicitly configured."""
+def send_whatsapp(recipient: str, message: str) -> dict[str, Any]:
+    """Send WhatsApp via AWS End User Messaging Social, simulating if configured."""
     msg_id = f"wa-{uuid.uuid4().hex[:12]}"
     if USE_MOCK_WHATSAPP:
         logger.info("[SIMULATED WHATSAPP] To: %s | Message: %s", recipient, message)
         return {"success": True, "message_id": msg_id, "channel": "WHATSAPP", "status": "SIMULATED"}
 
     if not WHATSAPP_PHONE_NUMBER_ID:
-        logger.warning("WHATSAPP_PHONE_NUMBER_ID not configured, falling back to next notification channel")
+        logger.warning(
+            "WHATSAPP_PHONE_NUMBER_ID not configured, falling back to next channel"
+        )
         return {
             "success": False,
             "error": "WHATSAPP_PHONE_NUMBER_ID not configured",
@@ -142,13 +145,18 @@ def send_whatsapp(recipient: str, message: str) -> Dict[str, Any]:
             message=json.dumps(payload).encode("utf-8"),
         )
         actual_msg_id = resp.get("messageId") or msg_id
-        return {"success": True, "message_id": actual_msg_id, "channel": "WHATSAPP", "status": "SENT"}
+        return {
+            "success": True,
+            "message_id": actual_msg_id,
+            "channel": "WHATSAPP",
+            "status": "SENT",
+        }
     except Exception as exc:
         logger.error("Failed to send WhatsApp message via socialmessaging: %s", exc)
         return {"success": False, "error": str(exc), "channel": "WHATSAPP"}
 
 
-def send_sms(recipient: str, message: str) -> Dict[str, Any]:
+def send_sms(recipient: str, message: str) -> dict[str, Any]:
     """Send SMS message via Amazon SNS or simulate if explicitly configured."""
     msg_id = f"sms-{uuid.uuid4().hex[:12]}"
     if USE_MOCK_SMS:
@@ -165,12 +173,26 @@ def send_sms(recipient: str, message: str) -> Dict[str, Any]:
         return {"success": False, "error": str(exc), "channel": "SMS"}
 
 
-def send_email(recipient: str, subject: str, body: str) -> Dict[str, Any]:
-    """Send email via Amazon SESv2."""
+def send_email(recipient: str, subject: str, body: str) -> dict[str, Any]:
+    """Send email via Amazon SESv2, simulating only when explicitly configured."""
     msg_id = f"email-{uuid.uuid4().hex[:12]}"
-    if not SES_SOURCE_EMAIL:
+    if USE_MOCK_EMAIL:
         logger.info("[SIMULATED EMAIL] To: %s | Subject: %s", recipient, subject)
-        return {"success": True, "message_id": msg_id, "channel": "EMAIL", "status": "SIMULATED"}
+        return {
+            "success": True,
+            "message_id": msg_id,
+            "channel": "EMAIL",
+            "status": "SIMULATED",
+        }
+
+    if not SES_SOURCE_EMAIL:
+        # Never report a delivery the router cannot actually perform.
+        logger.warning("SES_SOURCE_EMAIL not configured, email cannot be delivered")
+        return {
+            "success": False,
+            "error": "SES_SOURCE_EMAIL not configured",
+            "channel": "EMAIL",
+        }
 
     try:
         ses = get_ses()
@@ -190,7 +212,7 @@ def send_email(recipient: str, subject: str, body: str) -> Dict[str, Any]:
         return {"success": False, "error": str(exc), "channel": "EMAIL"}
 
 
-def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Lambda entry point for channel router.
     
     Expected event payload:
@@ -206,7 +228,8 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         "channel_priority": ["WHATSAPP", "SMS", "EMAIL"]
     }
     """
-    logger.info("Routing notification: %s", json.dumps({k: v for k, v in event.items() if k != "task_token"}))
+    logged_event = {key: value for key, value in event.items() if key != "task_token"}
+    logger.info("Routing notification: %s", json.dumps(logged_event))
 
     tenant_id = event.get("tenant_id", "default")
     incident_id = event.get("incident_id", "unknown")
@@ -237,12 +260,16 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             result["delivered_channel"] = ch_upper
             result["message_id"] = res.get("message_id")
 
+            delivered_to = (
+                recipient_phone if ch_upper in ("WHATSAPP", "SMS") else recipient_email
+            )
+
             record_outbound_message(
                 tenant_id=tenant_id,
                 incident_id=incident_id,
                 message_id=res["message_id"],
                 channel=ch_upper,
-                recipient=recipient_phone if ch_upper in ("WHATSAPP", "SMS") else (recipient_email or ""),
+                recipient=delivered_to or "",
                 status=res.get("status", "SENT"),
                 task_token=task_token,
             )
