@@ -1,11 +1,13 @@
 """Draft validation, immutable publish, and the T2 allowance change."""
 
+import json
 from datetime import UTC, datetime
 
 import pytest
 
 from oerf.platform.incidents.repository import IncidentRepository
 from oerf.platform.rules.options import AssessmentContext, RecoveryOption, rank_options
+from oerf.platform.storage.dynamo import key, n, s
 from oerf.platform.tenancy.config_resolver import ConfigInvalid, ResolvedConfig, get_config
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 from oerf.platform.tenancy.publisher import ConfigPublisher
@@ -24,6 +26,31 @@ def test_invalid_draft_cannot_publish() -> None:
     with pytest.raises(ConfigInvalid):
         publisher.publish("t2", "cold_chain_excursion", published_by="tenant_admin")
     assert _repository.read_version("t2", "cold_chain_excursion", 1) is None
+
+
+def test_seeded_v1_without_active_publishes_version_2() -> None:
+    publisher, repository = _publisher()
+    repository._client.put_item(
+        TableName="tenant",
+        Item={
+            **key("TENANT#t2", "CONFIG#cold_chain_excursion#v1"),
+            "tenant_id": s("t2"),
+            "version": n(1),
+            "product_profiles": s(json.dumps(_profiles(45)["product_profiles"])),
+        },
+    )
+    publisher.save_draft("t2", "cold_chain_excursion", _profiles(30))
+
+    published = publisher.publish("t2", "cold_chain_excursion", published_by="tenant_admin")
+    current = get_config("t2", "cold_chain_excursion", repository=repository)
+    seeded = repository.read_version("t2", "cold_chain_excursion", 1)
+
+    assert published.config_version == 2
+    assert published.previous_version == 1
+    assert current.version == 2
+    assert current.product_profile("PP-2-8-45").excursion_allowance_min == 30
+    assert seeded is not None
+    assert seeded["product_profiles"][0]["excursion_allowance_min"] == 45
 
 
 def test_publish_is_immutable_and_pins_open_incidents() -> None:
