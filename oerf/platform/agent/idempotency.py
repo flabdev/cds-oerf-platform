@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
@@ -30,6 +31,7 @@ class StepRecord(BaseModel):
     completed_at: str
     decision: dict[str, Any] | None = None
     result: dict[str, Any] = Field(default_factory=dict)
+    step_output: dict[str, Any] | None = None
 
 
 @runtime_checkable
@@ -47,6 +49,7 @@ class StepResultStore(Protocol):
         step: str,
         decision: dict[str, Any] | None = None,
         result: dict[str, Any] | None = None,
+        step_output: dict[str, Any] | None = None,
     ) -> StepRecord:
         """Record the outcome and return the record that is now current."""
 
@@ -74,6 +77,7 @@ class MemoryStepResultStore:
         step: str,
         decision: dict[str, Any] | None = None,
         result: dict[str, Any] | None = None,
+        step_output: dict[str, Any] | None = None,
     ) -> StepRecord:
         """Store the outcome. A repeat of a finished step returns the first record."""
         key = _key(tenant_id, incident_id, step)
@@ -88,6 +92,7 @@ class MemoryStepResultStore:
                 completed_at=_iso_z(self._clock()),
                 decision=decision,
                 result=dict(result or {}),
+                step_output=deepcopy(step_output) if step_output is not None else None,
             )
             self._records[key] = record
             return record
