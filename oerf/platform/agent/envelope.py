@@ -10,6 +10,14 @@ extended, and the stage, completed step, and decision that the following
 The identifiers stay on the envelope rather than only inside ``workflow`` so
 that a handler in the middle of the workflow can call a tenant-scoped port
 without re-reading the execution input.
+
+Four gate values are also mirrored onto the root of the response. The
+definition's ``Choice`` states read ``$.approval.status``, ``$.facility.accepted``,
+``$.containment.status`` and ``$.qa.disposition`` from the state itself, and the
+state is this envelope, so those four keys are declared here and projected up
+from ``workflow`` by ``carriers.finish``. ``workflow`` stays the accumulator: the
+mirror is a copy of the value the step wrote there, carried forward by every
+later step so a gate cannot disappear mid-workflow.
 """
 
 from __future__ import annotations
@@ -42,6 +50,12 @@ RECORD_FAILURE = "RecordFailure"
 ESCALATE = "Escalate"
 
 IDENTIFIERS = ("tenant_id", "incident_id", "shipment_id")
+
+#: Gate values the definition's ``Choice`` states read at the state root. Each
+#: is mirrored from the same key in ``workflow``, and stays optional: a step
+#: that never touched a gate returns no mirror, so the ``Choice`` sees an absent
+#: path and takes its ``Default``.
+MIRRORS = ("approval", "facility", "containment", "qa")
 
 #: Every step the definition can dispatch. The six handlers OERF-202 delivers
 #: cover a subset of these; the rest arrive with OERF-203, OERF-206 and OERF-207.
@@ -84,6 +98,10 @@ class StepEnvelope(BaseModel):
     current_stage: str | None = None
     last_completed_step: str | None = None
     decision: dict[str, Any] | None = None
+    approval: dict[str, Any] | None = None
+    facility: dict[str, Any] | None = None
+    containment: dict[str, Any] | None = None
+    qa: dict[str, Any] | None = None
     task_token: str | None = None
 
     @field_validator("step")
