@@ -41,6 +41,19 @@ def test_close_stub_marks_incident_closed() -> None:
     assert result["closed"] is True
 
 
+def test_cancel_and_disposition_transitions_are_canonical() -> None:
+    opened = handler(_event("OPEN", incident_state="OPEN"), None)
+    cancelled = handler(_event("Cancel", incident_state="OPEN"), None)
+    contained = handler(_event("RecordContainment", incident_state="VERIFYING"), None)
+    disposition = handler(_event("BeginDisposition", incident_state="CONTAINED"), None)
+
+    assert opened["incident_state"] == "OPEN"
+    assert cancelled["incident_state"] == "CANCELLED"
+    assert cancelled["cancelled"] is True
+    assert contained["incident_state"] == "CONTAINED"
+    assert disposition["incident_state"] == "AWAITING_DISPOSITION"
+
+
 def test_failure_handlers_escalate_without_side_effects() -> None:
     recorded = handler(_event("RecordFailure"), None)
     escalated = handler(_event("Escalate"), None)

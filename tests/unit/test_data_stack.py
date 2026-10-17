@@ -146,6 +146,10 @@ def test_cold_chain_state_machine_wires_every_task_to_the_stub(
         "GenerateReport",
         "QA",
         "Close",
+        "CancelRequested?",
+        "Cancel",
+        "NoResponse",
+        "FailureRoute",
         "RecordFailure",
         "Escalate",
     ):
@@ -163,6 +167,10 @@ def test_cold_chain_workflow_tasks_retry_and_catch_failures(
     assert "Lambda.TooManyRequestsException" in definition_string
     assert "States.ALL" in definition_string
     assert "RecordFailure" in definition_string
+    assert "waitForTaskToken" in definition_string
+    assert "$$.Task.Token" in definition_string
+    assert "NoResponse" in definition_string
+    assert "Cancel" in definition_string
 
 
 def test_dynamodb_tables_use_on_demand_billing(template: Template) -> None:

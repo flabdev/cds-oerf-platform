@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from domains.cold_chain_excursion.steps.workflow_stub import handler
+from oerf.platform.incidents.repository import TRANSITIONS
 
 ASL_PATH = (
     Path(__file__).resolve().parents[2]
@@ -56,18 +57,109 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
 
     assert tasks
     for name, state in tasks.items():
-        assert state["Resource"] == "arn:aws:states:::lambda:invoke", name
+        expected_resource = (
+            "arn:aws:states:::lambda:invoke.waitForTaskToken"
+            if name == "Approval"
+            else "arn:aws:states:::lambda:invoke"
+        )
+        assert state["Resource"] == expected_resource, name
         assert state["Parameters"]["FunctionName"] == STUB_PLACEHOLDER, name
         assert state["OutputPath"] == "$.Payload", name
         assert state["Retry"][0]["MaxAttempts"] == 3, name
-        assert state["TimeoutSeconds"] == 60, name
-        if name == "Escalate":
-            # Terminal escalation must not catch, otherwise a persistent
-            # failure would loop between escalation and failure recording.
-            assert "Catch" not in state, name
+        assert state["TimeoutSeconds"] == (1800 if name == "Approval" else 60), name
+        if name in {"Escalate", "Cancel", "Close"}:
+            # Terminal outcomes must not loop after persistent failure.
+            if name == "Close":
+                assert state["Catch"][0]["Next"] == "TerminalFailure"
+            else:
+                assert "Catch" not in state, name
+        elif name == "Approval":
+            assert state["Catch"][0]["Next"] == "NoResponse"
+            assert state["Catch"][-1]["Next"] == "RecordFailure"
         else:
-            expected = "Escalate" if name == "RecordFailure" else "RecordFailure"
-            assert state["Catch"][0]["Next"] == expected, name
+            expected = "FailureRoute" if name == "RecordFailure" else "RecordFailure"
+            assert state["Catch"][-1]["Next"] == expected, name
+
+
+def test_human_approval_uses_bounded_task_token_and_timeout_route() -> None:
+    states = load_definition()["States"]
+    approval = states["Approval"]
+
+    assert approval["Resource"] == "arn:aws:states:::lambda:invoke.waitForTaskToken"
+    assert approval["Parameters"]["Payload"]["task_token.$"] == "$$.Task.Token"
+    assert approval["TimeoutSeconds"] == 1800
+    assert any(catch["Next"] == "NoResponse" for catch in approval["Catch"])
+    assert states["NoResponse"]["Next"] == "RecordFailure"
+
+
+def test_cancel_and_failure_routes_cover_canonical_terminal_transitions() -> None:
+    states = load_definition()["States"]
+
+    assert states["CancelRequested?"]["Default"] == "GatherContext"
+    assert states["CancelAfterOPEN?"]["Default"] == "CancelRequested?"
+    assert states["CancelAfterOPEN?"]["Choices"][0]["Next"] == "Cancel"
+    assert states["Cancel"]["End"] is True
+    assert states["Cancel"]["Parameters"]["Payload"]["step_name"] == "Cancel"
+    failure_route = states["FailureRoute"]
+    escalation_sources = {
+        choice["StringEquals"]
+        for choice in failure_route["Choices"]
+        if choice["Next"] == "Escalate"
+    }
+    assert escalation_sources == {
+        state for state, targets in TRANSITIONS.items() if "ESCALATED" in targets
+    }
+    assert all(
+        "CANCELLED" in targets
+        for state, targets in TRANSITIONS.items()
+        if state not in {"CLOSED", "CANCELLED"}
+    )
+    assert failure_route["Default"] == "Cancel"
+
+
+def test_cancellation_is_checked_after_work_steps_and_infeasible_assessment_escalates() -> None:
+    states = load_definition()["States"]
+    work_steps = (
+        "OPEN",
+        "GatherContext",
+        "Diagnose",
+        "Assess",
+        "Approval",
+        "SecureFacility",
+        "Act",
+        "VerifyLoop",
+        "HandleReopen",
+        "RecordContainment",
+        "BeginDisposition",
+        "GenerateReport",
+        "QA",
+    )
+
+    for step in work_steps:
+        gate = states[step]["Next"]
+        assert gate.startswith("CancelAfter"), step
+        assert states[gate]["Choices"] == [
+            {
+                "Variable": "$.cancel_requested",
+                "BooleanEquals": True,
+                "Next": "Cancel",
+            }
+        ]
+    assert states["NeedApproval?"]["Choices"][0] == {
+        "Variable": "$.decision.has_feasible_options",
+        "BooleanEquals": False,
+        "Next": "Escalate",
+    }
+
+
+def test_human_approval_and_cancellation_decisions_are_explicit() -> None:
+    states = load_definition()["States"]
+
+    assert any(
+        choice["StringEquals"] == "cancelled" and choice["Next"] == "Cancel"
+        for choice in states["ApprovalDecision"]["Choices"]
+    )
+    assert states["QADecision"]["Default"] == "FailureRoute"
 
 
 def test_primary_flow_prefix_is_intact() -> None:
@@ -76,17 +168,23 @@ def test_primary_flow_prefix_is_intact() -> None:
 
     visited = []
     current = definition["StartAt"]
-    while "Next" in states[current]:
+    while True:
         visited.append(current)
-        current = states[current]["Next"]
-    visited.append(current)
+        state = states[current]
+        if state["Type"] == "Choice":
+            current = state["Default"]
+        elif "Next" in state:
+            current = state["Next"]
+        else:
+            break
 
-    assert visited == [
+    assert visited[:6] == [
         "OPEN",
+        "CancelAfterOPEN?",
+        "CancelRequested?",
         "GatherContext",
+        "CancelAfterGatherContext?",
         "Diagnose",
-        "Assess",
-        "NeedApproval?",
     ]
     assert states["NeedApproval?"]["Type"] == "Choice"
 
@@ -99,7 +197,9 @@ def test_contained_branch_reaches_success() -> None:
     while True:
         chain.append(current)
         state = states[current]
-        if state["Type"] == "Choice":
+        if current.startswith("CancelAfter"):
+            current = state["Default"]
+        elif state["Type"] == "Choice":
             # The first choice in each decision is the happy-path branch:
             # containment.status == contained, then qa.disposition == approved.
             current = state["Choices"][0]["Next"]
@@ -111,12 +211,22 @@ def test_contained_branch_reaches_success() -> None:
     assert states["ContainmentDecision"]["Choices"][0] == {
         "Variable": "$.containment.status",
         "StringEquals": "contained",
-        "Next": "GenerateReport",
+        "Next": "RecordContainment",
     }
+    assert states["RecordContainment"]["Next"] == "CancelAfterRecordContainment?"
+    assert states["CancelAfterRecordContainment?"]["Default"] == "BeginDisposition"
+    assert states["BeginDisposition"]["Next"] == "CancelAfterBeginDisposition?"
+    assert states["CancelAfterBeginDisposition?"]["Default"] == "GenerateReport"
     assert chain == [
         "ContainmentDecision",
+        "RecordContainment",
+        "CancelAfterRecordContainment?",
+        "BeginDisposition",
+        "CancelAfterBeginDisposition?",
         "GenerateReport",
+        "CancelAfterGenerateReport?",
         "QA",
+        "CancelAfterQA?",
         "QADecision",
         "Close",
         "WorkflowComplete",
@@ -127,14 +237,16 @@ def test_contained_branch_reaches_success() -> None:
 def test_failure_path_records_then_escalates_and_terminates() -> None:
     states = load_definition()["States"]
 
-    assert states["RecordFailure"]["Next"] == "Escalate"
+    assert states["RecordFailure"]["Next"] == "FailureRoute"
     assert states["Escalate"]["End"] is True
-    assert states["HandleReopen"]["Next"] == "VerifyLoop"
+    assert states["FailureRoute"]["Default"] == "Cancel"
+    assert states["HandleReopen"]["Next"] == "CancelAfterHandleReopen?"
+    assert states["CancelAfterHandleReopen?"]["Default"] == "VerifyLoop"
 
 
 def test_terminal_states_have_no_next_transition() -> None:
     for name, state in load_definition()["States"].items():
-        if state["Type"] == "Succeed" or state.get("End"):
+        if state["Type"] in {"Succeed", "Fail"} or state.get("End"):
             assert "Next" not in state, name
 
 
@@ -156,12 +268,15 @@ INITIAL_EVENT = {
     "shipment_id": "PH-2841",
     "domain": "cold_chain_excursion",
     "trigger": {"device_id": "REEFER-001", "temperature_c": 8.1},
+    "cancel_requested": False,
 }
 
 
 def resolve(data: dict, path: str) -> object:
     node: object = data
     for part in path.lstrip("$.").split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
         node = node[part]
     return node
 
@@ -187,11 +302,42 @@ def simulate(event: dict, handler_fn=handler, max_steps: int = 40) -> tuple:
         if state["Type"] == "Succeed":
             return "WorkflowComplete", data
         if state["Type"] == "Task":
+            if state["Resource"].endswith(".waitForTaskToken"):
+                # Offline contract: the real inbound callback resumes the task;
+                # the deterministic stub supplies the same valid reply.
+                data["task_token"] = "offline-task-token"
             payload = {
                 "step_name": state["Parameters"]["Payload"]["step_name"],
                 "workflow": data,
             }
-            data = handler_fn(payload, None)
+            previous_incident_state = data.get("incident_state")
+            try:
+                data = handler_fn(payload, None)
+            except Exception as error:
+                error_name = "States.Timeout" if isinstance(error, TimeoutError) else "States.ALL"
+                catcher = next(
+                    (
+                        item
+                        for item in state.get("Catch", [])
+                        if "States.ALL" in item["ErrorEquals"] or error_name in item["ErrorEquals"]
+                    ),
+                    None,
+                )
+                if catcher is None:
+                    raise
+                data = dict(data)
+                data["simulated_error"] = error_name
+                current = catcher["Next"]
+                continue
+            next_incident_state = data.get("incident_state")
+            if (
+                previous_incident_state is not None
+                and next_incident_state != previous_incident_state
+            ):
+                assert next_incident_state in TRANSITIONS[previous_incident_state], (
+                    f"illegal simulated incident transition: "
+                    f"{previous_incident_state} -> {next_incident_state}"
+                )
             if state.get("End"):
                 return current, data
             current = state["Next"]
@@ -199,10 +345,82 @@ def simulate(event: dict, handler_fn=handler, max_steps: int = 40) -> tuple:
             current = evaluate_choice(state, data)
         elif state["Type"] == "Wait":
             current = state["Next"]
+        elif state["Type"] == "Fail":
+            return current, data
         else:  # pragma: no cover - guards against new unsupported state types
             raise AssertionError(f"unsupported state type {state['Type']}")
 
     raise AssertionError("simulation did not terminate")
+
+
+def test_cancelled_input_terminates_without_running_business_steps() -> None:
+    event = dict(INITIAL_EVENT, cancel_requested=True)
+
+    outcome, final = simulate(event)
+
+    assert outcome == "Cancel"
+    assert final["incident_state"] == "CANCELLED"
+    assert final["cancelled"] is True
+    assert final["last_completed_step"] == "Cancel"
+
+
+def test_failed_close_terminates_at_terminal_failure_instead_of_cancelling_closed_incident() -> (
+    None
+):
+    def failed_close_handler(event: dict, _context: object) -> dict:
+        result = handler(event, None)
+        if event["step_name"] == "Close":
+            raise RuntimeError("close persistence failed")
+        return result
+
+    outcome, final = simulate(dict(INITIAL_EVENT), failed_close_handler)
+
+    assert outcome == "TerminalFailure"
+    assert final["incident_state"] == "AWAITING_DISPOSITION"
+
+
+def test_approval_timeout_is_recorded_then_escalated_from_legal_state() -> None:
+    visited: list[str] = []
+
+    def timeout_handler(event: dict, _context: object) -> dict:
+        step_name = event["step_name"]
+        visited.append(step_name)
+        result = handler(event, None)
+        if step_name == "Assess":
+            result["decision"]["needs_approval"] = True
+            result["incident_state"] = "AWAITING_APPROVAL"
+        elif step_name == "Approval":
+            raise TimeoutError("simulated task-token timeout")
+        return result
+
+    # The offline graph simulator models Timeout through the declared catch.
+    outcome, final = simulate(dict(INITIAL_EVENT), timeout_handler)
+
+    assert "NoResponse" in visited
+    assert "RecordFailure" in visited
+    assert outcome == "Escalate"
+    assert final["incident_state"] == "ESCALATED"
+
+
+def test_failed_or_stale_approval_callback_is_caught_and_escalated() -> None:
+    visited: list[str] = []
+
+    def failed_callback_handler(event: dict, _context: object) -> dict:
+        step_name = event["step_name"]
+        visited.append(step_name)
+        result = handler(event, None)
+        if step_name == "Assess":
+            result["decision"]["needs_approval"] = True
+            result["incident_state"] = "AWAITING_APPROVAL"
+        elif step_name == "Approval":
+            raise RuntimeError("callback token is no longer valid")
+        return result
+
+    outcome, final = simulate(dict(INITIAL_EVENT), failed_callback_handler)
+
+    assert "RecordFailure" in visited
+    assert outcome == "Escalate"
+    assert final["incident_state"] == "ESCALATED"
 
 
 def test_stub_contract_drives_the_happy_path_to_closed() -> None:
