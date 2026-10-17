@@ -1,28 +1,918 @@
 {
-  "Comment": "cold_chain_excursion_v1 orchestration skeleton; integrate real business services incrementally. TimeoutSeconds is a tunable guard against orphaned executions.",
+  "Comment": "cold_chain_excursion_v1 workflow. Human approval uses a task token; cancellation and all failure branches are bounded and routed through canonical incident transitions.",
   "StartAt": "OPEN",
   "TimeoutSeconds": 86400,
   "States": {
-    "OPEN": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "__STUB_ARN__", "Payload": {"step_name": "OPEN", "workflow.$": "$"}}, "OutputPath": "$.Payload", "TimeoutSeconds": 60, "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure"}], "Next": "GatherContext"},
-    "GatherContext": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "__STUB_ARN__", "Payload": {"step_name": "GatherContext", "workflow.$": "$"}}, "OutputPath": "$.Payload", "TimeoutSeconds": 60, "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure"}], "Next": "Diagnose"},
-    "Diagnose": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "__STUB_ARN__", "Payload": {"step_name": "Diagnose", "workflow.$": "$"}}, "OutputPath": "$.Payload", "TimeoutSeconds": 60, "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure"}], "Next": "Assess"},
-    "Assess": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "__STUB_ARN__", "Payload": {"step_name": "Assess", "workflow.$": "$"}}, "OutputPath": "$.Payload", "TimeoutSeconds": 60, "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure"}], "Next": "NeedApproval?"},
-    "NeedApproval?": {"Type": "Choice", "Choices": [{"Variable": "$.decision.needs_approval", "BooleanEquals": true, "Next": "Approval"}], "Default": "SecureFacility"},
-    "Approval": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "__STUB_ARN__", "Payload": {"step_name": "Approval", "workflow.$": "$"}}, "OutputPath": "$.Payload", "TimeoutSeconds": 60, "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure"}], "Next": "ApprovalDecision"},
-    "ApprovalDecision": {"Type": "Choice", "Choices": [{"Variable": "$.approval.status", "StringEquals": "approved", "Next": "SecureFacility"}, {"Variable": "$.approval.status", "StringEquals": "auto_proceed", "Next": "SecureFacility"}], "Default": "Escalate"},
-    "SecureFacility": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "__STUB_ARN__", "Payload": {"step_name": "SecureFacility", "workflow.$": "$"}}, "OutputPath": "$.Payload", "TimeoutSeconds": 60, "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure"}], "Next": "FacilityAccepted?"},
-    "FacilityAccepted?": {"Type": "Choice", "Choices": [{"Variable": "$.facility.accepted", "BooleanEquals": true, "Next": "Act"}], "Default": "Escalate"},
-    "Act": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "__STUB_ARN__", "Payload": {"step_name": "Act", "workflow.$": "$"}}, "OutputPath": "$.Payload", "TimeoutSeconds": 60, "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure"}], "Next": "VerifyLoop"},
-    "VerifyLoop": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "__STUB_ARN__", "Payload": {"step_name": "Verify", "workflow.$": "$"}}, "OutputPath": "$.Payload", "TimeoutSeconds": 60, "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure"}], "Next": "ContainmentDecision"},
-    "ContainmentDecision": {"Type": "Choice", "Choices": [{"Variable": "$.containment.status", "StringEquals": "contained", "Next": "GenerateReport"}, {"Variable": "$.containment.status", "StringEquals": "reopened", "Next": "HandleReopen"}], "Default": "WaitBeforeVerify"},
-    "WaitBeforeVerify": {"Type": "Wait", "Seconds": 60, "Next": "VerifyLoop"},
-    "HandleReopen": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "__STUB_ARN__", "Payload": {"step_name": "HandleReopen", "workflow.$": "$"}}, "OutputPath": "$.Payload", "TimeoutSeconds": 60, "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure"}], "Next": "VerifyLoop"},
-    "GenerateReport": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "__STUB_ARN__", "Payload": {"step_name": "GenerateReport", "workflow.$": "$"}}, "OutputPath": "$.Payload", "TimeoutSeconds": 60, "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure"}], "Next": "QA"},
-    "QA": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "__STUB_ARN__", "Payload": {"step_name": "QA", "workflow.$": "$"}}, "OutputPath": "$.Payload", "TimeoutSeconds": 60, "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure"}], "Next": "QADecision"},
-    "QADecision": {"Type": "Choice", "Choices": [{"Variable": "$.qa.disposition", "StringEquals": "approved", "Next": "Close"}], "Default": "Escalate"},
-    "Close": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "__STUB_ARN__", "Payload": {"step_name": "Close", "workflow.$": "$"}}, "OutputPath": "$.Payload", "TimeoutSeconds": 60, "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure"}], "Next": "WorkflowComplete"},
-    "RecordFailure": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "__STUB_ARN__", "Payload": {"step_name": "RecordFailure", "workflow.$": "$"}}, "OutputPath": "$.Payload", "TimeoutSeconds": 60, "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.record_failure_error", "Next": "Escalate"}], "Next": "Escalate"},
-    "Escalate": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "__STUB_ARN__", "Payload": {"step_name": "Escalate", "workflow.$": "$"}}, "OutputPath": "$.Payload", "TimeoutSeconds": 60, "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}], "End": true},
-    "WorkflowComplete": {"Type": "Succeed"}
+    "OPEN": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "OPEN",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterOPEN?"
+    },
+    "GatherContext": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "GatherContext",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterGatherContext?"
+    },
+    "Diagnose": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "Diagnose",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterDiagnose?"
+    },
+    "Assess": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "Assess",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterAssess?"
+    },
+    "NeedApproval?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.decision.has_feasible_options",
+          "BooleanEquals": false,
+          "Next": "Escalate"
+        },
+        {
+          "Variable": "$.decision.needs_approval",
+          "BooleanEquals": true,
+          "Next": "Approval"
+        }
+      ],
+      "Default": "SecureFacility"
+    },
+    "Approval": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "Approval",
+          "workflow.$": "$",
+          "task_token.$": "$$.Task.Token"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 1800,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.Timeout"
+          ],
+          "ResultPath": "$.approval_timeout",
+          "Next": "NoResponse"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterApproval?"
+    },
+    "ApprovalDecision": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.approval.status",
+          "StringEquals": "approved",
+          "Next": "SecureFacility"
+        },
+        {
+          "Variable": "$.approval.status",
+          "StringEquals": "auto_proceed",
+          "Next": "SecureFacility"
+        },
+        {
+          "Variable": "$.approval.status",
+          "StringEquals": "cancelled",
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "Escalate"
+    },
+    "SecureFacility": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "SecureFacility",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterSecureFacility?"
+    },
+    "FacilityAccepted?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.facility.accepted",
+          "BooleanEquals": true,
+          "Next": "Act"
+        }
+      ],
+      "Default": "Escalate"
+    },
+    "Act": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "Act",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterAct?"
+    },
+    "VerifyLoop": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "Verify",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterVerifyLoop?"
+    },
+    "ContainmentDecision": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.containment.status",
+          "StringEquals": "contained",
+          "Next": "RecordContainment"
+        },
+        {
+          "Variable": "$.containment.status",
+          "StringEquals": "reopened",
+          "Next": "HandleReopen"
+        }
+      ],
+      "Default": "WaitBeforeVerify"
+    },
+    "WaitBeforeVerify": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "VerifyLoop"
+    },
+    "HandleReopen": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "HandleReopen",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterHandleReopen?"
+    },
+    "GenerateReport": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "GenerateReport",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterGenerateReport?"
+    },
+    "QA": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "QA",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterQA?"
+    },
+    "QADecision": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.qa.disposition",
+          "StringEquals": "approved",
+          "Next": "Close"
+        },
+        {
+          "Variable": "$.qa.disposition",
+          "StringEquals": "rejected",
+          "Next": "HandleReopen"
+        }
+      ],
+      "Default": "FailureRoute"
+    },
+    "Close": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "Close",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "TerminalFailure"
+        }
+      ],
+      "Next": "WorkflowComplete"
+    },
+    "RecordFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "RecordFailure",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.record_failure_error",
+          "Next": "FailureRoute"
+        }
+      ],
+      "Next": "FailureRoute"
+    },
+    "Escalate": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "Escalate",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "End": true
+    },
+    "WorkflowComplete": {
+      "Type": "Succeed"
+    },
+    "NoResponse": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "NoResponse",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "RecordFailure"
+    },
+    "FailureRoute": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.incident_state",
+          "StringEquals": "ASSESSING",
+          "Next": "Escalate"
+        },
+        {
+          "Variable": "$.incident_state",
+          "StringEquals": "AWAITING_APPROVAL",
+          "Next": "Escalate"
+        },
+        {
+          "Variable": "$.incident_state",
+          "StringEquals": "SECURING_FACILITY",
+          "Next": "Escalate"
+        },
+        {
+          "Variable": "$.incident_state",
+          "StringEquals": "IN_TRANSIT",
+          "Next": "Escalate"
+        }
+      ],
+      "Default": "Cancel"
+    },
+    "CancelRequested?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancel_requested",
+          "BooleanEquals": true,
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "GatherContext"
+    },
+    "Cancel": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "Cancel",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "End": true
+    },
+    "RecordContainment": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "RecordContainment",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterRecordContainment?"
+    },
+    "BeginDisposition": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STUB_ARN__",
+        "Payload": {
+          "step_name": "BeginDisposition",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterBeginDisposition?"
+    },
+    "TerminalFailure": {
+      "Type": "Fail",
+      "Error": "ColdChain.CloseFailed",
+      "Cause": "Incident close failed; execution requires operational review."
+    },
+    "CancelAfterOPEN?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancel_requested",
+          "BooleanEquals": true,
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "CancelRequested?"
+    },
+    "CancelAfterGatherContext?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancel_requested",
+          "BooleanEquals": true,
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "Diagnose"
+    },
+    "CancelAfterDiagnose?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancel_requested",
+          "BooleanEquals": true,
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "Assess"
+    },
+    "CancelAfterAssess?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancel_requested",
+          "BooleanEquals": true,
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "NeedApproval?"
+    },
+    "CancelAfterApproval?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancel_requested",
+          "BooleanEquals": true,
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "ApprovalDecision"
+    },
+    "CancelAfterSecureFacility?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancel_requested",
+          "BooleanEquals": true,
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "FacilityAccepted?"
+    },
+    "CancelAfterAct?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancel_requested",
+          "BooleanEquals": true,
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "VerifyLoop"
+    },
+    "CancelAfterVerifyLoop?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancel_requested",
+          "BooleanEquals": true,
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "ContainmentDecision"
+    },
+    "CancelAfterHandleReopen?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancel_requested",
+          "BooleanEquals": true,
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "VerifyLoop"
+    },
+    "CancelAfterRecordContainment?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancel_requested",
+          "BooleanEquals": true,
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "BeginDisposition"
+    },
+    "CancelAfterBeginDisposition?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancel_requested",
+          "BooleanEquals": true,
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "GenerateReport"
+    },
+    "CancelAfterGenerateReport?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancel_requested",
+          "BooleanEquals": true,
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "QA"
+    },
+    "CancelAfterQA?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancel_requested",
+          "BooleanEquals": true,
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "QADecision"
+    }
   }
 }
