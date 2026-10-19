@@ -2,6 +2,7 @@ from pathlib import Path
 
 from aws_cdk import (
     CfnOutput,
+    CustomResource,
     Duration,
     RemovalPolicy,
     Stack,
@@ -10,8 +11,10 @@ from aws_cdk import (
     aws_events as events,
     aws_iam as iam,
     aws_lambda as lambda_,
+    aws_logs as logs,
     aws_s3 as s3,
     aws_stepfunctions as sfn,
+    custom_resources as cr,
 )
 from constructs import Construct
 
@@ -21,6 +24,46 @@ from constructs import Construct
 PITR_ENABLED = dynamodb.PointInTimeRecoverySpecification(
     point_in_time_recovery_enabled=True,
 )
+_AUTH_ASSET = Path(__file__).resolve().parents[2] / "oerf" / "platform" / "auth"
+
+
+def _auth_lambda(
+    stack: Stack,
+    construct_id: str,
+    function_name: str,
+    handler: str,
+) -> lambda_.Function:
+    """One role and a 30-day log group for a Cognito auth function."""
+    log_group = logs.LogGroup(
+        stack,
+        f"{construct_id}LogGroup",
+        retention=logs.RetentionDays.ONE_MONTH,
+        removal_policy=RemovalPolicy.DESTROY,
+    )
+    role = iam.Role(
+        stack,
+        f"{construct_id}Role",
+        assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+    )
+    log_group.grant_write(role)
+    return lambda_.Function(
+        stack,
+        construct_id,
+        function_name=function_name,
+        runtime=lambda_.Runtime.PYTHON_3_11,
+        handler=handler,
+        code=lambda_.Code.from_asset(
+            str(_AUTH_ASSET),
+            exclude=["__pycache__", "*.pyc"],
+        ),
+        role=role,
+        log_group=log_group,
+        timeout=Duration.seconds(10),
+        memory_size=128,
+        # tracing ACTIVE adds xray:PutTraceSegments and xray:PutTelemetryRecords
+        # on Resource *. Those two actions are not resource-scopable.
+        tracing=lambda_.Tracing.ACTIVE,
+    )
 
 
 class OerfDataStack(Stack):
@@ -195,13 +238,60 @@ class OerfDataStack(Stack):
         # ---------------------------------------------------------
         # Cognito: User Pool for Dashboard Auth
         # ---------------------------------------------------------
+        # feature_plan is UserPoolTier. It updates in place. Do not set
+        # custom_attributes here: Schema is create-only and would replace this pool.
+        # V2 pre-token events, which copy custom:tenant_id onto the access token,
+        # require Essentials or Plus.
         self.user_pool = cognito.UserPool(
             self,
             "OerfUserPool",
             user_pool_name="oerf-users",
             self_sign_up_enabled=False,
             auto_verify=cognito.AutoVerifiedAttrs(email=True),
+            feature_plan=cognito.FeaturePlan.ESSENTIALS,
             removal_policy=RemovalPolicy.RETAIN,
+        )
+        self.user_pool.add_trigger(
+            cognito.UserPoolOperation.PRE_TOKEN_GENERATION_CONFIG,
+            _auth_lambda(
+                self,
+                "PreTokenFunction",
+                "oerf-pre-token",
+                "pre_token.handler",
+            ),
+        )
+        # The L2 writes LambdaVersion V1_0 for this trigger. V1 cannot add
+        # claims to the access token. Override the same property to V2_0.
+        # This stays on LambdaConfig and does not change Schema.
+        self.user_pool.node.default_child.add_property_override(
+            "LambdaConfig.PreTokenGenerationConfig.LambdaVersion",
+            "V2_0",
+        )
+        tenant_attribute_fn = _auth_lambda(
+            self,
+            "TenantIdAttributeFunction",
+            "oerf-tenant-attribute",
+            "tenant_attribute.handler",
+        )
+        tenant_attribute_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "cognito-idp:DescribeUserPool",
+                    "cognito-idp:AddCustomAttributes",
+                ],
+                resources=[self.user_pool.user_pool_arn],
+            )
+        )
+        tenant_attribute_provider = cr.Provider(
+            self,
+            "TenantIdAttributeProvider",
+            on_event_handler=tenant_attribute_fn,
+        )
+        CustomResource(
+            self,
+            "TenantIdAttribute",
+            service_token=tenant_attribute_provider.service_token,
+            properties={"UserPoolId": self.user_pool.user_pool_id},
         )
 
         user_pool_id = self.user_pool.user_pool_id
