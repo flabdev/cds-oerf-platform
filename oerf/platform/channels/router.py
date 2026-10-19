@@ -17,6 +17,12 @@ from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
+from pydantic import BaseModel, ConfigDict, Field
+
+from oerf.platform.channels.engagement import EngagementStore
+from oerf.platform.channels.providers.base import MessageProvider
+from oerf.platform.channels.registry import PhoneRegistry
+from oerf.platform.channels.templates import MissingFacts, MissingTemplate, render_message
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -276,3 +282,168 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             break
 
     return result
+
+
+DEFAULT_CHANNELS = ("whatsapp", "sms", "voice", "email")
+_VOICE_REPLY = " Reply on WhatsApp."
+
+
+class OutboundRequest(BaseModel):
+    """One send from the cadence or workflow. Providers are not called directly."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    tenant_id: str
+    incident_id: str
+    engagement_id: str
+    role: str
+    template_id: str
+    facts: dict[str, Any] = Field(default_factory=dict)
+    contact_id: str
+    recipient: str
+    email: str | None = None
+    channels: tuple[str, ...] = DEFAULT_CHANNELS
+    rcs_roles: tuple[str, ...] = ()
+    inbound_rcs: bool = False
+
+
+class DeliveryAttempt(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    channel: str
+    delivered: bool
+    provider_msg_id: str | None = None
+    reason: str | None = None
+    tenant_id: str
+    incident_id: str
+    engagement_id: str
+
+
+class DeliveryResult(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    delivered: bool
+    channel: str | None = None
+    provider_msg_id: str | None = None
+    attempts: list[DeliveryAttempt]
+    reason: str | None = None
+    tenant_id: str
+    incident_id: str
+    engagement_id: str
+
+
+def route_outbound(
+    request: OutboundRequest,
+    *,
+    registry: PhoneRegistry,
+    engagements: EngagementStore,
+    providers: dict[str, MessageProvider],
+    messages: dict[str, Any],
+) -> DeliveryResult:
+    """Validate opt-in, render a template, fall back across channels, then correlate."""
+
+    attempts: list[DeliveryAttempt] = []
+    if not _opted_in(registry, request.tenant_id, request.contact_id):
+        return _result(request, attempts, reason="OPT_OUT")
+
+    for channel in request.channels:
+        if not _opted_in(registry, request.tenant_id, request.contact_id):
+            return _result(request, attempts, reason="OPT_OUT")
+        if channel == "rcs" and not _rcs_allowed(request):
+            attempts.append(_attempt(request, channel, delivered=False, reason="rcs_unavailable"))
+            continue
+        try:
+            body = render_message(messages, request.template_id, channel, request.facts)
+        except MissingTemplate:
+            attempts.append(_attempt(request, channel, delivered=False, reason="no_template"))
+            continue
+        except MissingFacts:
+            raise
+        if channel == "voice" and "WhatsApp" not in body:
+            body = f"{body}{_VOICE_REPLY}"
+        provider = providers.get(channel)
+        if provider is None:
+            attempts.append(
+                _attempt(request, channel, delivered=False, reason="provider_unavailable")
+            )
+            continue
+        recipient = request.email if channel == "email" else request.recipient
+        if not recipient:
+            attempts.append(_attempt(request, channel, delivered=False, reason="no_recipient"))
+            continue
+        sent = provider.send(recipient, body, request.template_id)
+        attempts.append(
+            _attempt(
+                request,
+                channel,
+                delivered=sent.delivered,
+                provider_msg_id=sent.provider_msg_id,
+                reason=sent.reason,
+            )
+        )
+        if not sent.delivered or not sent.provider_msg_id:
+            continue
+        engagement = engagements.get(
+            request.tenant_id, request.incident_id, request.engagement_id
+        )
+        if engagement is None:
+            raise ValueError(f"engagement {request.engagement_id!r} is not open")
+        engagements.register_outbound(sent.provider_msg_id, engagement)
+        return _result(
+            request,
+            attempts,
+            delivered=True,
+            channel=channel,
+            provider_msg_id=sent.provider_msg_id,
+        )
+    reason = attempts[-1].reason if attempts else "not_delivered"
+    return _result(request, attempts, reason=reason)
+
+
+def _rcs_allowed(request: OutboundRequest) -> bool:
+    return request.inbound_rcs and request.role in request.rcs_roles
+
+
+def _opted_in(registry: PhoneRegistry, tenant_id: str, contact_id: str) -> bool:
+    contact = registry.get_contact(tenant_id, contact_id)
+    return contact is not None and contact.opt_in
+
+
+def _attempt(
+    request: OutboundRequest,
+    channel: str,
+    *,
+    delivered: bool,
+    provider_msg_id: str | None = None,
+    reason: str | None = None,
+) -> DeliveryAttempt:
+    return DeliveryAttempt(
+        channel=channel,
+        delivered=delivered,
+        provider_msg_id=provider_msg_id,
+        reason=reason,
+        tenant_id=request.tenant_id,
+        incident_id=request.incident_id,
+        engagement_id=request.engagement_id,
+    )
+
+
+def _result(
+    request: OutboundRequest,
+    attempts: list[DeliveryAttempt],
+    *,
+    delivered: bool = False,
+    channel: str | None = None,
+    provider_msg_id: str | None = None,
+    reason: str | None = None,
+) -> DeliveryResult:
+    return DeliveryResult(
+        delivered=delivered,
+        channel=channel,
+        provider_msg_id=provider_msg_id,
+        attempts=attempts,
+        reason=reason,
+        tenant_id=request.tenant_id,
+        incident_id=request.incident_id,
+        engagement_id=request.engagement_id,
+    )
