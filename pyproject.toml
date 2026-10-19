@@ -22,7 +22,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["infra*", "platform*", "domains*", "sim*", "oerf*"]
+include = ["infra*", "domains*", "sim*", "oerf*"]
 
 [tool.setuptools.package-data]
 domains = ["*/*.json"]
@@ -31,6 +31,13 @@ sim = ["seed/*/*.json", "seed/*/*/*.json"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "unit: fast tests with no AWS (default)",
+    "integration: multi-component tests with fakes, no AWS",
+    "e2e: scenario tests with fakes, no AWS",
+    "security: security regression tests, no AWS",
+    "aws: needs real AWS credentials; opt-in only",
+]
 
 [tool.ruff]
 line-length = 100
