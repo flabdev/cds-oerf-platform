@@ -1,0 +1,414 @@
+{
+  "_source": "Notion page 20 - WhatsApp Message Templates (11 Oct 2026). Wording owner: Architect. Edits marked in _changes.",
+  "_changes": [
+    "oerf_transfer_escalation: body no longer starts with a variable; {{1}}/{{2}} swapped",
+    "oerf_approval_reminder: added closing sentence so the body does not end with a variable",
+    "oerf_callback_request: added closing sentence so the body does not end with a variable",
+    "oerf_transfer_confirm_request: added 'by tapping below' so the body does not end with a variable"
+  ],
+  "defaults": {
+    "category": "UTILITY",
+    "language": "en",
+    "footer": "Reply STOP to opt out"
+  },
+  "templates": [
+    {
+      "name": "oerf_driver_checkin",
+      "header": "Temperature alert",
+      "body": "Shipment {{1}} is at {{2}}°C, above its safe range. Please pull over safely before replying. Is the refrigeration unit running?",
+      "examples": [
+        "PH-2841",
+        "8.1"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Running"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Stopped"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Not sure"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Call me"
+        }
+      ]
+    },
+    {
+      "name": "oerf_driver_reminder",
+      "header": "Temperature alert",
+      "body": "Reminder for shipment {{1}}: the temperature is still above its safe range. When it is safe to do so, please tell us whether the refrigeration unit is running.",
+      "examples": [
+        "PH-2841"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Running"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Stopped"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Not sure"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Call me"
+        }
+      ]
+    },
+    {
+      "name": "oerf_driver_reroute",
+      "header": "New destination",
+      "body": "Please take shipment {{1}} to {{2}}, about {{3}} minutes away. They are expecting you. Directions: {{4}} Tap below when you are on your way.",
+      "examples": [
+        "PH-2841",
+        "Facility A",
+        "9",
+        "https://maps.example.com/facility-a"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "On my way"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Call me"
+        }
+      ]
+    },
+    {
+      "name": "oerf_supervisor_escalation",
+      "header": "Driver not responding",
+      "body": "The driver of shipment {{1}} has not replied for {{2}} minutes during a temperature alert. Please contact the driver and check they are safe.",
+      "examples": [
+        "PH-2841",
+        "3"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Calling driver"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Call me"
+        }
+      ]
+    },
+    {
+      "name": "oerf_reroute_ack_escalation",
+      "header": "Route not confirmed",
+      "body": "The driver of shipment {{1}} has not confirmed the new route to {{2}}. Please contact the driver, because the facility is expecting the truck.",
+      "examples": [
+        "PH-2841",
+        "Facility A"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Calling driver"
+        }
+      ]
+    },
+    {
+      "name": "oerf_ops_approval",
+      "header": "Approval needed",
+      "body": "Shipment {{1}} needs a decision. Cause: {{2}}. Recommended: divert to {{3}}, {{4}} minutes away, which keeps it within the excursion allowance. Do you approve?",
+      "examples": [
+        "PH-2841",
+        "cooling unit failure (E17)",
+        "Facility A",
+        "9"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Approve"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Other option"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Call me"
+        }
+      ]
+    },
+    {
+      "name": "oerf_approval_reminder",
+      "header": "Approval needed",
+      "body": "Reminder: the diversion of shipment {{1}} to {{2}} is waiting for your approval. If there is no reply by {{3}}, the next step is: {{4}}. Please reply below.",
+      "examples": [
+        "PH-2841",
+        "Facility A",
+        "10:22",
+        "proceed within pre-approved limits"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Approve"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Other option"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Call me"
+        }
+      ]
+    },
+    {
+      "name": "oerf_auto_proceed_notice",
+      "header": "Diversion started",
+      "body": "No reply was received, so the diversion of shipment {{1}} to {{2}} went ahead within the pre-approved limits. No action is needed unless you want to change it.",
+      "examples": [
+        "PH-2841",
+        "Facility A"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "OK"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Call me"
+        }
+      ]
+    },
+    {
+      "name": "oerf_ops_escalation_options",
+      "header": "Decision needed",
+      "body": "Shipment {{1}} needs your decision: {{2}}. Please choose an option on the dashboard as soon as possible.",
+      "examples": [
+        "PH-2841",
+        "no approved facility can take it within the allowance"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Call me"
+        },
+        {
+          "type": "URL",
+          "text": "Open dashboard",
+          "path": "incidents/{{1}}",
+          "example": "incidents/INC-001"
+        }
+      ]
+    },
+    {
+      "name": "oerf_transfer_escalation",
+      "header": "Transfer not confirmed",
+      "body": "The transfer of shipment {{1}} has not been confirmed by {{2}}. Please check with them, and confirm the transfer on the dashboard once it is done.",
+      "examples": [
+        "PH-2841",
+        "Facility A"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Call me"
+        }
+      ]
+    },
+    {
+      "name": "oerf_facility_request",
+      "header": "Cold storage request",
+      "body": "Emergency cold storage request for shipment {{1}}. Required range: {{2}}. Expected arrival in about {{3}} minutes. Can you accept it?",
+      "examples": [
+        "PH-2841",
+        "2–8°C",
+        "9"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Accept"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Decline"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Call me"
+        }
+      ]
+    },
+    {
+      "name": "oerf_facility_reminder",
+      "header": "Cold storage request",
+      "body": "Reminder: shipment {{1}} needs emergency cold storage at {{2}} within about {{3}} minutes. Please accept or decline so we can plan.",
+      "examples": [
+        "PH-2841",
+        "Facility A",
+        "8"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Accept"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Decline"
+        }
+      ]
+    },
+    {
+      "name": "oerf_transfer_confirm_request",
+      "header": "Confirm transfer",
+      "body": "Shipment {{1}} should now be with you. Please confirm once it is in controlled storage at {{2}} by tapping below.",
+      "examples": [
+        "PH-2841",
+        "Facility A"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Transferred"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Not arrived"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Call me"
+        }
+      ]
+    },
+    {
+      "name": "oerf_qa_report_ready",
+      "header": "Excursion report ready",
+      "body": "The excursion report for shipment {{1}} is ready. Maximum temperature {{2}}°C, {{3}} minutes above the limit (allowance {{4}} minutes). Cause: {{5}}. Please review the report and record your decision.",
+      "examples": [
+        "PH-2841",
+        "8.6",
+        "24",
+        "45",
+        "compressor fault (E17)"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Release"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Quarantine"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Reject"
+        },
+        {
+          "type": "URL",
+          "text": "View report",
+          "path": "reports/{{1}}",
+          "example": "reports/INC-001"
+        }
+      ]
+    },
+    {
+      "name": "oerf_qa_reminder",
+      "header": "Decision needed",
+      "body": "Reminder: the excursion report for shipment {{1}} is waiting for your decision. The product stays on hold until it is recorded.",
+      "examples": [
+        "PH-2841"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Release"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Quarantine"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Reject"
+        }
+      ]
+    },
+    {
+      "name": "oerf_qa_prewarn",
+      "header": "Advance notice",
+      "body": "Advance notice: shipment {{1}} is likely to exceed its excursion allowance of {{2}} minutes. The team is working on it, and the full report will follow.",
+      "examples": [
+        "VX-3101",
+        "30"
+      ],
+      "buttons": []
+    },
+    {
+      "name": "oerf_status_update",
+      "header": "Shipment update",
+      "body": "Update on shipment {{1}}: {{2}}. Next step: {{3}}. No action is needed from you.",
+      "examples": [
+        "PH-2841",
+        "diverted to Facility A",
+        "transfer into cold storage"
+      ],
+      "buttons": []
+    },
+    {
+      "name": "oerf_reopen_alert",
+      "header": "Temperature rising again",
+      "body": "Shipment {{1}} has risen above its safe range again at {{2}} ({{3}}°C). The incident is reopened and the team is responding. Any earlier QA request is withdrawn, and an updated report will follow.",
+      "examples": [
+        "PH-2841",
+        "Facility A",
+        "8.2"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Call me"
+        }
+      ]
+    },
+    {
+      "name": "oerf_callback_request",
+      "header": "Call requested",
+      "body": "Please call the {{1}} for shipment {{2}} on {{3}}. They asked for a call during an active temperature alert. Next automatic step: {{4}}. Tap below when you call.",
+      "examples": [
+        "driver",
+        "PH-2841",
+        "+91 90000 00101",
+        "auto-proceed at 10:22"
+      ],
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Calling now"
+        }
+      ]
+    },
+    {
+      "name": "oerf_incident_cancelled",
+      "header": "Alert closed",
+      "body": "The alert for shipment {{1}} has been closed by the operations team ({{2}}). No further action is needed. Thank you for your help.",
+      "examples": [
+        "PH-2841",
+        "sensor fault, false alarm"
+      ],
+      "buttons": []
+    }
+  ]
+}
