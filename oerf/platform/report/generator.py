@@ -1,8 +1,7 @@
-"""Incident Resolution Summary and CAPA Report Generator (ADR-006).
+"""Incident report publisher (ADR-006).
 
-Compiles the audit ledger, Bedrock Vision findings, and human approvals
-into a structured Markdown audit document, stores it in ReportBucket,
-and emails an executive summary via Amazon SES.
+HTML is the source document. A published version is immutable. Delivery of the
+report to a person goes through the channel router, not this module.
 """
 
 from __future__ import annotations
@@ -11,21 +10,23 @@ import json
 import logging
 import os
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
-from botocore.exceptions import ClientError
+
+from oerf.platform.report.model import ReportDocument
+from oerf.platform.report.service import publish_report
+from oerf.platform.report.store import MemoryReportStore, S3ReportStore
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 REPORT_BUCKET_NAME = os.environ.get("REPORT_BUCKET_NAME", "")
 INCIDENT_TABLE_NAME = os.environ.get("INCIDENT_TABLE_NAME", "")
-SES_SOURCE_EMAIL = os.environ.get("SES_SOURCE_EMAIL", "")
 
 _s3 = None
 _dynamodb = None
-_ses = None
 
 
 def get_s3():
@@ -40,13 +41,6 @@ def get_dynamodb():
     if _dynamodb is None:
         _dynamodb = boto3.resource("dynamodb")
     return _dynamodb
-
-
-def get_ses():
-    global _ses
-    if _ses is None:
-        _ses = boto3.client("sesv2")
-    return _ses
 
 
 def format_report_markdown(incident: dict[str, Any]) -> str:
@@ -112,7 +106,6 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     tenant_id = event.get("tenant_id", "T1")
     incident_id = event.get("incident_id", "unknown")
-    qa_email = event.get("qa_email")
 
     # Fetch incident details from table
     incident = {}
@@ -124,46 +117,35 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if not incident:
         incident = {"tenant_id": tenant_id, "incident_id": incident_id, "status": "RESOLVED"}
 
-    markdown_report = format_report_markdown(incident)
-    report_key = f"{tenant_id}/{incident_id}/resolution_report.md"
+    generated_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    document = ReportDocument(
+        tenant_id=tenant_id,
+        incident_id=incident_id,
+        shipment_id=incident.get("shipment_id"),
+        state=incident.get("state") or incident.get("status"),
+        generated_at=generated_at,
+        diagnosis=incident.get("diagnosis"),
+        approval=incident.get("approval"),
+        facility=incident.get("facility"),
+        containment=incident.get("containment"),
+        qa_disposition=incident.get("qa_disposition"),
+    )
+    receipt = publish_report(document, _store())
+    s3_uri = f"s3://{REPORT_BUCKET_NAME}/{receipt.s3_key}" if REPORT_BUCKET_NAME else ""
+    logger.info("Published report %s for %s", receipt.s3_key, incident_id)
+    return {
+        "success": True,
+        "report_key": receipt.s3_key,
+        "s3_uri": s3_uri,
+        "report_version": receipt.report_version,
+        "sha256": receipt.sha256,
+        "locked": receipt.locked,
+        "generated_at": receipt.generated_at,
+        "sections": receipt.sections,
+    }
 
-    # Save to ReportBucket
-    s3_uri = ""
+
+def _store():
     if REPORT_BUCKET_NAME:
-        try:
-            s3 = get_s3()
-            s3.put_object(
-                Bucket=REPORT_BUCKET_NAME,
-                Key=report_key,
-                Body=markdown_report.encode("utf-8"),
-                ContentType="text/markdown",
-            )
-            s3_uri = f"s3://{REPORT_BUCKET_NAME}/{report_key}"
-            logger.info("Saved report to %s", s3_uri)
-        except Exception as exc:
-            logger.error("Failed to save report to S3: %s", exc)
-
-    # Optional email summary to QA
-    if qa_email and SES_SOURCE_EMAIL:
-        try:
-            ses = get_ses()
-            ses.send_email(
-                FromEmailAddress=SES_SOURCE_EMAIL,
-                Destination={"ToAddresses": [qa_email]},
-                Content={
-                    "Simple": {
-                        "Subject": {
-                            "Data": (
-                                f"OERF Incident Report: {incident_id} "
-                                f"[{incident.get('status', 'RESOLVED')}]"
-                            )
-                        },
-                        "Body": {"Text": {"Data": markdown_report}},
-                    }
-                },
-            )
-            logger.info("Emailed report to %s", qa_email)
-        except ClientError as exc:
-            logger.warning("Failed to email report via SES: %s", exc)
-
-    return {"success": True, "report_key": report_key, "s3_uri": s3_uri}
+        return S3ReportStore(get_s3(), REPORT_BUCKET_NAME)
+    return MemoryReportStore()
