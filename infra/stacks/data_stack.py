@@ -227,6 +227,48 @@ class OerfDataStack(Stack):
         definition = asl_path.read_text(encoding="utf-8").replace(
             "__STUB_ARN__", workflow_stub.function_arn
         )
+        engagement_asl_path = (
+            Path(__file__).resolve().parents[2]
+            / "domains"
+            / "cold_chain_excursion"
+            / "engage_party.asl.json"
+        )
+        engagement_definition = engagement_asl_path.read_text(encoding="utf-8").replace(
+            "__ENGAGEMENT_STUB_ARN__", workflow_stub.function_arn
+        )
+        engagement_role = iam.Role(
+            self,
+            "EngagePartyStateMachineRole",
+            assumed_by=iam.ServicePrincipal("states.amazonaws.com"),
+            description="Execution role for the reusable engagement state machine",
+        )
+        engagement_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["lambda:InvokeFunction"],
+                resources=[workflow_stub.function_arn, f"{workflow_stub.function_arn}:*"],
+            )
+        )
+        self.engage_party_state_machine = sfn.StateMachine(
+            self,
+            "EngagePartyStateMachine",
+            state_machine_name="oerf-engage-party",
+            state_machine_type=sfn.StateMachineType.STANDARD,
+            role=engagement_role,
+            definition_body=sfn.DefinitionBody.from_string(engagement_definition),
+        )
+        workflow_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "states:StartExecution",
+                    "states:StopExecution",
+                    "states:DescribeExecution",
+                ],
+                resources=[self.engage_party_state_machine.state_machine_arn],
+            )
+        )
+        definition = definition.replace(
+            "__ENGAGE_PARTY_ARN__", self.engage_party_state_machine.state_machine_arn
+        )
         self.cold_chain_state_machine = sfn.StateMachine(
             self,
             "OerfColdChainStateMachine",
@@ -350,5 +392,10 @@ class OerfDataStack(Stack):
         CfnOutput(self, "EventBusArn", value=self.event_bus.event_bus_arn)
         CfnOutput(
             self, "ColdChainStateMachineArn", value=self.cold_chain_state_machine.state_machine_arn
+        )
+        CfnOutput(
+            self,
+            "EngagePartyStateMachineArn",
+            value=self.engage_party_state_machine.state_machine_arn,
         )
 
