@@ -14,8 +14,8 @@ the only table this role may write: routing and tenant access is read-only.
 
 ``TODO(OERF-301)``: no DynamoDB TTL is configured on any table, so the
 ``expires_at`` attribute on dedupe and debounce items does not delete them yet.
-``TODO(OERF-116)``: the ``DEVICE#{device_id}`` registry has no writer or seeded
-rows, so ingest fails closed for unknown devices.
+Device rows are written by ``oerf.platform.channels.devices.register_device``.
+Ingest only reads them and still drops an unknown device.
 """
 
 from __future__ import annotations

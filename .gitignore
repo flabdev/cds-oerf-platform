@@ -26,6 +26,7 @@ build/
 dist/
 *.egg-info/
 node_modules/
+.vite/
 .codevector.json
 opencode.json
 .cline/providers.json
