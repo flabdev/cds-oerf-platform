@@ -1,6 +1,11 @@
 # OERF interface contract
 
-**FROZEN v1.0** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.2** — authored 2026-10-18 by OERF-304 (Ananda).
+
+Change log:
+
+- v1.2 (2026-10-21, WhatsApp) channel mocks default to true unless context `channels:live` is true. `WHATSAPP_PHONE_NUMBER_ID` comes from context `whatsapp:phoneNumberId`. `WA_PHONE_NUMBER_ID_PARAM` is set on the router.
+- v1.1 (2026-10-21, OERF-301) adds env `INBOUND_QUEUE_URL` on the action handler.
 
 OERF-306 maintains this file after the sign-off table is complete. Tickets may build against this text now. A signed row is that owner's acceptance of the sections they own.
 
@@ -445,26 +450,27 @@ This ticket does not rename variables on deployed functions. OERF-301 sets missi
 | `REPORT_BUCKET_NAME` | deployed on the report function | compute stack |
 | `EVENT_BUS_NAME` | value `oerf-events`. Required on ingest and any publisher. | OERF-301 |
 | `STATE_MACHINE_ARN` | deployed on the action handler. Ingest reads it for `StartExecution`. | compute stack |
+| `INBOUND_QUEUE_URL` | Inbound queue URL. Set on the action handler. OERF-208 reads it to send the dashboard action. | OERF-301 |
 | `CONFIG_ROOT` | directory of domain packages inside the asset. Value `domains`. The config library currently resolves the installed `domains` package and does not read this variable. | OERF-301, when a function needs an explicit root |
 | `LOG_LEVEL` | logging level name. Default `INFO` when unset. | OERF-301 / OERF-303 |
 | `USER_POOL_ID` | deployed on the WebSocket authorizer | compute stack |
 | `USER_POOL_CLIENT_ID` | deployed on the WebSocket authorizer | compute stack |
 | `WEBSOCKET_ENDPOINT` | deployed on the broadcaster | compute stack |
-| `WHATSAPP_PHONE_NUMBER_ID` | deployed on the router, often empty because it is copied from the synth shell | leave until WhatsApp infra replaces the read |
+| `WHATSAPP_PHONE_NUMBER_ID` | Router. Value is context `whatsapp:phoneNumberId`, default empty. | WhatsApp infra |
 | `SES_SOURCE_EMAIL` | deployed on the router and the report function | compute stack |
-| `USE_MOCK_WHATSAPP` | deployed, default `false` in the stack | WhatsApp infra may flip the default |
-| `USE_MOCK_SMS` | deployed, default `false` | same |
-| `USE_MOCK_EMAIL` | deployed, default `false` | same |
+| `USE_MOCK_WHATSAPP` | Router. Default `true`. `false` only when context `channels:live` is true. | WhatsApp infra |
+| `USE_MOCK_SMS` | Router. Same default as `USE_MOCK_WHATSAPP`. | WhatsApp infra |
+| `USE_MOCK_EMAIL` | Router. Same default as `USE_MOCK_WHATSAPP`. | WhatsApp infra |
 | `USE_MOCK_BEDROCK` | deployed on vision, default `false` | OERF-310 |
 | `BEDROCK_MODEL_ID` | deployed on vision. Reserved for the value OERF-310 approves. | OERF-310 |
-| `WA_PHONE_NUMBER_ID_PARAM` | reserved. SSM parameter name for the WhatsApp phone number id. Not read by code yet. | Ananda, WhatsApp infra |
+| `WA_PHONE_NUMBER_ID_PARAM` | Router. Value `/oerf/whatsapp/phone-number-id`. The handler does not read it yet. | WhatsApp infra |
 | `GUARDRAIL_ID` | reserved. Not set. | OERF-310 |
 | `GUARDRAIL_VERSION` | reserved. Not set. | OERF-310 |
 | `AGENT_RUNTIME_ARN` | reserved. Not set. | OERF-312 |
 
 Provider secrets stay in Secrets Manager, referenced by name or ARN. They are not environment variables.
 
-Synth: [infra/app.py](../infra/app.py) raises `SystemExit` when `CDK_DEFAULT_ACCOUNT` is unset, so `cdk synth` currently requires credentials. OERF-301 makes synth succeed without an account. This ticket does not change `app.py`.
+Synth: [infra/app.py](../infra/app.py) takes the account from `CDK_DEFAULT_ACCOUNT`, then context `account`, then the placeholder `000000000000`. A CloudFormation rule rejects a deploy of that placeholder. Region defaults to `us-east-1`.
 
 ## 10. Logger
 

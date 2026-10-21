@@ -39,11 +39,14 @@ def run_app(outdir: Path, **env_overrides: str) -> subprocess.CompletedProcess:
     )
 
 
-def test_app_fails_with_actionable_message_when_account_is_unresolved(tmp_path):
+def test_app_synthesizes_with_placeholder_account_when_unresolved(tmp_path):
     result = run_app(tmp_path)
 
-    assert result.returncode != 0
-    assert "CDK_DEFAULT_ACCOUNT is not set" in result.stderr
+    assert result.returncode == 0, result.stderr
+    message = "Refusing to deploy with the synth placeholder account 000000000000"
+    for name in ("OerfDataStack.template.json", "OerfComputeStack.template.json"):
+        template = (tmp_path / name).read_text()
+        assert message in template
 
 
 def test_app_synthesizes_stack_when_account_is_resolved(tmp_path):
