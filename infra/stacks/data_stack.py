@@ -233,6 +233,7 @@ class OerfDataStack(Stack):
             state_machine_name="oerf-cold-chain",
             state_machine_type=sfn.StateMachineType.STANDARD,
             role=workflow_role,
+            tracing_enabled=True,
             definition_body=sfn.DefinitionBody.from_string(definition),
         )
         # ---------------------------------------------------------
