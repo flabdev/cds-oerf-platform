@@ -14,3 +14,4 @@ Actions below cannot be scoped to a resource ARN, or are waiting on a later tick
 | `ecr:GetAuthorizationToken` | `AgentRuntimeExecutionRole` | ECR authorization has no resource type. Image pull actions stay on the asset repository ARN. Present only when context `agentcore:enabled` is true. |
 | `xray:GetSamplingRules`, `xray:GetSamplingTargets` | `AgentRuntimeExecutionRole` | X-Ray sampling APIs have no resource type. The AgentCore runtime adds them when tracing is enabled. |
 | `cloudwatch:PutMetricData` | `AgentRuntimeExecutionRole` | `PutMetricData` has no resource type. The AgentCore runtime adds it when tracing is enabled. |
+| `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | role of `oerf-waba-event-destination` | `tracing=ACTIVE` on that function. Present only when context `whatsapp:wabaId` is set. X-Ray rejects a resource ARN. |

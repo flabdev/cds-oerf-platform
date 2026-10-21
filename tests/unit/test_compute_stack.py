@@ -321,6 +321,96 @@ def test_inbound_topic_is_standard_and_queue_redrives_after_three(
     assert "aws:SourceArn" in sns_statements[0]["Condition"]["ArnEquals"]
 
 
+_WABA_ID = "waba-01234567890123456789012345678901"
+
+
+def _waba_arn() -> str:
+    return f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:waba/{_WABA_ID}"
+
+
+def test_waba_destination_stays_out_without_context(template: Template) -> None:
+    assert "oerf-waba-event-destination" not in functions_by_name(template)
+    assert template.find_resources("AWS::CloudFormation::CustomResource") == {}
+    topic = next(iter(template.find_resources("AWS::SNS::Topic").values()))
+    assert "KmsMasterKeyId" not in topic["Properties"]
+    for policy in template.find_resources("AWS::SNS::TopicPolicy").values():
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            principal = statement.get("Principal", {})
+            service = principal.get("Service") if isinstance(principal, dict) else principal
+            services = [service] if isinstance(service, str) else list(service or [])
+            assert "social-messaging.amazonaws.com" not in services
+
+
+def test_waba_destination_scopes_publish_and_the_provider_role() -> None:
+    saved = _without_synth_env()
+    try:
+        _stack, enabled = synthesize(context={"whatsapp:wabaId": _WABA_ID})
+    finally:
+        _restore_env(saved)
+
+    topic = next(iter(enabled.find_resources("AWS::SNS::Topic").values()))
+    assert "KmsMasterKeyId" not in topic["Properties"]
+    policies = enabled.find_resources("AWS::SNS::TopicPolicy")
+    assert len(policies) == 1
+    statements = next(iter(policies.values()))["Properties"]["PolicyDocument"]["Statement"]
+    publish = [
+        statement
+        for statement in statements
+        if _principal_services(statement) == ["social-messaging.amazonaws.com"]
+    ]
+    assert len(publish) == 1
+    assert _resource_list(publish[0]["Action"]) == ["sns:Publish"]
+    assert publish[0]["Condition"]["StringEquals"] == {
+        "aws:SourceAccount": ACCOUNT,
+        "aws:SourceArn": _waba_arn(),
+    }
+
+    custom = enabled.find_resources("AWS::CloudFormation::CustomResource")
+    assert len(custom) == 1
+    props = next(iter(custom.values()))["Properties"]
+    assert props["WabaId"] == _WABA_ID
+    assert props["TopicArn"]["Ref"].startswith("InboundTopic")
+
+    function = functions_by_name(enabled)["oerf-waba-event-destination"]
+    assert function["TracingConfig"] == {"Mode": "Active"}
+    role_statements = statements_for_role(enabled, role_logical_id(function))
+    social = [
+        statement
+        for statement in role_statements
+        if any(name.startswith("social-messaging:") for name in _action_list(statement))
+    ]
+    assert len(social) == 1
+    assert set(_action_list(social[0])) == {
+        "social-messaging:PutWhatsAppBusinessAccountEventDestinations",
+        "social-messaging:GetLinkedWhatsAppBusinessAccount",
+    }
+    assert _resource_list(social[0]["Resource"]) == [_waba_arn()]
+    logs = _statements_with_action(role_statements, "logs:PutLogEvents")
+    assert len(logs) == 1
+    assert logs[0]["Resource"] != "*"
+
+    allowed = allowed_star_actions()
+    offenders = []
+    for statement in iter_allow_statements(enabled):
+        if not resource_is_star(statement.get("Resource")):
+            continue
+        offenders.extend(name for name in _action_list(statement) if name not in allowed)
+    assert offenders == [], "Resource * is outside iam-exceptions.md: " + ", ".join(offenders)
+
+
+def _principal_services(statement: dict) -> list[str]:
+    principal = statement.get("Principal", {})
+    service = principal.get("Service") if isinstance(principal, dict) else principal
+    if service is None:
+        return []
+    return [service] if isinstance(service, str) else list(service)
+
+
+def _action_list(statement: dict) -> list[str]:
+    action = statement.get("Action", [])
+    return [action] if isinstance(action, str) else list(action)
+
+
 def test_inbound_event_source_reports_batch_item_failures(template: Template) -> None:
     mappings = template.find_resources("AWS::Lambda::EventSourceMapping")
     partial = [

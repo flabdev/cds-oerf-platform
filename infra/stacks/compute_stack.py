@@ -31,6 +31,7 @@ from constructs import Construct
 
 from infra.constructs.agentcore_runtime import AgentCoreRuntime
 from infra.constructs.bedrock_guardrail import BedrockGuardrail
+from infra.constructs.waba_event_destination import WabaEventDestination
 from infra.stacks.data_stack import OerfDataStack
 
 # Task-token APIs have no resource type in the IAM Service Authorization
@@ -92,6 +93,7 @@ class OerfComputeStack(Stack):
                 "web",
                 "sim",
                 "node_modules",
+                "infra/custom_resources",
                 "**/*.pyc",
                 "**/__pycache__",
                 ".pytest_cache",
@@ -374,9 +376,8 @@ class OerfComputeStack(Stack):
         # 6. Inbound topic, queue, and handler
         # ---------------------------------------------------------
         # EUM Social event destinations publish to a standard topic. FIFO is
-        # not supported. Next WhatsApp step: PutWhatsAppBusinessAccountEventDestinations
-        # on the WABA, targeting this topic. That call needs the deployed topic
-        # ARN, so the destination is not created in this stack.
+        # not supported. No master_key: the topic is not encrypted with a
+        # customer-managed KMS key, so there is no key policy to edit.
         self.inbound_topic = sns.Topic(
             self,
             "InboundTopic",
@@ -402,6 +403,14 @@ class OerfComputeStack(Stack):
             ),
         )
         self.inbound_topic.add_subscription(subscriptions.SqsSubscription(self.inbound_queue))
+        waba_id = _context_str(self, "whatsapp:wabaId")
+        if waba_id:
+            WabaEventDestination(
+                self,
+                "WabaEventDestination",
+                topic=self.inbound_topic,
+                waba_id=waba_id,
+            )
 
         self.inbound_fn = self._function(
             "InboundFunction",
