@@ -6,6 +6,13 @@ from oerf.platform.channels.providers.base import ProviderResult
 
 
 def _from_legacy(result: dict) -> ProviderResult:
+    if result.get("status") == "SIMULATED":
+        return ProviderResult(
+            delivered=False,
+            provider_msg_id=result.get("message_id"),
+            reason="simulated",
+            simulated=True,
+        )
     if result.get("success"):
         return ProviderResult(delivered=True, provider_msg_id=result.get("message_id"))
     return ProviderResult(delivered=False, reason=str(result.get("error") or "delivery_failed"))

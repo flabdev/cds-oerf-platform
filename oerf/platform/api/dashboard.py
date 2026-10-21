@@ -30,14 +30,28 @@ from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 from oerf.platform.tenancy.publisher import ConfigPublisher
 
 _ACTIONS = frozenset({"confirm_transfer", "pick_option", "cancel"})
+_ACTION_ROLES = frozenset({"platform_admin", "tenant_admin", "ops_user"})
+_ACTION_STATES = {
+    "confirm_transfer": frozenset(
+        {"ASSESSING", "AWAITING_APPROVAL", "SECURING_FACILITY", "IN_TRANSIT"}
+    ),
+    "pick_option": frozenset({"ASSESSING", "AWAITING_APPROVAL"}),
+}
+_TERMINAL = frozenset({"CLOSED", "CANCELLED"})
 _CATALOGS = frozenset({"contacts", "facilities", "faultcodes"})
 _ADMIN_ROLES = frozenset({PLATFORM_ADMIN_GROUP, "tenant_admin"})
 _NAMESPACE = uuid.UUID("6f8f1c0e-1b5a-4c1d-9c3a-0e7c6a2b9d11")
 
 
 class IncidentQuery(Protocol):
-    def list_incidents(self, tenant_id: str) -> list[dict[str, Any]]:
-        """Return tenant-scoped incident summaries."""
+    def list_incidents(
+        self,
+        tenant_id: str,
+        *,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """Return one page of tenant-scoped incident summaries."""
 
     def get_incident(self, tenant_id: str, incident_id: str) -> dict[str, Any] | None:
         """Return one incident detail, or None when this tenant has no such row."""
@@ -84,8 +98,29 @@ class MemoryIncidentQuery:
     def __init__(self, incidents: list[dict[str, Any]]) -> None:
         self._incidents = incidents
 
-    def list_incidents(self, tenant_id: str) -> list[dict[str, Any]]:
-        return [item for item in self._incidents if item.get("tenant_id") == tenant_id]
+    def list_incidents(
+        self,
+        tenant_id: str,
+        *,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        rows = [item for item in self._incidents if item.get("tenant_id") == tenant_id]
+        rows.sort(key=lambda item: str(item.get("incident_id")))
+        start = 0
+        if cursor:
+            start = next(
+                (
+                    index + 1
+                    for index, item in enumerate(rows)
+                    if item.get("incident_id") == cursor
+                ),
+                len(rows),
+            )
+        size = min(max(limit, 1), 50)
+        page = rows[start : start + size]
+        next_cursor = page[-1]["incident_id"] if start + size < len(rows) and page else None
+        return {"incidents": page, "next_cursor": next_cursor}
 
     def get_incident(self, tenant_id: str, incident_id: str) -> dict[str, Any] | None:
         for item in self._incidents:
@@ -153,6 +188,8 @@ def dispatch(
     services: DashboardServices,
     *,
     idempotency_key: str | None = None,
+    limit: int = 50,
+    cursor: str | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Route one authorized dashboard call. Returns the status and JSON body."""
 
@@ -165,7 +202,7 @@ def dispatch(
     incident_id = _match(r"^/incidents/([^/]+)$", path)
     action_id = _match(r"^/incidents/([^/]+)/actions$", path)
     if method == "GET" and path == "/incidents":
-        return _list(principal, services)
+        return _list(principal, services, limit=limit, cursor=cursor)
     if method == "GET" and incident_id and "/actions" not in path:
         return _detail(principal, incident_id, services)
     if method == "POST" and action_id:
@@ -185,6 +222,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         parsed = {}
     headers = {str(key).lower(): value for key, value in (event.get("headers") or {}).items()}
+    query = event.get("queryStringParameters") or {}
     status, body = dispatch(
         str(event.get("httpMethod") or "GET"),
         str(event.get("path") or "/"),
@@ -192,6 +230,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         parsed if isinstance(parsed, dict) else {},
         services_from_env(),
         idempotency_key=headers.get("idempotency-key"),
+        limit=_limit(query.get("limit")),
+        cursor=query.get("cursor"),
     )
     return {
         "statusCode": status,
@@ -203,13 +243,33 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 def services_from_env() -> DashboardServices:
     """Construct AWS-backed services when the lambda environment is configured."""
 
-    return DashboardServices(queries=MemoryIncidentQuery([]), queue=MemoryActionQueue())
+    import os
+
+    import boto3
+
+    from oerf.platform.api.queries import DynamoIncidentQuery, SqsActionQueue
+
+    table = os.environ.get("INCIDENT_TABLE_NAME", "").strip()
+    queue_url = os.environ.get("ACTION_QUEUE_URL", "").strip()
+    if table:
+        queries: IncidentQuery = DynamoIncidentQuery(boto3.client("dynamodb"), table)
+    else:
+        queries = MemoryIncidentQuery([])
+    queue = SqsActionQueue(boto3.client("sqs"), queue_url) if queue_url else None
+    return DashboardServices(queries=queries, queue=queue)
 
 
-def _list(principal: Principal, services: DashboardServices) -> tuple[int, dict[str, Any]]:
+def _list(
+    principal: Principal,
+    services: DashboardServices,
+    *,
+    limit: int,
+    cursor: str | None,
+) -> tuple[int, dict[str, Any]]:
     denied = _need_tenant(principal)
     if denied:
         return denied
+    page = services.queries.list_incidents(principal.tenant_id or "", limit=limit, cursor=cursor)
     rows = [
         {
             "incident_id": item.get("incident_id"),
@@ -218,9 +278,9 @@ def _list(principal: Principal, services: DashboardServices) -> tuple[int, dict[
             "shipment_id": item.get("shipment_id"),
             "allowance_remaining": item.get("allowance_remaining"),
         }
-        for item in services.queries.list_incidents(principal.tenant_id or "")
+        for item in page["incidents"]
     ]
-    return 200, {"incidents": rows}
+    return 200, {"incidents": rows, "next_cursor": page.get("next_cursor")}
 
 
 def _detail(
@@ -242,7 +302,7 @@ def _detail(
         "options": item.get("options") or [],
         "recommendation": item.get("recommendation"),
         "approval": item.get("approval"),
-        "evidence": item.get("evidence") or {},
+        "evidence": _public(item.get("evidence") or {}),
         "engagement_status": item.get("engagement_status"),
     }
 
@@ -262,6 +322,13 @@ def _action(
         return 400, {"error": "invalid_action"}
     if action == "pick_option" and not body.get("option_id"):
         return 400, {"error": "option_required"}
+    if principal.role not in _ACTION_ROLES:
+        return 403, {"error": "forbidden"}
+    incident = services.queries.get_incident(principal.tenant_id or "", incident_id)
+    if incident is None:
+        return 404, {"error": "not_found"}
+    if not _action_allowed(action, str(incident.get("state") or "")):
+        return 409, {"error": "action_not_allowed"}
     if services.queue is None:
         return 503, {"error": "queue_unavailable"}
     token = idempotency_key or str(uuid.uuid4())
@@ -275,8 +342,14 @@ def _action(
         "tenant_id": principal.tenant_id,
         "incident_id": incident_id,
         "actor": principal.sub,
+        "channel": "dashboard",
+        "type": "text",
+        "text": body.get("option_id") or action,
     }
-    services.queue.send(body=message, dedup_id=action_id)
+    try:
+        services.queue.send(body=message, dedup_id=action_id)
+    except Exception:
+        return 503, {"error": "queue_unavailable"}
     return 202, {"action_id": action_id}
 
 
@@ -444,6 +517,32 @@ def _audit(
             "at": services.clock().strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
     )
+
+
+def _action_allowed(action: str, state: str) -> bool:
+    if state in _TERMINAL:
+        return False
+    allowed = _ACTION_STATES.get(action)
+    return True if allowed is None else state in allowed
+
+
+def _public(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _public(item)
+            for key, item in value.items()
+            if key not in {"task_token", "phone", "e164", "email", "recipient"}
+        }
+    if isinstance(value, list):
+        return [_public(item) for item in value]
+    return value
+
+
+def _limit(raw: Any) -> int:
+    try:
+        return min(max(int(raw), 1), 50)
+    except (TypeError, ValueError):
+        return 50
 
 
 def _conflicts(principal: Principal, requested: Any) -> bool:

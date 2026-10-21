@@ -53,12 +53,6 @@ class OerfApiStack(Stack):
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
         code = lambda_.Code.from_asset(".", exclude=_LAMBDA_EXCLUDE)
-        self.user_pool_client = cognito.UserPoolClient(
-            self,
-            "DashboardUserPoolClient",
-            user_pool=data_stack.user_pool,
-            auth_flows=cognito.AuthFlow(user_srp=True),
-        )
         self.action_queue = sqs.Queue(
             self,
             "DashboardActionQueue",
@@ -86,9 +80,13 @@ class OerfApiStack(Stack):
             handler="oerf.platform.api.dashboard.handler",
             code=code,
             timeout=Duration.seconds(10),
-            environment={"ACTION_QUEUE_URL": self.action_queue.queue_url},
+            environment={
+                "ACTION_QUEUE_URL": self.action_queue.queue_url,
+                "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
+            },
         )
         self.action_queue.grant_send_messages(self.action_fn)
+        data_stack.incident_table.grant_read_data(self.action_fn)
 
         authorizer = apigw.CognitoUserPoolsAuthorizer(
             self,
@@ -151,7 +149,38 @@ class OerfApiStack(Stack):
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             ),
         )
+        self.hosted_domain = cognito.UserPoolDomain(
+            self,
+            "DashboardHostedDomain",
+            user_pool=data_stack.user_pool,
+            cognito_domain=cognito.CognitoDomainOptions(domain_prefix=f"oerf-{self.account}"),
+        )
+        site = f"https://{self.distribution.distribution_domain_name}"
+        self.user_pool_client = cognito.UserPoolClient(
+            self,
+            "DashboardUserPoolClient",
+            user_pool=data_stack.user_pool,
+            auth_flows=cognito.AuthFlow(user_srp=True),
+            o_auth=cognito.OAuthSettings(
+                flows=cognito.OAuthFlows(authorization_code_grant=True),
+                scopes=[
+                    cognito.OAuthScope.OPENID,
+                    cognito.OAuthScope.EMAIL,
+                    cognito.OAuthScope.PROFILE,
+                ],
+                callback_urls=[site, "http://localhost:5173", "http://127.0.0.1:5173"],
+                logout_urls=[site, "http://localhost:5173", "http://127.0.0.1:5173"],
+            ),
+        )
+        self.user_pool_client.node.add_dependency(self.hosted_domain)
         self._websocket(data_stack, code)
+        CfnOutput(
+            self,
+            "CognitoDomain",
+            value=f"https://oerf-{self.account}.auth.{self.region}.amazoncognito.com",
+        )
+        CfnOutput(self, "UserPoolClientId", value=self.user_pool_client.user_pool_client_id)
+        CfnOutput(self, "UserPoolId", value=data_stack.user_pool.user_pool_id)
         CfnOutput(
             self,
             "DashboardUrl",

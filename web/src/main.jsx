@@ -2,8 +2,11 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "./App.jsx";
+import { LiveDesk } from "./live.jsx";
+import { liveConfig } from "./session.js";
 import "./styles.css";
 
+const config = liveConfig(import.meta.env);
 const params = new URLSearchParams(window.location.search);
 const principal = {
   authenticated: params.get("signedOut") !== "1",
@@ -14,6 +17,6 @@ const principal = {
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
-    <App principal={principal} />
+    {config.mode === "live" ? <LiveDesk config={config} /> : <App principal={principal} />}
   </StrictMode>,
 );

@@ -50,7 +50,7 @@ const SAMPLE = [
   },
 ];
 
-export function App({ principal, incidents = SAMPLE, onSubmit }) {
+export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
   const session = sessionView(principal);
   const [selectedTenant, setSelectedTenant] = useState(session.tenantId || "t1");
   const [allowance, setAllowance] = useState(45);
@@ -76,13 +76,17 @@ export function App({ principal, incidents = SAMPLE, onSubmit }) {
   const current = rows.find((item) => item.incident_id === selectedId) || rows[0] || null;
   const initial = session.displayName.slice(0, 1).toUpperCase();
 
-  function submit(action, optionId) {
+  async function submit(action, optionId) {
     if (!current) {
       return;
     }
     const request = actionRequest(current.incident_id, action, optionId, `${action}-1`);
-    setNotice(`Queued ${request.body.action.replaceAll("_", " ")}`);
-    onSubmit?.(request);
+    try {
+      await onSubmit?.(request);
+      setNotice(`Queued ${request.body.action.replaceAll("_", " ")}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The action was not queued");
+    }
   }
 
   function publishAllowance() {
@@ -215,7 +219,10 @@ export function App({ principal, incidents = SAMPLE, onSubmit }) {
                   <button
                     type="button"
                     className={current?.incident_id === item.incident_id ? "row selected" : "row"}
-                    onClick={() => setSelectedId(item.incident_id)}
+                    onClick={() => {
+                      setSelectedId(item.incident_id);
+                      onSelect?.(item.incident_id);
+                    }}
                   >
                     <span className="avatar small" aria-hidden="true">{item.shipment_id.slice(0, 1)}</span>
                     <span className="row-copy">
