@@ -1,6 +1,6 @@
 # IAM exceptions
 
-Actions below cannot be scoped to a resource ARN, or are waiting on a later ticket to name the ARN. Each one is limited to the role that needs it.
+Actions below cannot be scoped to a resource ARN, or are waiting on a later ticket to name the ARN. A `*` inside an ARN is listed too. Each one is limited to the role that needs it.
 
 | Action | Role | Why |
 | --- | --- | --- |
@@ -15,3 +15,4 @@ Actions below cannot be scoped to a resource ARN, or are waiting on a later tick
 | `xray:GetSamplingRules`, `xray:GetSamplingTargets` | `AgentRuntimeExecutionRole` | X-Ray sampling APIs have no resource type. The AgentCore runtime adds them when tracing is enabled. |
 | `cloudwatch:PutMetricData` | `AgentRuntimeExecutionRole` | `PutMetricData` has no resource type. The AgentCore runtime adds it when tracing is enabled. |
 | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | role of `oerf-waba-event-destination` | `tracing=ACTIVE` on that function. Present only when context `whatsapp:wabaId` is set. X-Ray rejects a resource ARN. |
+| `sts:AssumeRole` | `OerfGitHubDeployRole` | Resource is `arn:aws:iam::{account}:role/cdk-hnb659fds-*-{account}-{region}`. The `*` is the CDK bootstrap role name (`deploy`, `file-publishing`, `image-publishing`, `lookup`) so one statement can name them. It also matches `cfn-exec-role`. That role trusts only `cloudformation.amazonaws.com`, so this statement does not let GitHub assume it. `cloudformation:DescribeStacks` and `ssm:GetParameter` on `/cdk-bootstrap/hnb659fds/version` stay on the bootstrap deploy role. The CLI calls them after `AssumeRole` (`DeploymentActionRole` sids `CliPermissions` and `ReadVersion` in the [bootstrap template](https://github.com/aws/aws-cdk-cli/blob/main/packages/aws-cdk/lib/api/bootstrap/bootstrap-template.yaml)). |

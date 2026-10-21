@@ -23,6 +23,15 @@ def _event(request_type: str, physical: str | None = None) -> dict:
 
 
 def _stub(monkeypatch, destinations: list[dict[str, str]], waba_id: str = _WABA):
+    for name in (
+        "AWS_PROFILE",
+        "AWS_DEFAULT_PROFILE",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     client = boto3.client("socialmessaging", region_name="us-east-1")
     stubber = Stubber(client)
     stubber.add_response(
