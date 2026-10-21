@@ -41,6 +41,9 @@ class MessageDedupePort(Protocol):
     def stored(self, message_id: str) -> dict[str, object] | None:
         """Return the stored dedupe row, including an expired one."""
 
+    def forget(self, message_id: str) -> None:
+        """Release an accepted id after processing failed before completion."""
+
 
 class InboundDedupe:
     """Conditional insert keyed by provider message id."""
@@ -74,6 +77,12 @@ class InboundDedupe:
                 return DedupeResult(is_duplicate=True)
             self._items[key] = (channel, now + RETENTION, tenant_id)
             return DedupeResult(is_duplicate=False)
+
+    def forget(self, message_id: str) -> None:
+        """Release an id so a failed callback can be retried from SQS."""
+        key = (f"INMSG#{message_id.strip()}", "META")
+        with self._guard:
+            self._items.pop(key, None)
 
     def stored(self, message_id: str) -> dict[str, object] | None:
         key = (f"INMSG#{message_id}", "META")
