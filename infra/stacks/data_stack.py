@@ -132,6 +132,18 @@ class OerfDataStack(Stack):
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
         )
+        self.incident_table.add_global_secondary_index(
+            index_name="GSI1",
+            partition_key=dynamodb.Attribute(
+                name="GSI1PK",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            sort_key=dynamodb.Attribute(
+                name="GSI1SK",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
 
         # ---------------------------------------------------------
         # DynamoDB: Routing Table
@@ -275,6 +287,7 @@ class OerfDataStack(Stack):
             state_machine_name="oerf-cold-chain",
             state_machine_type=sfn.StateMachineType.STANDARD,
             role=workflow_role,
+            tracing_enabled=True,
             definition_body=sfn.DefinitionBody.from_string(definition),
         )
         # ---------------------------------------------------------
