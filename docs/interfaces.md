@@ -1,9 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.6** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.7** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.7 (2026-10-21, WhatsApp) documents the WABA event destination on the inbound topic. It is created only when context `whatsapp:wabaId` is set.
 - v1.6 (2026-10-21, OERF-312) documents the AgentCore placeholder: envelope, timeout, fallback, and `AGENT_RUNTIME_ARN`.
 - v1.5 (2026-10-21, OERF-310) sets `GUARDRAIL_ID` and `GUARDRAIL_VERSION` on the vision function, and documents `record_invocation`.
 - v1.4 (2026-10-21, OERF-301) records DynamoDB retention. TTL attribute `expires_at` is enabled on the incident and routing tables only. Routing rows that used `ttl` now write `expires_at`. The `ttl` attribute is not used.
@@ -208,6 +209,18 @@ Owner: Ananda (OERF-308) as the stream consumer. No EventBridge consumer is regi
 ```
 
 `from_state` and `to_state` are states in [oerf/platform/incidents/repository.py](../oerf/platform/incidents/repository.py) (`OPEN`, `DIAGNOSING`, `ASSESSING`, `AWAITING_APPROVAL`, `SECURING_FACILITY`, `ESCALATED`, `IN_TRANSIT`, `VERIFYING`, `CONTAINED`, `REOPENED`, `AWAITING_DISPOSITION`, `CLOSED`, `CANCELLED`). The stream path is the only consumer. A future EventBridge put uses this body unchanged.
+
+### 4.4 WhatsApp event destination
+
+Owner: Ananda (WhatsApp channel infrastructure).
+
+Context `whatsapp:wabaId` is empty by default. When it is a `waba-...` id, `OerfComputeStack` does two things and otherwise leaves the inbound topic unchanged.
+
+The inbound topic policy allows `social-messaging.amazonaws.com` to call `sns:Publish` on that topic. Both conditions are `StringEquals`: `aws:SourceAccount` is this account, and `aws:SourceArn` is `arn:aws:social-messaging:{region}:{account}:waba/{wabaId}`. That ARN shape is the `waba` resource in the [social-messaging Service Authorization Reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_socialmessaging.html): `arn:${Partition}:social-messaging:${Region}:${Account}:waba/${WabaId}`.
+
+A custom resource calls `PutWhatsAppBusinessAccountEventDestinations` with `id` set to the WABA id and one destination, the topic ARN. Delete calls the same API with `eventDestinations` set to `[]`. The API allows 0 or 1 items, and 0 clears the destination. The physical id is the WABA id. The handler role may call `social-messaging:PutWhatsAppBusinessAccountEventDestinations` and `social-messaging:GetLinkedWhatsAppBusinessAccount` on that WABA ARN, and write its own log group.
+
+The inbound topic is created without a customer-managed KMS key. There is no key policy grant. An AWS owned key has no policy to edit.
 
 ### 4.3 SQS inbound envelope
 
