@@ -365,9 +365,15 @@ class OerfDataStack(Stack):
         )
 
         # ---------------------------------------------------------
-        # IAM: GitHub OIDC Provider for CI/CD
+        # IAM: GitHub OIDC Provider for CI/CD (SEC-1)
         # ---------------------------------------------------------
+        # aud and sub are exact. There is no StringLike and no wildcard.
         github_domain = "token.actions.githubusercontent.com"
+        # Immutable subject first, then the name form. Either may be the token sub.
+        github_subs = [
+            "repo:flabdev@25605151/cds-oerf-platform@1408373494:ref:refs/heads/main",
+            "repo:flabdev/cds-oerf-platform:ref:refs/heads/main",
+        ]
         github_provider = iam.OpenIdConnectProvider(
             self,
             "GithubOIDCProvider",
@@ -379,21 +385,36 @@ class OerfDataStack(Stack):
             self,
             "GitHubDeployRole",
             role_name="OerfGitHubDeployRole",
-            assumed_by=iam.OpenIdConnectPrincipal(github_provider, conditions={
-                "StringEquals": {
-                    f"{github_domain}:aud": "sts.amazonaws.com",
+            assumed_by=iam.OpenIdConnectPrincipal(
+                github_provider,
+                conditions={
+                    "StringEquals": {
+                        f"{github_domain}:aud": "sts.amazonaws.com",
+                        f"{github_domain}:sub": github_subs,
+                    },
                 },
-                "StringLike": {
-                    f"{github_domain}:sub": [
-                        "repo:flabdev/cds-oerf-platform:*",
-                        "repo:flabdev*/cds-oerf-platform*:*",
-                        "repo:*cds-oerf-platform*:*",
-                    ],
-                },
-            }),
-            description="Role assumed by GitHub Actions to deploy CDK",
+            ),
+            description="Assumed by GitHub Actions on main to deploy CDK",
         )
-        github_role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("AdministratorAccess"))
+        # cdk deploy assumes the bootstrap roles, then calls CloudFormation and
+        # reads /cdk-bootstrap/hnb659fds/version as the deploy role. Those
+        # actions live on DeploymentActionRole in the bootstrap template
+        # (sids CliPermissions and ReadVersion), not on this role.
+        # https://docs.aws.amazon.com/cdk/v2/guide/bootstrapping.html
+        account = Stack.of(self).account
+        # Partition is aws. This platform deploys only in commercial us-east-1.
+        bootstrap_roles = (
+            f"arn:aws:iam::{account}:role/"
+            f"cdk-hnb659fds-*-{account}-{Stack.of(self).region}"
+        )
+        # The * is the bootstrap role name. See docs/security/iam-exceptions.md.
+        github_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="AssumeCdkBootstrapRoles",
+                actions=["sts:AssumeRole"],
+                resources=[bootstrap_roles],
+            )
+        )
 
         # ---------------------------------------------------------
         # Stack Outputs
