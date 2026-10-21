@@ -71,6 +71,14 @@ class DynamoMessageDedupe:
             return DedupeResult(is_duplicate=True)
         return DedupeResult(is_duplicate=False)
 
+    def forget(self, message_id: str) -> None:
+        """Remove a newly accepted id when downstream processing failed."""
+        message = required_text(message_id, "message_id")
+        self._client.delete_item(
+            TableName=self._table,
+            Key=key(dedupe_pk(message), "META"),
+        )
+
     def stored(self, message_id: str) -> dict[str, object] | None:
         message = required_text(message_id, "message_id")
         pk = dedupe_pk(message)
