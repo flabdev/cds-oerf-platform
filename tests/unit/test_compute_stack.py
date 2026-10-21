@@ -424,6 +424,17 @@ def test_channel_mocks_default_true_and_whatsapp_is_unscoped_without_a_phone_id(
     assert _resource_list(parameter[0]["Resource"]) == [
         f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/oerf/whatsapp/phone-number-id"
     ]
+    vision = functions_by_name(template)["oerf-evidence-analyzer"]["Environment"]["Variables"]
+    assert vision["USE_MOCK_BEDROCK"] == "true"
+    assert vision["BEDROCK_MODEL_ID"] == "amazon.nova-lite-v1:0"
+    bedrock_statements = statements_for_role(
+        template, role_logical_id(functions_by_name(template)["oerf-evidence-analyzer"])
+    )
+    invoke = _statements_with_action(bedrock_statements, "bedrock:InvokeModel")
+    assert len(invoke) == 1
+    assert _resource_list(invoke[0]["Resource"]) == [
+        f"arn:aws:bedrock:{REGION}::foundation-model/amazon.nova-lite-v1:0"
+    ]
 
 
 def test_channels_live_disables_mocks_and_scopes_whatsapp_to_the_phone_number() -> None:
@@ -451,6 +462,27 @@ def test_channels_live_disables_mocks_and_scopes_whatsapp_to_the_phone_number() 
         f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:phone-number-id/{phone_id}"
     ]
     assert "socialmessaging:*" not in role_actions(live, "oerf-channel-router")
+    vision = functions_by_name(live)["oerf-evidence-analyzer"]["Environment"]["Variables"]
+    assert vision["USE_MOCK_BEDROCK"] == "false"
+    assert vision["BEDROCK_MODEL_ID"] == "amazon.nova-lite-v1:0"
+
+
+def test_bedrock_model_id_comes_from_context() -> None:
+    saved = _without_synth_env()
+    try:
+        _stack, custom = synthesize(context={"bedrock:modelId": "example.model-v1:0"})
+    finally:
+        _restore_env(saved)
+    vision = functions_by_name(custom)["oerf-evidence-analyzer"]["Environment"]["Variables"]
+    assert vision["BEDROCK_MODEL_ID"] == "example.model-v1:0"
+    assert vision["USE_MOCK_BEDROCK"] == "true"
+    statements = statements_for_role(
+        custom, role_logical_id(functions_by_name(custom)["oerf-evidence-analyzer"])
+    )
+    invoke = _statements_with_action(statements, "bedrock:InvokeModel")
+    assert _resource_list(invoke[0]["Resource"]) == [
+        f"arn:aws:bedrock:{REGION}::foundation-model/example.model-v1:0"
+    ]
 
 
 def test_ses_send_is_scoped_to_the_identity_arn(monkeypatch: pytest.MonkeyPatch) -> None:
