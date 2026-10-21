@@ -31,7 +31,8 @@ REQUIRED = (
 # These S-tests are not telemetry scenarios. sandbox_join's lifecycle is a later ticket.
 EXCLUDED = {
     "sandbox_join": (
-        "JOIN creation, the daily cap, and 24-hour expiry belong to OERF-309. "
+        "JOIN creation, the daily cap, and 24-hour expiry are OERF-309, "
+        "in oerf/platform/sandbox. This scenario has no telemetry. "
         "The JOIN reply text is scripted in the responder only."
     ),
     "S11": "Channel fault injection belongs to the router. No telemetry.",
