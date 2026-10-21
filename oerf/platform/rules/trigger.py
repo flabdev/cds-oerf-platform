@@ -87,15 +87,33 @@ def evaluate_trigger(
                 }
             ],
         )
-    profile = config.product_profile(profile_id)
-    lower, upper = profile.range_c
-    reason = _breach_reason(config.trigger.condition, reading.temperature_c, lower, upper)
+    reason = breach_reason(reading, config, profile_id=profile_id)
     triggered = reason is not None and consecutive_breaches >= config.trigger.debounce_readings
     return TriggerDecision(
         triggered=triggered,
         reason=reason if triggered else None,
         tenant_id=reading.tenant_id,
         shipment_id=reading.shipment_id,
+    )
+
+
+def breach_reason(
+    event: TemperatureEvent | dict[str, object],
+    config: DomainConfigView,
+    *,
+    profile_id: str,
+) -> TriggerReason | None:
+    """Return the configured breach reason before applying debounce policy."""
+    reading = (
+        event if isinstance(event, TemperatureEvent) else TemperatureEvent.model_validate(event)
+    )
+    profile = config.product_profile(profile_id)
+    lower, upper = profile.range_c
+    return _breach_reason(
+        config.trigger.condition,
+        reading.temperature_c,
+        lower,
+        upper,
     )
 
 
