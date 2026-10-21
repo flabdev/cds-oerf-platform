@@ -2,10 +2,31 @@ name: Deploy CDK Infrastructure
 
 on:
   workflow_dispatch:
+    inputs:
+      agentcore:
+        description: Deploy the AgentCore runtime (builds the ARM64 image)
+        type: boolean
+        default: false
+      dashboard:
+        description: Deploy the dashboard stack
+        type: boolean
+        default: false
+      channels_live:
+        description: Turn on live channel and Bedrock calls
+        type: boolean
+        default: false
+      waba_id:
+        description: WhatsApp Business Account id (waba-...). Empty leaves the inbound topic unchanged.
+        type: string
+        default: ""
+
+# One in-flight deploy for this region. A second run waits.
+concurrency:
+  group: cdk-deploy-us-east-1
+  cancel-in-progress: false
 
 permissions:
-  id-token: write   # Required for requesting the JWT from AWS OIDC
-  contents: read    # Required for actions/checkout
+  contents: read
 
 jobs:
   deploy:
@@ -16,34 +37,105 @@ jobs:
       contents: read
     defaults:
       run:
-        working-directory: .
+        shell: bash
 
     steps:
+      - name: Require main
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "::error::CDK deploy runs only for refs/heads/main."
+            exit 1
+          fi
+
+      - name: Require deploy repository variables
+        env:
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          DEPLOY_ROLE_NAME: ${{ vars.DEPLOY_ROLE_NAME }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${AWS_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]]; then
+            echo "::error::Repository variable AWS_ACCOUNT_ID must be a 12-digit account id."
+            exit 1
+          fi
+          if [[ ! "${DEPLOY_ROLE_NAME}" =~ ^[A-Za-z0-9+=,.@_-]{1,64}$ ]]; then
+            echo "::error::Repository variable DEPLOY_ROLE_NAME must be an IAM role name."
+            exit 1
+          fi
+
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Debug OIDC Token Claims
-        run: |
-          curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | \
-            jq -r '.value | split(".")[1] | @base64d | fromjson | {sub, aud, iss, repository, ref}'
+      # AgentCore publishes a linux/arm64 image. ubuntu-latest is x86_64.
+      - name: Set up QEMU
+        if: ${{ inputs.agentcore == true || inputs.agentcore == 'true' }}
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+          cache-image: false
+
+      - name: Set up Docker Buildx
+        if: ${{ inputs.agentcore == true || inputs.agentcore == 'true' }}
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver: docker-container
+          platforms: linux/arm64
+          cache-binary: false
 
       - name: Configure AWS Credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: arn:aws:iam::906048429638:role/OerfGitHubDeployRole
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/${{ vars.DEPLOY_ROLE_NAME }}
           aws-region: us-east-1
 
       - name: Install dependencies
         run: |
+          set -euo pipefail
           npm install -g aws-cdk
           pip install -e .
 
-      - name: CDK Deploy
+      - name: Assemble CDK context
+        env:
+          AGENTCORE: ${{ (inputs.agentcore == true || inputs.agentcore == 'true') && 'true' || 'false' }}
+          DASHBOARD: ${{ (inputs.dashboard == true || inputs.dashboard == 'true') && 'true' || 'false' }}
+          CHANNELS_LIVE: ${{ (inputs.channels_live == true || inputs.channels_live == 'true') && 'true' || 'false' }}
+          WABA_ID: ${{ inputs.waba_id }}
         run: |
-          cdk deploy --all --require-approval never
+          set -euo pipefail
+          if [[ "${WABA_ID}" == *$'\n'* || "${WABA_ID}" == *$'\r'* ]]; then
+            echo "::error::waba_id must be a single line."
+            exit 1
+          fi
+          {
+            printf '%s\n' "agentcore:enabled=${AGENTCORE}"
+            printf '%s\n' "dashboard:enabled=${DASHBOARD}"
+            printf '%s\n' "channels:live=${CHANNELS_LIVE}"
+            if [[ -n "${WABA_ID}" ]]; then
+              printf '%s\n' "whatsapp:wabaId=${WABA_ID}"
+            fi
+          } > "${RUNNER_TEMP}/cdk-context-args"
+
+      - name: CDK diff
+        run: |
+          set -euo pipefail
+          # This CLI exits 1 when the templates differ. --fail-on never still
+          # prints the change set; synthesis and credential errors still fail.
+          args=(--all --fail-on never)
+          while IFS= read -r entry || [[ -n "${entry}" ]]; do
+            args+=(-c "${entry}")
+          done < "${RUNNER_TEMP}/cdk-context-args"
+          cdk diff "${args[@]}"
+
+      - name: CDK deploy
+        run: |
+          set -euo pipefail
+          args=(--all --require-approval never)
+          while IFS= read -r entry || [[ -n "${entry}" ]]; do
+            args+=(-c "${entry}")
+          done < "${RUNNER_TEMP}/cdk-context-args"
+          cdk deploy "${args[@]}"
