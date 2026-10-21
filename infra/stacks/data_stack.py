@@ -1,11 +1,15 @@
+from pathlib import Path
+
 from aws_cdk import (
     CfnOutput,
+    Duration,
     RemovalPolicy,
     Stack,
     aws_cognito as cognito,
     aws_dynamodb as dynamodb,
     aws_events as events,
     aws_iam as iam,
+    aws_lambda as lambda_,
     aws_s3 as s3,
     aws_stepfunctions as sfn,
 )
@@ -138,19 +142,55 @@ class OerfDataStack(Stack):
             event_bus_name="oerf-events",
         )
         # ---------------------------------------------------------
-        # Step Functions: Cold-Chain Workflow
+        # Step Functions: cold_chain_excursion_v1 workflow skeleton
         # ---------------------------------------------------------
+        workflow_stub = lambda_.Function(
+            self,
+            "ColdChainWorkflowStub",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            handler="workflow_stub.handler",
+            code=lambda_.Code.from_asset(
+                str(
+                    Path(__file__).resolve().parents[2]
+                    / "domains"
+                    / "cold_chain_excursion"
+                    / "steps"
+                ),
+                exclude=["__pycache__", "*.pyc", ".gitkeep"],
+            ),
+            timeout=Duration.seconds(30),
+            description=(
+                "Temporary deterministic integration stub for cold_chain_excursion_v1"
+            ),
+        )
+        workflow_role = iam.Role(
+            self,
+            "OerfColdChainStateMachineRole",
+            assumed_by=iam.ServicePrincipal("states.amazonaws.com"),
+            description="Execution role for the OERF cold-chain state machine",
+        )
+        workflow_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["lambda:InvokeFunction"],
+                resources=[workflow_stub.function_arn, f"{workflow_stub.function_arn}:*"],
+            )
+        )
+        asl_path = (
+            Path(__file__).resolve().parents[2]
+            / "domains"
+            / "cold_chain_excursion"
+            / "statemachine.asl.json"
+        )
+        definition = asl_path.read_text(encoding="utf-8").replace(
+            "__STUB_ARN__", workflow_stub.function_arn
+        )
         self.cold_chain_state_machine = sfn.StateMachine(
             self,
             "OerfColdChainStateMachine",
             state_machine_name="oerf-cold-chain",
             state_machine_type=sfn.StateMachineType.STANDARD,
-            definition_body=sfn.DefinitionBody.from_chainable(
-                sfn.Pass(
-                    self,
-                    "InitializeColdChainWorkflow",
-                )
-            ),
+            role=workflow_role,
+            definition_body=sfn.DefinitionBody.from_string(definition),
         )
         # ---------------------------------------------------------
         # Cognito: User Pool for Dashboard Auth

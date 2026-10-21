@@ -2,7 +2,7 @@
 
 Operational Exception Resolution Framework for a cold-chain shipment. A medicine truck must stay inside a temperature band. When it does not, the platform opens one incident for that shipment, ranks recovery options, and accepts inbound replies without handling the same message twice.
 
-The pieces below are libraries and a data stack. No Lambda or Step Functions workflow calls them yet. Persistence that will live in DynamoDB also has an in-memory implementation so tests can run without AWS. The running service will use the DynamoDB adapters; the in-memory classes stay as test doubles.
+The pieces below are libraries and the CDK stacks. The cold-chain workflow is orchestrated by a Step Functions state machine, but every task in it is still served by one temporary stub Lambda, so no real business service is called yet. Persistence that will live in DynamoDB also has an in-memory implementation so tests can run without AWS. The running service will use the DynamoDB adapters; the in-memory classes stay as test doubles.
 
 ## Flow
 
@@ -145,6 +145,8 @@ Package markers with no behavior: `oerf/__init__.py`, `oerf/platform/__init__.py
 | `domains/cold_chain_excursion/schema.json` | JSON Schema for a cold-chain config. Unknown fields are rejected. |
 | `domains/cold_chain_excursion/defaults.json` | Published defaults: profile `PP-2-8-45` (2–8°C, 45 minutes), debounce 2, assessment rates. |
 | `domains/cold_chain_excursion/messages.json` | Message catalog. Only `driver_checkin` has SMS text. |
+| `domains/cold_chain_excursion/statemachine.asl.json` | The `cold_chain_excursion_v1` state machine definition. Every task is `arn:aws:states:::lambda:invoke` pointed at `__STUB_ARN__`, which the data stack replaces with the stub's real ARN at synth time. Retries, timeouts, failure routing, and the approval and QA choice gates live here. |
+| `domains/cold_chain_excursion/steps/workflow_stub.py` | Temporary deterministic handler shared by every step. It stamps `step_name` into the workflow and returns the shape the following choice state reads. Real handlers replace it step by step. |
 | `domains/__init__.py` | Makes `domains` an importable package so the JSON ships with the install. |
 | `sim/seed/load.py` | Loads a tenant seed directory. Repeatable, no AWS. |
 | `sim/seed/t1/tenant.json` | Tenant `t1`, timezone `Asia/Kolkata`, demo clock multiplier 20. |
@@ -183,7 +185,7 @@ A normal read loads `ACTIVE`, takes the number in `version`, and then loads that
 | File | Role |
 | --- | --- |
 | `infra/app.py` | CDK app entry. Requires a resolved AWS account and registers the data stack. |
-| `infra/stacks/data_stack.py` | Platform, tenant, incident, and routing tables; evidence and report buckets; event bus `oerf-events`; a placeholder cold-chain state machine; Cognito groups `platform_admin`, `tenant_admin`, and `ops_user`. |
+| `infra/stacks/data_stack.py` | Platform, tenant, incident, and routing tables; evidence and report buckets; event bus `oerf-events`; the `cold_chain_excursion_v1` state machine with its execution role and the stub Lambda every task invokes; Cognito groups `platform_admin`, `tenant_admin`, and `ops_user`. |
 | `cdk.json` | CDK toolkit config. |
 | `infra/__init__.py`, `infra/stacks/__init__.py` | Package markers. |
 
@@ -212,7 +214,9 @@ The incident logic does not call these AWS resources yet. The DynamoDB adapters 
 | `tests/unit/inbound/test_dynamo_dedupe.py` | DynamoDB dedupe, including a retry that does not write. |
 | `tests/unit/support/fake_dynamo.py` | Fake low-level DynamoDB client used by the adapter tests. |
 | `tests/unit/test_app.py` | CDK app fails clearly when no account is resolved. |
-| `tests/unit/test_data_stack.py` | Data-stack resources and outputs. |
+| `tests/unit/test_data_stack.py` | Data-stack resources and outputs, plus the state machine's execution role, the stub Lambda, the placeholder-to-ARN substitution, and the retry and catch blocks on every task. |
+| `tests/unit/test_statemachine_definition.py` | The ASL document itself: every transition resolves, terminal states have no `Next`, the failure path records then escalates, an execution timeout guards against orphans, and the stub contract walks the happy path, a rejected approval, a declined facility, and a reopened containment to a terminal state. |
+| `tests/unit/test_workflow_stub.py` | Stub handler output shapes for the happy path, `Close`, the failure handlers, and that the incoming workflow is never mutated. |
 
 ## Project config
 
