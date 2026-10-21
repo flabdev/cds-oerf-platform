@@ -1,8 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.2** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.3** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
+
+- v1.3 (2026-10-21, ADR-020) vision uses `amazon.nova-lite-v1:0`. `USE_MOCK_BEDROCK` defaults to true unless context `channels:live` is true. `BEDROCK_MODEL_ID` comes from context `bedrock:modelId`.
 
 - v1.2 (2026-10-21, WhatsApp) channel mocks default to true unless context `channels:live` is true. `WHATSAPP_PHONE_NUMBER_ID` comes from context `whatsapp:phoneNumberId`. `WA_PHONE_NUMBER_ID_PARAM` is set on the router.
 - v1.1 (2026-10-21, OERF-301) adds env `INBOUND_QUEUE_URL` on the action handler.
@@ -461,8 +463,8 @@ This ticket does not rename variables on deployed functions. OERF-301 sets missi
 | `USE_MOCK_WHATSAPP` | Router. Default `true`. `false` only when context `channels:live` is true. | WhatsApp infra |
 | `USE_MOCK_SMS` | Router. Same default as `USE_MOCK_WHATSAPP`. | WhatsApp infra |
 | `USE_MOCK_EMAIL` | Router. Same default as `USE_MOCK_WHATSAPP`. | WhatsApp infra |
-| `USE_MOCK_BEDROCK` | deployed on vision, default `false` | OERF-310 |
-| `BEDROCK_MODEL_ID` | deployed on vision. Reserved for the value OERF-310 approves. | OERF-310 |
+| `USE_MOCK_BEDROCK` | Vision. Default `true`. `false` only when context `channels:live` is true. | ADR-020 |
+| `BEDROCK_MODEL_ID` | Vision. Context `bedrock:modelId`, default `amazon.nova-lite-v1:0`. | ADR-020 |
 | `WA_PHONE_NUMBER_ID_PARAM` | Router. Value `/oerf/whatsapp/phone-number-id`. The handler does not read it yet. | WhatsApp infra |
 | `GUARDRAIL_ID` | reserved. Not set. | OERF-310 |
 | `GUARDRAIL_VERSION` | reserved. Not set. | OERF-310 |

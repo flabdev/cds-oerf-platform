@@ -38,6 +38,7 @@ _INBOUND_TIMEOUT = Duration.seconds(30)
 _VISIBILITY_MULTIPLE = 6
 _DEFAULT_INGEST_CONCURRENCY = 5
 _WA_PHONE_NUMBER_ID_PARAM = "/oerf/whatsapp/phone-number-id"
+_DEFAULT_MODEL_ID = "amazon.nova-lite-v1:0"
 
 def _context_enabled(scope: Construct, key: str, *, default: bool) -> bool:
     """Read a boolean CDK context value. Missing context returns ``default``."""
@@ -178,6 +179,13 @@ class OerfComputeStack(Stack):
         # ---------------------------------------------------------
         # 2. Bedrock Vision Evidence Extractor Lambda (ADR-006)
         # ---------------------------------------------------------
+        # Live Bedrock calls use the same channels:live flag as the channel mocks.
+        # ADR-020: amazon.nova-lite-v1:0, in-region on demand in us-east-1.
+        # The model card publishes a bedrock-runtime endpoint for this id and
+        # the sample Invoke uses the bare id, so the resource is the
+        # foundation-model ARN. Converse is authorized as bedrock:InvokeModel.
+        bedrock_model_id = _context_str(self, "bedrock:modelId", _DEFAULT_MODEL_ID)
+        bedrock_mock = "false" if _context_enabled(self, "channels:live", default=False) else "true"
         self.evidence_analyzer_fn = self._function(
             "EvidenceAnalyzerFunction",
             function_name="oerf-evidence-analyzer",
@@ -186,25 +194,18 @@ class OerfComputeStack(Stack):
             timeout=Duration.seconds(60),
             environment={
                 "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
-                "BEDROCK_MODEL_ID": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-                "USE_MOCK_BEDROCK": "false",
+                "BEDROCK_MODEL_ID": bedrock_model_id,
+                "USE_MOCK_BEDROCK": bedrock_mock,
             },
         )
         data_stack.evidence_bucket.grant_read(self.evidence_analyzer_fn)
         data_stack.incident_table.grant_read_write_data(self.evidence_analyzer_fn)
-        # Foundation-model ARNs
-        # (arn:aws:bedrock:us-east-1::foundation-model/<id>) do not authorize
-        # these calls. Sonnet v2 is geo-inference-profile only in us-east-1
-        # (us.anthropic.claude-3-5-sonnet-20241022-v2:0, EOL 2026-07-30).
-        # Haiku's bare id returns "on-demand throughput isn't supported";
-        # in-region and geo both EOL 2026-09-10. A cross-region profile also
-        # needs the model ARN in every destination region.
-        # TODO(OERF-310): replace this resource with the approved model and
-        # guardrail ARNs. See docs/security/iam-exceptions.md.
         self.evidence_analyzer_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["bedrock:InvokeModel"],
-                resources=["*"],
+                resources=[
+                    f"arn:aws:bedrock:{self.region}::foundation-model/{bedrock_model_id}"
+                ],
             )
         )
 
