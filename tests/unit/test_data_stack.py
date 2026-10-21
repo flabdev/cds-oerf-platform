@@ -109,11 +109,26 @@ def test_oerf_event_bus_is_created(template: Template) -> None:
 
 
 def test_cold_chain_state_machine_is_wired(template: Template) -> None:
-    template.resource_count_is("AWS::StepFunctions::StateMachine", 1)
+    template.resource_count_is("AWS::StepFunctions::StateMachine", 2)
     template.has_resource_properties(
         "AWS::StepFunctions::StateMachine",
         {"StateMachineName": "oerf-cold-chain", "StateMachineType": "STANDARD"},
     )
+    template.has_resource_properties(
+        "AWS::StepFunctions::StateMachine",
+        {"StateMachineName": "oerf-engage-party", "StateMachineType": "STANDARD"},
+    )
+
+
+def test_nested_engagement_state_machine_is_deployed_as_standard(template: Template) -> None:
+    machines = template.find_resources("AWS::StepFunctions::StateMachine")
+    assert len(machines) == 2
+    definitions = [json.dumps(item["Properties"]["DefinitionString"]) for item in machines.values()]
+    assert any("engage_party_v1" in value for value in definitions)
+    assert all("__ENGAGEMENT_STUB_ARN__" not in value for value in definitions)
+    parent = next(value for value in definitions if "cold_chain_excursion_v1" in value)
+    assert "states:startExecution.sync:2" in parent
+    assert "__ENGAGE_PARTY_ARN__" not in parent
 
 
 def test_cold_chain_workflow_has_a_stub_lambda(template: Template) -> None:
@@ -129,8 +144,11 @@ def test_cold_chain_state_machine_wires_every_task_to_the_stub(
     template: Template,
 ) -> None:
     machines = template.find_resources("AWS::StepFunctions::StateMachine")
-    assert len(machines) == 1
-    definition = machines[next(iter(machines))]["Properties"]["DefinitionString"]
+    definition = next(
+        item["Properties"]["DefinitionString"]
+        for item in machines.values()
+        if "cold_chain_excursion_v1" in json.dumps(item["Properties"]["DefinitionString"])
+    )
     definition_string = json.dumps(definition)
 
     assert "__STUB_ARN__" not in definition_string
@@ -160,9 +178,12 @@ def test_cold_chain_workflow_tasks_retry_and_catch_failures(
     template: Template,
 ) -> None:
     machines = template.find_resources("AWS::StepFunctions::StateMachine")
-    definition_string = json.dumps(
-        machines[next(iter(machines))]["Properties"]["DefinitionString"]
+    definition = next(
+        item["Properties"]["DefinitionString"]
+        for item in machines.values()
+        if "cold_chain_excursion_v1" in json.dumps(item["Properties"]["DefinitionString"])
     )
+    definition_string = json.dumps(definition)
 
     assert "Lambda.TooManyRequestsException" in definition_string
     assert "States.ALL" in definition_string

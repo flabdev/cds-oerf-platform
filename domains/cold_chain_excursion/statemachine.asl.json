@@ -109,7 +109,7 @@
           "Next": "RecordFailure"
         }
       ],
-      "Next": "CancelAfterDiagnose?"
+      "Next": "Assess"
     },
     "Assess": {
       "Type": "Task",
@@ -145,7 +145,35 @@
           "Next": "RecordFailure"
         }
       ],
-      "Next": "CancelAfterAssess?"
+      "Next": "EngageDriverDiagnosis"
+    },
+    "EngageDriverDiagnosis": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn": "__ENGAGE_PARTY_ARN__",
+        "Input": {
+          "tenant_id.$": "$.tenant_id",
+          "incident_id.$": "$.incident_id",
+          "engagement_id.$": "$.diagnosis.engagement_id",
+          "role": "driver",
+          "ask": "diagnose",
+          "policy_id.$": "$.diagnosis.policy_id",
+          "facts.$": "$.context"
+        }
+      },
+      "ResultPath": "$.diagnosis.engagement_result",
+      "TimeoutSeconds": 86400,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterEngageDriverDiagnosis?"
     },
     "NeedApproval?": {
       "Type": "Choice",
@@ -913,6 +941,17 @@
         }
       ],
       "Default": "QADecision"
+    },
+    "CancelAfterEngageDriverDiagnosis?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.cancel_requested",
+          "BooleanEquals": true,
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "NeedApproval?"
     }
   }
 }

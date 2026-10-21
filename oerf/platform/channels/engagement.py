@@ -69,6 +69,18 @@ class EngagementStore(Protocol):
     ) -> Engagement:
         """Create a WAITING engagement, or return the one already stored."""
 
+    def prepare_wait(
+        self,
+        tenant_id: str,
+        incident_id: str,
+        engagement_id: str,
+        task_token: str,
+        *,
+        rung: int,
+        deadline: datetime,
+    ) -> Engagement:
+        """Persist the current rung token before outbound delivery begins."""
+
     def register_outbound(self, provider_msg_id: str, engagement: Engagement) -> None:
         """Map one provider message id to a waiting engagement."""
 
@@ -136,11 +148,37 @@ class MemoryEngagementStore:
         refs.append((engagement.incident_id, engagement.engagement_id))
         return engagement
 
+    def prepare_wait(
+        self,
+        tenant_id: str,
+        incident_id: str,
+        engagement_id: str,
+        task_token: str,
+        *,
+        rung: int,
+        deadline: datetime,
+    ) -> Engagement:
+        """Replace the active token for a new rung, conditional on WAITING."""
+        current = self.get(tenant_id, incident_id, engagement_id)
+        if current is None or current.status != "WAITING":
+            raise ValueError("only a WAITING engagement can prepare a task-token wait")
+        updated = current.model_copy(
+            update={
+                "task_token": required_text(task_token, "task_token"),
+                "rung": rung,
+                "deadline": deadline,
+            }
+        )
+        self._engagements[(updated.tenant_id, updated.incident_id, updated.engagement_id)] = updated
+        return updated
+
     def register_outbound(self, provider_msg_id: str, engagement: Engagement) -> None:
         message_id = required_text(provider_msg_id, "provider_msg_id")
         current = self.get(engagement.tenant_id, engagement.incident_id, engagement.engagement_id)
         if current is None or current.status != "WAITING":
             raise ValueError("outbound correlation requires a WAITING engagement")
+        if current.task_token != engagement.task_token:
+            raise ValueError("outbound correlation must use the current task token")
         existing = self._outbound.get(message_id)
         if existing is not None:
             if _same_engagement(existing[0], current):
@@ -284,11 +322,69 @@ class DynamoEngagementStore:
             return stored
         return engagement
 
+    def prepare_wait(
+        self,
+        tenant_id: str,
+        incident_id: str,
+        engagement_id: str,
+        task_token: str,
+        *,
+        rung: int,
+        deadline: datetime,
+    ) -> Engagement:
+        """Replace the active token before this rung's outbound message."""
+        current = self.get(tenant_id, incident_id, engagement_id)
+        if current is None:
+            raise KeyError(f"engagement {engagement_id!r} is not open")
+        if current.status != "WAITING":
+            raise ValueError("only a WAITING engagement can prepare a task-token wait")
+        updated = current.model_copy(
+            update={
+                "task_token": required_text(task_token, "task_token"),
+                "rung": rung,
+                "deadline": deadline,
+            }
+        )
+        try:
+            self._client.update_item(
+                TableName=self._incident,
+                Key=key(
+                    incident_pk(updated.tenant_id, updated.incident_id),
+                    f"ENG#{updated.engagement_id}",
+                ),
+                UpdateExpression=(
+                    "SET #token = :token, #rung = :rung, "
+                    "#deadline = :deadline, #document = :document"
+                ),
+                ConditionExpression="#status = :waiting",
+                ExpressionAttributeNames={
+                    "#token": "task_token",
+                    "#rung": "rung",
+                    "#deadline": "deadline",
+                    "#document": "document",
+                    "#status": "status",
+                },
+                ExpressionAttributeValues={
+                    ":token": s(updated.task_token),
+                    ":rung": n(updated.rung),
+                    ":deadline": s(iso_z(updated.deadline)),
+                    ":document": s(updated.model_dump_json()),
+                    ":waiting": s("WAITING"),
+                },
+            )
+        except Exception as exc:
+            if is_conditional_failure(exc):
+                raise ValueError("only a WAITING engagement can prepare a task-token wait") from exc
+            raise
+        return updated
+
     def register_outbound(self, provider_msg_id: str, engagement: Engagement) -> None:
         message_id = required_text(provider_msg_id, "provider_msg_id")
         current = self.get(engagement.tenant_id, engagement.incident_id, engagement.engagement_id)
         if current is None or current.status != "WAITING":
             raise ValueError("outbound correlation requires a WAITING engagement")
+        if current.task_token != engagement.task_token:
+            raise ValueError("outbound correlation must use the current task token")
         existing = self._correlation(message_id)
         if existing is not None:
             if _same_engagement(existing, current):
