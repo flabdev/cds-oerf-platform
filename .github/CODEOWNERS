@@ -1,0 +1,23 @@
+# Placeholder @-handles. Replace them with the real GitHub usernames.
+# The last matching pattern wins.
+
+# Ananda
+/infra/ @fission-anand
+/docs/interfaces.md @fission-anand
+/scripts/whatsapp/ @fission-anand
+/.github/ @fission-anand
+
+# Mudita
+/web/ @mudita-srivastava-eng
+/oerf/platform/api/ @mudita-srivastava-eng
+/oerf/platform/channels/ @mudita-srivastava-eng
+/oerf/platform/report/ @mudita-srivastava-eng
+
+# Chaitanya
+/infra/stacks/data_stack.py @chaitanyafl
+
+# Vivek
+/domains/ @vivek-sharma-fission
+/oerf/platform/ingest/ @vivek-sharma-fission
+/oerf/platform/inbound/ @vivek-sharma-fission
+/oerf/platform/incidents/ @vivek-sharma-fission
