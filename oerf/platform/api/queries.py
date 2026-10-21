@@ -86,19 +86,25 @@ class DynamoIncidentQuery:
 
 
 class SqsActionQueue:
-    """FIFO send. A failure raises and the caller does not report success."""
+    """Send one message. A failure raises and the caller does not report success.
+
+    FIFO ids are set only when the queue URL ends in ``.fifo``. A standard
+    queue leaves duplicates to the inbound handler's ``INMSG#`` dedupe.
+    """
 
     def __init__(self, client: Any, queue_url: str) -> None:
         self._client = client
         self._url = queue_url
 
     def send(self, *, body: dict[str, Any], dedup_id: str) -> bool:
-        self._client.send_message(
-            QueueUrl=self._url,
-            MessageBody=json.dumps(body),
-            MessageDeduplicationId=dedup_id,
-            MessageGroupId=str(body.get("tenant_id") or "dashboard"),
-        )
+        params: dict[str, Any] = {
+            "QueueUrl": self._url,
+            "MessageBody": json.dumps(body),
+        }
+        if self._url.endswith(".fifo"):
+            params["MessageDeduplicationId"] = dedup_id
+            params["MessageGroupId"] = str(body.get("tenant_id") or "dashboard")
+        self._client.send_message(**params)
         return True
 
 

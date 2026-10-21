@@ -7,10 +7,12 @@ export function liveConfig(env) {
   const apiUrl = trimSlash(env?.VITE_API_URL);
   const domain = trimSlash(env?.VITE_COGNITO_DOMAIN).replace(/^https:\/\//, "");
   const clientId = String(env?.VITE_USER_POOL_CLIENT_ID || "").trim();
+  // OerfComputeStack output WebSocketApiUrl. One WebSocket for the dashboard.
+  const wsUrl = trimSlash(env?.VITE_WS_URL);
   if (!apiUrl || !domain || !clientId) {
     return { mode: "demo" };
   }
-  return { mode: "live", apiUrl, domain, clientId };
+  return { mode: "live", apiUrl, domain, clientId, wsUrl };
 }
 
 export function principalFromIdToken(token, now = Date.now()) {
