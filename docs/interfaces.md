@@ -242,7 +242,7 @@ Pre-correlation WhatsApp normalization is `NormalizedMessage` in [oerf/platform/
 
 ## 5. Inbound, JOIN, and correlation
 
-Owner: inbound handler (name pending, OERF-201–207). Library pieces that already exist: `oerf.platform.inbound.normalize`, `dedupe`, `dynamo`. No inbound Lambda is deployed.
+Owner: inbound handler (name pending, OERF-201–207). Library pieces that already exist: `oerf.platform.inbound.normalize`, `dedupe`, `dynamo`, and `oerf.platform.inbound.handler`. No inbound Lambda is deployed.
 
 Order for a provider message:
 
@@ -253,6 +253,10 @@ Order for a provider message:
 5. Media is stored as evidence. The handler then calls `states:SendTaskSuccess` on the current rung token. Classification happens in the engagement Interpret step (ADR-017), not here.
 
 Dashboard messages skip steps 2–4 and correlate on `engagement_id`.
+
+The handler resumes only when the resolved sender's `tenant_id` and `contact_id` both match the correlated engagement: a quoted message id cannot cross a tenant boundary, and a shared number stays bound to the party that was contacted. Every duplicate, unknown, late, invalid, or mismatched record is acknowledged and logged without a callback.
+
+`oerf.platform.inbound.handler` covers steps 1 and 2, the `OUTMSG#` half of step 4, and the resume in step 5. The `ADDR#` fallback with its `disambiguation` and out-of-context replies, `JOIN` in step 3, and evidence storage in step 5 are not in that module yet and remain open.
 
 Dedupe item, agreed by the spec and [oerf/platform/inbound/dedupe.py](../oerf/platform/inbound/dedupe.py):
 
@@ -413,7 +417,7 @@ IAM column is the target. Current wildcards are called out and are not the targe
 | `domains.cold_chain_excursion.steps.qa` | `handler` | pending (OERF-201–207) | Step Functions | Read incident and report pointer. No SES. | not deployed |
 | `domains.cold_chain_excursion.steps.close` | `handler` | pending (OERF-201–207) | Step Functions | Write `CLOSED`, delete the lock item. No messaging. | not deployed |
 | `oerf.platform.ingest.handler` | `handler` | pending (OERF-201–207) | EventBridge `sim.reefer` / `TemperatureReading` | Read routing device item and tenant config. Transact incident META plus lock. `states:StartExecution` on `STATE_MACHINE_ARN` only. | not deployed |
-| `oerf.platform.inbound.handler` | `handler` | pending (OERF-201–207) | SQS inbound queue | Read/write routing and incident. Write evidence objects. `states:SendTaskSuccess` and `states:SendTaskFailure`. No channel-send APIs. | not deployed |
+| `oerf.platform.inbound.handler` | `handler` | pending (OERF-201–207) | SQS inbound queue | Read/write routing and incident. Write evidence objects. `states:SendTaskSuccess` only; section 5 keeps reply classification in Interpret, so this role sends no `states:SendTaskFailure`. No channel-send APIs. | not deployed |
 | `oerf.platform.channels.router` | `handler` | Mudita | Step Functions / direct invoke | Read/write routing (`OUTMSG#`, `ADDR#`). The only role with WhatsApp, SMS, and SES send. | deployed `oerf-channel-router` |
 | `oerf.platform.report.generator` | `handler` | Mudita (OERF-117) | Step Functions | Read incident. Write `REPORT_BUCKET_NAME`. SES send is not the target (ADR-008). | deployed `oerf-report-generator` |
 | `oerf.platform.api.stream_broadcaster` | `handler` | Ananda (OERF-308) | Incident table stream | Read incident stream. Read routing subscriptions. Delete gone connections. `execute-api:ManageConnections` on this API. No Step Functions, no incident writes. | deployed `oerf-stream-broadcaster` |
@@ -428,9 +432,9 @@ Current IAM that the target replaces:
 - Channel router: `ses:SendEmail`, `sns:Publish`, `socialmessaging:*` on `*`.
 - Evidence analyzer: `bedrock:InvokeModel` on `*`. No guardrail.
 - Report generator: `ses:SendEmail` on `*`.
-- Action handler: `states:SendTaskSuccess` and `states:SendTaskFailure` on `*`. Removal of `SendTaskSuccess` from this role is Ananda (OERF-301). The inbound role is the one that receives it (ADR-028). `SendTaskFailure` follows the same split.
+- Action handler: `states:SendTaskSuccess` and `states:SendTaskFailure` on `*`. Removal of `SendTaskSuccess` from this role is Ananda (OERF-301). The inbound role is the one that receives it (ADR-028). `SendTaskFailure` is not the inbound role's either: a decline or an unusable reply travels through the engagement decision branch (section 5), so no role sends it.
 
-`states:SendTaskSuccess` and `states:SendTaskFailure` are not resource-scopable. The wildcard resource stays, limited to the inbound role, and is recorded in `docs/security/iam-exceptions.md` when that file exists.
+`states:SendTaskSuccess` is not resource-scopable. The wildcard resource stays, limited to the inbound role, and is recorded in `docs/security/iam-exceptions.md` when that file exists. `states:SendTaskFailure` is not granted to the inbound role.
 
 Package markers for `domains.cold_chain_excursion.steps` are not in the tree yet. OERF-301 wires the handler strings above and does not invent a second path.
 
