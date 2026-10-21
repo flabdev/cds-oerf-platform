@@ -47,7 +47,7 @@ def get_table():
 
 
 def connection_ttl() -> int:
-    """Return the DynamoDB TTL applied to connection and subscription rows."""
+    """Return the epoch-second ``expires_at`` for connection and subscription rows."""
     return int(time.time()) + CONNECTION_TTL_SECONDS
 
 
@@ -123,7 +123,7 @@ def handle_connect(table, event: dict[str, Any], connection_id: str, ttl: int) -
             "role": str(authorizer.get("role") or binding.get("role") or DEFAULT_ROLE),
             "sub": str(authorizer.get("sub") or binding.get("sub") or ""),
             "connected_at": int(time.time()),
-            "ttl": ttl,
+            "expires_at": ttl,
         }
     )
     return {"statusCode": 200, "body": "Connected"}
@@ -162,7 +162,7 @@ def handle_subscribe(
         "connection_id": connection_id,
         "tenant_id": tenant_id,
         "scope": subscription["scope"],
-        "ttl": ttl,
+        "expires_at": ttl,
     }
     if subscription["scope"] == "incident":
         item["incident_id"] = subscription["incident_id"]

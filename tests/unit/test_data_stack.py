@@ -220,6 +220,22 @@ def test_dynamodb_tables_have_point_in_time_recovery(template: Template) -> None
         }, logical_id
 
 
+def test_ttl_expires_at_is_enabled_only_on_incident_and_routing(
+    template: Template,
+) -> None:
+    """INGEST#, DEBOUNCE#, INMSG# and OUTMSG# expire. Platform and tenant do not."""
+    specification = {"AttributeName": "expires_at", "Enabled": True}
+    enabled: list[str] = []
+    for logical_id, table in template.find_resources("AWS::DynamoDB::Table").items():
+        spec = table["Properties"].get("TimeToLiveSpecification")
+        if logical_id.startswith(("IncidentTable", "RoutingTable")):
+            assert spec == specification, logical_id
+            enabled.append(logical_id)
+        else:
+            assert spec is None, logical_id
+    assert len(enabled) == 2
+
+
 def test_incident_table_defines_exactly_one_gsi_by_status(
     template: Template,
 ) -> None:

@@ -177,7 +177,7 @@ def bind_connection(connection_id: str, tenant_id: str, role: str, sub: str) -> 
                 "role": role,
                 "sub": sub,
                 "connected_at": now,
-                "ttl": now + CONNECTION_TTL_SECONDS,
+                "expires_at": now + CONNECTION_TTL_SECONDS,
             }
         )
     except Exception as exc:
