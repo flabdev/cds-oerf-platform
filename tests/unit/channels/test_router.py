@@ -152,8 +152,32 @@ def test_whatsapp_adapter_uses_the_simulated_sender(monkeypatch) -> None:
 
     result = WhatsAppProvider().send("+910000000101", "hello", "driver_checkin")
 
-    assert result.delivered is True
+    assert result.delivered is False
+    assert result.simulated is True
+    assert result.reason == "simulated"
     assert result.provider_msg_id
+
+
+def test_a_simulated_channel_does_not_fall_through_or_count_as_delivered() -> None:
+    registry, engagements = _open()
+    whatsapp = FakeProvider("whatsapp", simulated=True)
+    sms = FakeProvider("sms")
+
+    result = route_outbound(
+        _request(),
+        registry=registry,
+        engagements=engagements,
+        providers={"whatsapp": whatsapp, "sms": sms},
+        messages=MESSAGES,
+    )
+
+    assert result.delivered is False
+    assert result.simulated is True
+    assert result.reason == "simulated"
+    assert result.channel == "whatsapp"
+    assert whatsapp.calls
+    assert sms.calls == []
+    assert engagements.correlate("whatsapp-1") is None
 
 
 def test_provider_sdks_are_only_called_from_the_router() -> None:

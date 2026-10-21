@@ -15,7 +15,8 @@ tenant in `/admin/tenants/{tid}`.
 ## Incident reads
 
 `GET /incidents` returns `incident_id`, `state`, `stage`, `shipment_id`,
-and `allowance_remaining` for the claimed tenant.
+and `allowance_remaining` for the claimed tenant. `limit` defaults to 50
+and `next_cursor` is the last id on a full page.
 
 `GET /incidents/{id}` adds `timeline`, `options`, `recommendation`,
 `approval`, `evidence`, and `engagement_status`.
@@ -27,9 +28,14 @@ state.
 ## Actions
 
 `POST /incidents/{id}/actions` accepts `confirm_transfer`, `pick_option`,
-and `cancel`. `pick_option` requires `option_id`. The response is `202`
-and `action_id`. The same `Idempotency-Key` returns the same `action_id`
-and does not enqueue a second message.
+and `cancel`. `pick_option` requires `option_id`. `confirm_transfer` is
+allowed in `ASSESSING`, `AWAITING_APPROVAL`, `SECURING_FACILITY`, and
+`IN_TRANSIT`. `pick_option` is allowed in `ASSESSING` and
+`AWAITING_APPROVAL`. `cancel` is allowed until `CLOSED` or `CANCELLED`.
+`ops_user`, `tenant_admin`, and `platform_admin` may enqueue. The response
+is `202` and `action_id`. The same `Idempotency-Key` returns the same
+`action_id` and does not enqueue a second message. A queue failure is `503`
+and does not change the incident.
 
 SQS message body:
 
@@ -40,7 +46,10 @@ SQS message body:
   "option_id": null,
   "tenant_id": "t1",
   "incident_id": "INC-000001",
-  "actor": "cognito-sub"
+  "actor": "cognito-sub",
+  "channel": "dashboard",
+  "type": "text",
+  "text": "confirm_transfer"
 }
 ```
 
@@ -85,6 +94,39 @@ Fanout payload already emitted by the stream broadcaster:
 
 A connection receives that event only when its subscription tenant matches
 and its incident is `ALL` or the same incident id.
+
+## Sandbox inbound
+
+OERF-205 owns normalization, dedupe, and task-token resume. After
+`normalize_inbound`, the sandbox ingress calls `handle_sandbox_message` in
+`oerf/platform/sandbox/join.py`. Mudita owns that handler. It does not call
+`apply_opt_out`, because that would change every tenant registered on the
+phone.
+
+The whole trimmed message `JOIN` (any case) from a number with no production
+phone-index row creates an `sbx` contact, a shipment session, and opt-in.
+Consent time and the inbound channel are stored on the session. The session
+expires 24 hours after it starts. The same number, while that session is
+active, gets the same introduction again and does not take another daily
+slot. A second inbound id for a message that was already answered returns
+the stored result.
+
+The phone index is read only to see whether any row belongs to a tenant
+other than `sbx`. Those rows are not copied into the reply, and JOIN does
+not write them. A production number is rejected. `STOP` or `UNSUBSCRIBE`
+changes opt-in only for the `sbx` contact and blocks a later provider send.
+
+Platform rows use partition key `PLATFORM#sandbox` on the routing table:
+`SETTINGS` (`join_phone` or `dashboard_only`) and `JOIN#{YYYY-MM-DD}` (UTC,
+maximum 20). `reset_sandbox_tenant` deletes `sbx` session, shipment, and
+contact rows. It does not delete or reset those platform rows. Deployment
+reset (Ananda, OERF-305) must use that function rather than wiping
+`PLATFORM#sandbox`.
+
+`dashboard_only` creates no contact and does not call a provider. The reply
+has `simulated` true, `delivered` false, and channel `dashboard`.
+`route_outbound` returns the same shape, with reason `simulated`, when it
+is given the sandbox store and the tenant is `sbx`.
 
 ## Environment
 
