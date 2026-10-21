@@ -183,7 +183,7 @@ The simulator keeps `tenant_id` and `shipment_id` on `Detail` (OERF-118). Bus na
 }
 ```
 
-Ingest loads `PK=DEVICE#{device_id}`, `SK=META` on the routing table. That item's tenant and shipment are the ones used to open or update the incident. The event is dropped when `Detail.tenant_id` is present and differs from the registry tenant. An unknown device is dropped. The EventBridge rule matches source and detail-type only. Thresholds stay in tenant config.
+Ingest loads `PK=DEVICE#{device_id}`, `SK=META` on the routing table. That item's tenant and shipment are the ones used to open or update the incident. The event is dropped when `Detail.tenant_id` is present and differs from the registry tenant. An unknown device is dropped. OERF-116 writes the row through `register_device` with `tenant_id`, `shipment_id`, and `asset_id`. Demo rows come from `sim/seed/*/shipments.json` (`device`, `truck`). Ingest only reads the row. The EventBridge rule matches source and detail-type only. Thresholds stay in tenant config.
 
 ### 4.2 Lifecycle
 
@@ -249,7 +249,7 @@ Order for a provider message:
 1. Dedupe. Duplicate `INMSG#` rows are dropped.
 2. Opt-out keywords (`STOP`, `UNSUBSCRIBE`, and the tenant's local equivalents) before correlation. Set opt-in false and stop that contact's engagements.
 3. `JOIN` (exact text, case-insensitive) when `PHONE#{e164}` has no item whose sort key is a non-sandbox tenant. A number registered to any non-sandbox tenant is not joined. A repeat `JOIN` returns that judge's existing sandbox shipment. The daily counter is `PK=SANDBOX#JOINS#{date}`, `SK=META`, conditional increment while `count` is below `sandbox.max_joins_per_day` (platform setting, default 20). Over the cap, the reply logical name is `sandbox_full`. Under the cap, the sandbox tenant gains a contact (opted in) and a shipment, and the logical reply is `judge_welcome`. Both replies go out through the channel router.
-4. Correlation. `context_msg_id` loads `OUTMSG#{id}`. With no context id, `ADDR#{channel}#{address}` loads open engagements: one match is used, several tenants get `disambiguation`, none gets the out-of-context reply.
+4. Correlation. `context_msg_id` loads `OUTMSG#{id}`. With no context id, `ADDR#{channel}#{address}` loads open engagements: one match is used, several tenants get `disambiguation`, none gets the out-of-context reply. The channel router writes that address row, SK `ENG#{tid}#{iid}#{eid}`, when it registers an outbound message, and deletes it when the engagement leaves `WAITING`. The address is the phone or email that was sent; it is not taken from the inbound body.
 5. Media is stored as evidence. The handler then calls `states:SendTaskSuccess` on the current rung token. Classification happens in the engagement Interpret step (ADR-017), not here.
 
 Dashboard messages skip steps 2–4 and correlate on `engagement_id`.

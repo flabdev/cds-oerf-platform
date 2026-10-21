@@ -48,6 +48,9 @@ def test_whatsapp_failure_falls_back_to_sms_and_correlates() -> None:
     assert result.attempts[0].incident_id == "INC-000001"
     assert result.attempts[0].engagement_id == "eng-1"
     assert engagements.correlate("sms-1") is not None
+    assert [item.engagement_id for item in engagements.for_address("sms", "+910000000101")] == [
+        "eng-1"
+    ]
     assert whatsapp.calls and sms.calls
 
 
