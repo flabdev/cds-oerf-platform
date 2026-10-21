@@ -226,6 +226,55 @@ def test_s3_buckets_use_managed_encryption(template: Template) -> None:
         }, logical_id
 
 
+def test_user_pool_keeps_its_id_and_adds_tenant_claim_outside_schema(
+    template: Template,
+) -> None:
+    pools = template.find_resources("AWS::Cognito::UserPool")
+    assert len(pools) == 1
+    logical_id, pool = next(iter(pools.items()))
+    properties = pool["Properties"]
+
+    assert logical_id.startswith("OerfUserPool")
+    assert properties["UserPoolName"] == "oerf-users"
+    assert "Schema" not in properties
+    assert properties["UserPoolTier"] == "ESSENTIALS"
+    assert pool["DeletionPolicy"] == "Retain"
+    assert pool["UpdateReplacePolicy"] == "Retain"
+    pre_token = properties["LambdaConfig"]["PreTokenGenerationConfig"]
+    assert pre_token["LambdaVersion"] == "V2_0"
+    assert "PreTokenGeneration" not in properties["LambdaConfig"]
+
+
+def test_tenant_attribute_custom_resource_targets_the_existing_pool(
+    template: Template,
+) -> None:
+    resources = template.find_resources("AWS::CloudFormation::CustomResource")
+    assert len(resources) == 1
+    properties = next(iter(resources.values()))["Properties"]
+    assert "UserPoolId" in properties
+    assert set(properties) >= {"ServiceToken", "UserPoolId"}
+
+
+def test_tenant_attribute_role_is_limited_to_the_user_pool(template: Template) -> None:
+    statements = []
+    for policy in template.find_resources("AWS::IAM::Policy").values():
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            actions = statement.get("Action", [])
+            if isinstance(actions, str):
+                actions = [actions]
+            if "cognito-idp:AddCustomAttributes" in actions:
+                statements.append(statement)
+
+    assert len(statements) == 1
+    statement = statements[0]
+    assert statement["Action"] == [
+        "cognito-idp:DescribeUserPool",
+        "cognito-idp:AddCustomAttributes",
+    ]
+    assert statement["Resource"] != "*"
+    assert "Fn::GetAtt" in statement["Resource"] or isinstance(statement["Resource"], dict)
+
+
 def test_persistent_resources_use_retain_removal_policy(
     template: Template,
 ) -> None:
