@@ -57,6 +57,10 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
 
     assert tasks
     for name, state in tasks.items():
+        if name == "EngageDriverDiagnosis":
+            assert state["Resource"] == "arn:aws:states:::states:startExecution.sync:2"
+            assert state["Parameters"]["StateMachineArn"] == "__ENGAGE_PARTY_ARN__"
+            continue
         expected_resource = (
             "arn:aws:states:::lambda:invoke.waitForTaskToken"
             if name == "Approval"
@@ -79,6 +83,48 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
         else:
             expected = "FailureRoute" if name == "RecordFailure" else "RecordFailure"
             assert state["Catch"][-1]["Next"] == expected, name
+
+
+def test_nested_engagement_is_a_token_waiting_state_machine_and_is_wired_after_assess() -> None:
+    definition = json.loads(
+        (ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8")
+    )
+    states = definition["States"]
+    parent_states = load_definition()["States"]
+    parent = parent_states["EngageDriverDiagnosis"]
+    assert parent_states["Assess"]["Next"] == "EngageDriverDiagnosis"
+    assert parent["Next"] == "CancelAfterEngageDriverDiagnosis?"
+    assert parent_states["CancelAfterEngageDriverDiagnosis?"]["Default"] == "NeedApproval?"
+
+    assert definition["StartAt"] == "ComputeNextRung"
+    assert parent["Resource"] == "arn:aws:states:::states:startExecution.sync:2"
+    assert parent["Parameters"]["Input"]["role"] == "driver"
+    assert parent["Parameters"]["Input"]["ask"] == "diagnose"
+    assert states["SendViaRouter"]["Resource"].endswith(".waitForTaskToken")
+    assert states["SendViaRouter"]["Parameters"]["Payload"]["task_token.$"] == "$$.Task.Token"
+    assert states["SendViaRouter"]["TimeoutSecondsPath"] == "$.cadence.timeout_seconds"
+    assert states["SendViaRouter"]["ResultPath"] == "$.reply"
+    assert states["Interpret"]["Next"] == "InterpretResult"
+    assert states["SendFinalQuestion"]["TimeoutSeconds"] == 86400
+    assert states["SendViaRouter"]["Resource"].endswith(".waitForTaskToken")
+    assert states["InterpretResult"]["Choices"][0]["Next"] == "HandleCallback"
+    assert states["SendViaRouter"]["Catch"][0]["Next"] == "AdvanceRung"
+    assert states["CallbackPause"]["Next"] == "ComputeNextRung"
+    assert states["Answered"]["Parameters"]["status"] == "answered"
+    assert states["Exhausted"]["Parameters"]["status"] == "exhausted"
+    assert states["SendOneWay"]["Resource"] == "arn:aws:states:::lambda:invoke"
+    assert states["HandleCallback"]["Next"] == "CallbackPause"
+
+
+def test_every_nested_engagement_transition_points_to_a_declared_state() -> None:
+    definition = json.loads(
+        (ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8")
+    )
+    states = definition["States"]
+
+    for name, state in states.items():
+        for target in transition_targets(state):
+            assert target in states, f"{name} -> {target}"
 
 
 def test_human_approval_uses_bounded_task_token_and_timeout_route() -> None:
@@ -124,6 +170,7 @@ def test_cancellation_is_checked_after_work_steps_and_infeasible_assessment_esca
         "GatherContext",
         "Diagnose",
         "Assess",
+        "EngageDriverDiagnosis",
         "Approval",
         "SecureFacility",
         "Act",
@@ -137,6 +184,12 @@ def test_cancellation_is_checked_after_work_steps_and_infeasible_assessment_esca
 
     for step in work_steps:
         gate = states[step]["Next"]
+        if step == "Diagnose":
+            assert gate == "Assess"
+            continue
+        if step == "Assess":
+            assert gate == "EngageDriverDiagnosis"
+            gate = states[gate]["Next"]
         assert gate.startswith("CancelAfter"), step
         assert states[gate]["Choices"] == [
             {
@@ -302,6 +355,11 @@ def simulate(event: dict, handler_fn=handler, max_steps: int = 40) -> tuple:
         if state["Type"] == "Succeed":
             return "WorkflowComplete", data
         if state["Type"] == "Task":
+            if state["Resource"] == "arn:aws:states:::states:startExecution.sync:2":
+                data["diagnosis"] = {"engagement_id": "ENG-1", "policy_id": "critical_field"}
+                data["engagement_result"] = {"status": "answered", "intent": "unit_status"}
+                current = state["Next"]
+                continue
             if state["Resource"].endswith(".waitForTaskToken"):
                 # Offline contract: the real inbound callback resumes the task;
                 # the deterministic stub supplies the same valid reply.
