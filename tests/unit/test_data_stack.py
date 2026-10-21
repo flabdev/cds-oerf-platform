@@ -308,3 +308,9 @@ def test_persistent_resources_use_retain_removal_policy(
     for logical_id, resource in persistent_resources.items():
         assert resource["DeletionPolicy"] == "Retain", logical_id
         assert resource["UpdateReplacePolicy"] == "Retain", logical_id
+
+def test_cold_chain_state_machine_has_tracing(template):
+    template.has_resource_properties(
+        "AWS::StepFunctions::StateMachine",
+        {"StateMachineName": "oerf-cold-chain", "TracingConfiguration": {"Enabled": True}},
+    )
