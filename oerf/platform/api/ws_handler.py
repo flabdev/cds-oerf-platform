@@ -68,25 +68,29 @@ def get_connection_binding(table, connection_id: str) -> dict[str, Any]:
     return binding if isinstance(binding, dict) else {}
 
 
-def parse_subscription(event: dict[str, Any]) -> tuple[str | None, str | None]:
-    """Return ``(incident_id, requested_tenant_id)`` from the subscribe payload."""
+def parse_subscription(event: dict[str, Any]) -> dict[str, str] | None:
+    """Return the scope, or None when the body is not the contract shape."""
+
     try:
         body = json.loads(event.get("body") or "{}")
     except (TypeError, ValueError):
-        body = {}
-    if not isinstance(body, dict):
-        return None, None
-
+        return None
+    if not isinstance(body, dict) or set(body) - {"scope", "incident_id"}:
+        return None
+    scope = body.get("scope")
+    if scope == "tenant":
+        if "incident_id" in body:
+            return None
+        return {"scope": "tenant"}
+    if scope != "incident":
+        return None
     incident_id = body.get("incident_id")
-    if isinstance(incident_id, str) and incident_id.strip():
-        incident_id = incident_id.strip()[:MAX_INCIDENT_ID_LENGTH]
-    else:
-        incident_id = None
-
-    requested_tenant = body.get("tenant_id")
-    if not isinstance(requested_tenant, str) or not requested_tenant.strip():
-        requested_tenant = None
-    return incident_id, requested_tenant
+    if not isinstance(incident_id, str):
+        return None
+    incident_id = incident_id.strip()
+    if not incident_id or incident_id in {"ALL", "*"} or len(incident_id) > MAX_INCIDENT_ID_LENGTH:
+        return None
+    return {"scope": "incident", "incident_id": incident_id}
 
 
 def handle_connect(table, event: dict[str, Any], connection_id: str, ttl: int) -> dict[str, Any]:
@@ -147,25 +151,22 @@ def handle_subscribe(
         logger.warning("Rejecting subscribe for unknown connection %s", connection_id)
         return {"statusCode": 401, "body": "Unauthorized"}
 
-    incident_id, requested_tenant = parse_subscription(event)
-    if requested_tenant and requested_tenant != tenant_id:
-        logger.warning(
-            "Connection %s is bound to tenant %s but requested tenant %s; using the bound tenant",
-            connection_id,
-            tenant_id,
-            requested_tenant,
-        )
+    subscription = parse_subscription(event)
+    if subscription is None:
+        logger.warning("Rejecting subscribe for connection %s: invalid scope", connection_id)
+        return {"statusCode": 400, "body": "Invalid subscription"}
 
-    table.put_item(
-        Item={
-            "pk": f"WS_SUB#{tenant_id}",
-            "sk": f"CONN#{connection_id}",
-            "connection_id": connection_id,
-            "tenant_id": tenant_id,
-            "incident_id": incident_id or "ALL",
-            "ttl": ttl,
-        }
-    )
+    item = {
+        "pk": f"WS_SUB#{tenant_id}",
+        "sk": f"CONN#{connection_id}",
+        "connection_id": connection_id,
+        "tenant_id": tenant_id,
+        "scope": subscription["scope"],
+        "ttl": ttl,
+    }
+    if subscription["scope"] == "incident":
+        item["incident_id"] = subscription["incident_id"]
+    table.put_item(Item=item)
     return {
         "statusCode": 200,
         "body": json.dumps({"status": "Subscribed", "tenant_id": tenant_id}),

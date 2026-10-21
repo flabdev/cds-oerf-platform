@@ -42,15 +42,18 @@ export function incidentListView(incidents) {
   return { state: "ready", incidents };
 }
 
-export function actionRequest(incidentId, action, optionId, idempotencyKey) {
-  const body = { action };
+export function actionRequest(incidentId, action, optionId, actionId, engagementId) {
+  const body = { action, action_id: actionId };
+  if (engagementId) {
+    body.engagement_id = engagementId;
+  }
   if (optionId) {
     body.option_id = optionId;
   }
   return {
     method: "POST",
     path: `/incidents/${incidentId}/actions`,
-    idempotencyKey,
+    idempotencyKey: actionId,
     body,
   };
 }

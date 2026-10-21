@@ -1,11 +1,8 @@
-"""REST API Action Handler for Human Approval & Incident Ingestion (ADR-004, ADR-009).
+"""HTTP API for dashboard actions and incident reads.
 
-Endpoints:
-- POST /incidents/{id}/action : Submit human operator decision (Approve/Reject/Override).
-- POST /incidents/trigger     : Ingest new excursion event and launch Step Functions.
-- GET  /incidents/{id}        : Retrieve incident state.
-
-Enforces trusted authorizer claims and tenant isolation (ADR-011).
+POST /incidents/{id}/actions queues the inbound message from the interface
+contract. GET reads use TENANT#{tid}#INC#{iid}. This handler does not call
+states:SendTaskSuccess.
 """
 
 from __future__ import annotations
@@ -13,8 +10,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -32,11 +31,17 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 INCIDENT_TABLE_NAME = os.environ.get("INCIDENT_TABLE_NAME", "")
-ROUTING_TABLE_NAME = os.environ.get("ROUTING_TABLE_NAME", "")
 STATE_MACHINE_ARN = os.environ.get("STATE_MACHINE_ARN", "")
+INBOUND_QUEUE_URL = os.environ.get("INBOUND_QUEUE_URL") or os.environ.get("ACTION_QUEUE_URL", "")
+
+_ACTIONS = frozenset({"confirm_transfer", "pick_option", "cancel"})
+_ACTION_FIELDS = frozenset({"action", "action_id", "engagement_id", "option_id", "reason"})
+_ACTION_ROLES = frozenset({"platform_admin", "tenant_admin", "ops_user"})
+_NEEDS_ENGAGEMENT = frozenset({"confirm_transfer", "pick_option"})
 
 _dynamodb = None
 _sfn = None
+_sqs = None
 
 
 def get_dynamodb():
@@ -51,6 +56,13 @@ def get_sfn():
     if _sfn is None:
         _sfn = boto3.client("stepfunctions")
     return _sfn
+
+
+def get_sqs():
+    global _sqs
+    if _sqs is None:
+        _sqs = boto3.client("sqs")
+    return _sqs
 
 
 def cors_response(status_code: int, body: Any) -> dict[str, Any]:
@@ -152,102 +164,48 @@ def handle_trigger_incident(tenant_id: str, body: dict[str, Any]) -> dict[str, A
     )
 
 
-def handle_operator_action(
+def handle_dashboard_action(
     tenant_id: str,
     incident_id: str,
     body: dict[str, Any],
-    operator_role: str = DEFAULT_ROLE,
+    user_id: str | None,
 ) -> dict[str, Any]:
-    """Process human operator action (APPROVE, REJECT, OVERRIDE) and unpause Step Functions."""
-    action = body.get("action", "APPROVE").upper()
-    notes = body.get("notes", "")
-    now = int(time.time())
+    """Queue one dashboard action. The inbound handler resumes the workflow."""
 
-    # Update incident timeline
-    if INCIDENT_TABLE_NAME:
-        table = get_dynamodb().Table(INCIDENT_TABLE_NAME)
-        table.update_item(
-            Key={"pk": f"TENANT#{tenant_id}", "sk": f"INCIDENT#{incident_id}"},
-            UpdateExpression=(
-                "SET #st = :st, updated_at = :u, "
-                "timeline = list_append(if_not_exists(timeline, :empty), :tl)"
-            ),
-            ExpressionAttributeNames={"#st": "status"},
-            ExpressionAttributeValues={
-                ":st": f"ACTION_{action}",
-                ":u": now,
-                ":empty": [],
-                ":tl": [
-                    {
-                        "time": now,
-                        "event": f"HUMAN_{action}",
-                        "operator": operator_role,
-                        "notes": notes,
-                    }
-                ],
-            },
-        )
-
-    # Resume Step Functions if a task token was supplied or stored for this incident
-    task_token = body.get("task_token")
-    token_key = {
-        "pk": f"TENANT#{tenant_id}#INCIDENT#{incident_id}",
-        "sk": "ACTIVE_TASK_TOKEN",
+    parsed = _action_body(body)
+    if parsed is None:
+        return cors_response(400, {"error": "invalid_body"})
+    if not INBOUND_QUEUE_URL:
+        return cors_response(503, {"error": "queue_unavailable"})
+    message = {
+        "tenant_id": tenant_id,
+        "incident_id": incident_id,
+        "engagement_id": parsed["engagement_id"],
+        "channel": "dashboard",
+        "provider_msg_id": None,
+        "context_msg_id": None,
+        "action_id": parsed["action_id"],
+        "action": parsed["action"],
+        "option_id": parsed["option_id"],
+        "user_id": user_id,
+        "type": "text",
+        "text": None,
+        "media_ref": None,
+        "received_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    stored_token = False
-    routing_table = (
-        get_dynamodb().Table(ROUTING_TABLE_NAME) if ROUTING_TABLE_NAME else None
-    )
-
-    if not task_token and routing_table is not None:
-        try:
-            item = routing_table.get_item(Key=token_key).get("Item")
-        except Exception as exc:
-            logger.warning("Could not retrieve task token: %s", exc)
-            item = None
-
-        if item:
-            token_ttl = item.get("ttl", float("inf"))
-            if now > token_ttl:
-                logger.warning(
-                    "Active task token for incident %s expired at %s", incident_id, token_ttl
-                )
-            else:
-                task_token = item.get("task_token")
-                stored_token = bool(task_token)
-
-    if task_token:
-        try:
-            get_sfn().send_task_success(
-                taskToken=task_token,
-                output=json.dumps(
-                    {"action": action, "operator_role": operator_role, "notes": notes}
-                ),
-            )
-        except Exception as exc:
-            # The callback is the only way to resume the workflow: report the
-            # failure and keep the stored token so the action can be retried.
-            logger.error("Failed to send task success for incident %s: %s", incident_id, exc)
-            return cors_response(
-                502,
-                {
-                    "success": False,
-                    "error": "Failed to resume the incident workflow, please retry",
-                    "incident_id": incident_id,
-                    "action": action,
-                },
-            )
-
-        logger.info("Sent task success for incident %s", incident_id)
-        if stored_token and routing_table is not None:
-            # Consume the stored token only once the callback is confirmed, so a
-            # failed callback never leaves an unrecoverable workflow.
-            try:
-                routing_table.delete_item(Key=token_key)
-            except Exception as del_err:
-                logger.warning("Failed to delete consumed task token: %s", del_err)
-
-    return cors_response(200, {"success": True, "action": action, "incident_id": incident_id})
+    try:
+        params: dict[str, Any] = {
+            "QueueUrl": INBOUND_QUEUE_URL,
+            "MessageBody": json.dumps(message),
+        }
+        if INBOUND_QUEUE_URL.endswith(".fifo"):
+            params["MessageDeduplicationId"] = parsed["action_id"]
+            params["MessageGroupId"] = tenant_id
+        get_sqs().send_message(**params)
+    except Exception as exc:
+        logger.error("Failed to queue action %s: %s", parsed["action_id"], exc)
+        return cors_response(503, {"error": "queue_unavailable"})
+    return cors_response(202, {"action_id": parsed["action_id"], "status": "queued"})
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -268,70 +226,105 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     path_params = event.get("pathParameters") or {}
     query_params = event.get("queryStringParameters") or {}
 
-    # Extract authenticated context
     auth = extract_auth_context(event)
-    requested_tenant = body.get("tenant_id") or query_params.get("tenant_id")
+    normalized = path.split("?")[0].rstrip("/") or "/"
 
-    if auth["is_authenticated"]:
-        if not auth["is_platform_admin"]:
-            # Normal tenant user: must match token's tenant
-            auth_tenant = auth["tenant_id"]
-            if not auth_tenant:
-                return cors_response(
-                    403,
-                    {"error": "Forbidden: Authenticated token is missing a tenant claim"},
-                )
-            if requested_tenant and requested_tenant != auth_tenant:
-                return cors_response(
-                    403,
-                    {
-                        "error": (
-                            f"Forbidden: Access to tenant '{requested_tenant}' "
-                            "is not permitted for your user"
-                        )
-                    },
-                )
-            tenant_id = auth_tenant
-        else:
-            # Platform admin can access any specified tenant
-            tenant_id = requested_tenant or auth.get("tenant_id") or "T1"
-    else:
-        # Fallback for unauthenticated dev/test requests
-        tenant_id = requested_tenant or "T1"
-
-    operator_role = auth.get("role", "ops_user")
-
-    # Route: POST /incidents/trigger
-    if path.endswith("/incidents/trigger") and http_method == "POST":
+    if normalized.endswith("/incidents/trigger") and http_method == "POST":
+        tenant_id = _trigger_tenant(auth, body, query_params)
         return handle_trigger_incident(tenant_id, body)
 
-    # Route: POST /incidents/{id}/action
-    if "/action" in path and http_method == "POST":
-        # Validate action permissions
-        if auth["is_authenticated"] and operator_role not in (
-            "ops_user",
-            "tenant_admin",
-            "platform_admin",
-        ):
-            return cors_response(
-                403,
-                {"error": "Forbidden: Insufficient permissions to perform operator action"},
-            )
+    if not auth["is_authenticated"]:
+        return cors_response(401, {"error": "unauthorized"})
+    if not auth["tenant_id"]:
+        return cors_response(403, {"error": "tenant_required"})
+    tenant_id = str(auth["tenant_id"])
 
-        incident_id = path_params.get("id") or path.split("/")[-2]
-        return handle_operator_action(tenant_id, incident_id, body, operator_role=operator_role)
+    action_match = re.fullmatch(r"(?:/[^/]+)?/incidents/([^/]+)/actions", normalized)
+    if http_method == "POST" and action_match:
+        if auth["role"] not in _ACTION_ROLES:
+            return cors_response(403, {"error": "forbidden"})
+        return handle_dashboard_action(
+            tenant_id, action_match.group(1), body, auth.get("sub")
+        )
 
-    # Route: GET /incidents/{id}
+    if http_method == "GET" and (
+        normalized.endswith("/incidents") or re.fullmatch(r"(?:/[^/]+)?/incidents", normalized)
+    ):
+        return _list_incidents(tenant_id)
+
     if http_method == "GET" and path_params.get("id"):
-        incident_id = path_params["id"]
-        if INCIDENT_TABLE_NAME:
-            table = get_dynamodb().Table(INCIDENT_TABLE_NAME)
-            resp = table.get_item(
-                Key={"pk": f"TENANT#{tenant_id}", "sk": f"INCIDENT#{incident_id}"}
-            )
-            item = resp.get("Item")
-            if item:
-                return cors_response(200, item)
-        return cors_response(404, {"error": "Incident not found"})
+        return _get_incident(tenant_id, str(path_params["id"]))
 
     return cors_response(404, {"error": "Route not found", "path": path})
+
+
+def _trigger_tenant(auth: dict[str, Any], body: dict[str, Any], query: dict[str, Any]) -> str:
+    if auth["is_authenticated"] and auth["tenant_id"] and not auth["is_platform_admin"]:
+        return str(auth["tenant_id"])
+    requested = body.get("tenant_id") or query.get("tenant_id")
+    if auth["is_platform_admin"] and requested:
+        return str(requested)
+    if auth["tenant_id"]:
+        return str(auth["tenant_id"])
+    return str(requested or "T1")
+
+
+def _list_incidents(tenant_id: str) -> dict[str, Any]:
+    if not INCIDENT_TABLE_NAME:
+        return cors_response(503, {"error": "gsi_unavailable"})
+    try:
+        from oerf.platform.api.queries import DynamoIncidentQuery
+
+        page = DynamoIncidentQuery(boto3.client("dynamodb"), INCIDENT_TABLE_NAME).list_incidents(
+            tenant_id
+        )
+    except Exception as exc:
+        logger.error("Incident list failed: %s", exc)
+        return cors_response(503, {"error": "gsi_unavailable"})
+    return cors_response(200, page)
+
+
+def _get_incident(tenant_id: str, incident_id: str) -> dict[str, Any]:
+    if not INCIDENT_TABLE_NAME:
+        return cors_response(404, {"error": "not_found"})
+    try:
+        from oerf.platform.api.queries import DynamoIncidentQuery
+
+        item = DynamoIncidentQuery(boto3.client("dynamodb"), INCIDENT_TABLE_NAME).get_incident(
+            tenant_id, incident_id
+        )
+    except Exception as exc:
+        logger.error("Incident read failed: %s", exc)
+        return cors_response(404, {"error": "not_found"})
+    if item is None:
+        return cors_response(404, {"error": "not_found"})
+    return cors_response(200, item)
+
+
+def _action_body(body: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(body, dict) or set(body) - _ACTION_FIELDS:
+        return None
+    action = body.get("action")
+    action_id = body.get("action_id")
+    if action not in _ACTIONS or not isinstance(action_id, str) or not action_id.strip():
+        return None
+    engagement = body.get("engagement_id")
+    if action in _NEEDS_ENGAGEMENT and not _text(engagement):
+        return None
+    option = body.get("option_id")
+    if action == "pick_option" and not _text(option):
+        return None
+    if option is not None and not isinstance(option, str):
+        return None
+    if "reason" in body and not isinstance(body.get("reason"), str):
+        return None
+    return {
+        "action": action,
+        "action_id": action_id.strip(),
+        "engagement_id": engagement.strip() if _text(engagement) else None,
+        "option_id": option.strip() if _text(option) else None,
+    }
+
+
+def _text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())

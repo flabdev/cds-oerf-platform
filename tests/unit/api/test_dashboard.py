@@ -31,9 +31,8 @@ def test_incident_list_and_detail_stay_inside_the_claim_tenant() -> None:
     assert listed[0] == 403
     assert detail == (404, {"error": "not_found"})
     assert own[1]["shipment_id"] == "PH-2841"
-    assert own[1]["allowance_remaining"] == 41.9
-    assert own[1]["engagement_status"] == "WAITING"
-    assert own[1]["recommendation"] == "FACILITY_A"
+    assert own[1]["tenant_id"] == "t1"
+    assert "pk" not in own[1]
 
 
 def test_unauthenticated_request_is_rejected() -> None:
@@ -45,7 +44,7 @@ def test_unauthenticated_request_is_rejected() -> None:
 def test_action_is_queued_once_and_carries_no_task_token() -> None:
     services = _services()
     principal = Principal("t1", "ops_user", "user-1", True)
-    body = {"action": "confirm_transfer"}
+    body = {"action": "confirm_transfer", "action_id": "act-1", "engagement_id": "ENG-03"}
 
     first = dispatch(
         "POST", "/incidents/INC-1/actions", principal, body, services, idempotency_key="act-1"
@@ -54,7 +53,7 @@ def test_action_is_queued_once_and_carries_no_task_token() -> None:
         "POST", "/incidents/INC-1/actions", principal, body, services, idempotency_key="act-1"
     )
 
-    assert first[0] == 202
+    assert first == (202, {"action_id": "act-1", "status": "queued"})
     assert second[1]["action_id"] == first[1]["action_id"]
     assert len(services.queue.messages) == 1
     assert services.queue.messages[0]["action"] == "confirm_transfer"
