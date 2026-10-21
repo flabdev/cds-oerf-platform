@@ -1,15 +1,8 @@
-"""Compute, API Gateway, and Lambda Stack for OERF Platform.
+"""Compute, API Gateway, and Lambda stack for the OERF platform.
 
-Provisions:
-- WebSocket API Gateway (oerf-ws-api) for real-time live dashboard updates (ADR-010).
-- HTTP API Gateway (oerf-http-api) for Human-in-the-loop decisions & incident ingestion.
-- Lambda functions:
-    1. ChannelRouterLambda (ADR-008)
-    2. EvidenceAnalyzerLambda (Bedrock Claude 3.5 Sonnet Vision - ADR-006)
-    3. StreamBroadcasterLambda (DynamoDB Streams to WebSocket - ADR-010)
-    4. ActionHandlerLambda (REST API & SFN callback - ADR-004)
-    5. WsHandlerLambda (WebSocket connect/disconnect/subscribe)
-    6. ReportGeneratorLambda (ADR-006, ADR-008)
+Provisions the channel router, evidence analyzer, report generator, WebSocket
+API, stream broadcaster, action handler, inbound queue, and ingest rule.
+One role, one 30-day log group, and active tracing per function.
 """
 
 from __future__ import annotations
@@ -19,17 +12,57 @@ import os
 from aws_cdk import (
     CfnOutput,
     Duration,
+    RemovalPolicy,
     Stack,
     aws_apigatewayv2 as apigwv2,
     aws_apigatewayv2_authorizers as authorizers,
     aws_apigatewayv2_integrations as integrations,
+    aws_events as events,
+    aws_events_targets as targets,
     aws_iam as iam,
     aws_lambda as lambda_,
     aws_lambda_event_sources as event_sources,
+    aws_logs as logs,
+    aws_sns as sns,
+    aws_sns_subscriptions as subscriptions,
+    aws_sqs as sqs,
 )
 from constructs import Construct
 
 from infra.stacks.data_stack import OerfDataStack
+
+# Task-token APIs have no resource type in the IAM Service Authorization
+# Reference. The resource stays "*"; see docs/security/iam-exceptions.md.
+_TASK_TOKEN_ACTIONS = ["states:SendTaskSuccess", "states:SendTaskFailure"]
+_INBOUND_TIMEOUT = Duration.seconds(30)
+_VISIBILITY_MULTIPLE = 6
+_DEFAULT_INGEST_CONCURRENCY = 5
+_WA_PHONE_NUMBER_ID_PARAM = "/oerf/whatsapp/phone-number-id"
+
+def _context_enabled(scope: Construct, key: str, *, default: bool) -> bool:
+    """Read a boolean CDK context value. Missing context returns ``default``."""
+    raw = scope.node.try_get_context(key)
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() not in {"false", "0", "no"}
+
+
+def _context_str(scope: Construct, key: str, default: str = "") -> str:
+    """Read a string CDK context value. Missing context returns ``default``."""
+    raw = scope.node.try_get_context(key)
+    if raw is None:
+        return default
+    return str(raw)
+
+
+def _context_int(scope: Construct, key: str, default: int) -> int:
+    """Read an integer CDK context value. Missing context returns ``default``."""
+    raw = scope.node.try_get_context(key)
+    if raw is None or raw == "":
+        return default
+    return int(raw)
 
 
 class OerfComputeStack(Stack):
@@ -42,10 +75,8 @@ class OerfComputeStack(Stack):
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # ---------------------------------------------------------
-        # Shared Lambda Code Asset (packaged from root to preserve
-        # oerf.* package structure and avoid shadowing stdlib platform)
-        # ---------------------------------------------------------
+        # Shared asset. Packaged from the repo root so imports stay ``oerf.*``
+        # and do not shadow the stdlib ``platform`` module.
         lambda_code = lambda_.Code.from_asset(
             ".",
             exclude=[
@@ -69,39 +100,87 @@ class OerfComputeStack(Stack):
         # ---------------------------------------------------------
         # 1. Channel Router Lambda (ADR-008)
         # ---------------------------------------------------------
-        self.channel_router_fn = lambda_.Function(
-            self,
+        ses_source_email = os.environ.get("SES_SOURCE_EMAIL", "")
+        # Live channel sends only when context channels:live is true.
+        channel_mock = "false" if _context_enabled(self, "channels:live", default=False) else "true"
+        whatsapp_phone_number_id = _context_str(self, "whatsapp:phoneNumberId")
+        self.channel_router_fn = self._function(
             "ChannelRouterFunction",
             function_name="oerf-channel-router",
-            runtime=lambda_.Runtime.PYTHON_3_11,
             handler="oerf.platform.channels.router.handler",
             code=lambda_code,
             timeout=Duration.seconds(30),
             environment={
                 "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
-                "USE_MOCK_WHATSAPP": "false",
-                "USE_MOCK_SMS": "false",
-                "WHATSAPP_PHONE_NUMBER_ID": os.environ.get("WHATSAPP_PHONE_NUMBER_ID", ""),
-                "SES_SOURCE_EMAIL": os.environ.get("SES_SOURCE_EMAIL", ""),
-                "USE_MOCK_EMAIL": "false",
+                "USE_MOCK_WHATSAPP": channel_mock,
+                "USE_MOCK_SMS": channel_mock,
+                "WHATSAPP_PHONE_NUMBER_ID": whatsapp_phone_number_id,
+                "WA_PHONE_NUMBER_ID_PARAM": _WA_PHONE_NUMBER_ID_PARAM,
+                "SES_SOURCE_EMAIL": ses_source_email,
+                "USE_MOCK_EMAIL": channel_mock,
             },
         )
         data_stack.routing_table.grant_read_write_data(self.channel_router_fn)
+        if ses_source_email:
+            # SESv2 SendEmail authorizes as ses:SendEmail on the identity ARN.
+            self.channel_router_fn.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=["ses:SendEmail"],
+                    resources=[
+                        f"arn:aws:ses:{self.region}:{self.account}:identity/{ses_source_email}"
+                    ],
+                )
+            )
+        # sns:Publish to a phone number has no resource ARN. SMS should move
+        # to pinpoint-sms-voice-v2 under OERF-116 (Mudita).
         self.channel_router_fn.add_to_role_policy(
             iam.PolicyStatement(
-                actions=["ses:SendEmail", "sns:Publish", "socialmessaging:*"],
+                actions=["sns:Publish"],
                 resources=["*"],
+            )
+        )
+        # social-messaging:SendWhatsAppMessage requires resource type phone-number-id.
+        # arn:${Partition}:social-messaging:${Region}:${Account}:phone-number-id/${Id}
+        # Service Authorization Reference, list_socialmessaging.html.
+        if whatsapp_phone_number_id:
+            whatsapp_resources = [
+                (
+                    f"arn:aws:social-messaging:{self.region}:{self.account}:"
+                    f"phone-number-id/{whatsapp_phone_number_id}"
+                )
+            ]
+        else:
+            # TODO: scope this to the phone-number-id ARN when context
+            # whatsapp:phoneNumberId is set. See docs/security/iam-exceptions.md.
+            whatsapp_resources = ["*"]
+        self.channel_router_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["social-messaging:SendWhatsAppMessage"],
+                resources=whatsapp_resources,
+            )
+        )
+        # WA_PHONE_NUMBER_ID_PARAM names the SSM parameter. GetParameter is
+        # limited to that one parameter. The ARN drops the leading slash.
+        # The router still reads WHATSAPP_PHONE_NUMBER_ID; it does not read
+        # this parameter name yet.
+        self.channel_router_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["ssm:GetParameter"],
+                resources=[
+                    (
+                        f"arn:aws:ssm:{self.region}:{self.account}:parameter"
+                        "/oerf/whatsapp/phone-number-id"
+                    )
+                ],
             )
         )
 
         # ---------------------------------------------------------
         # 2. Bedrock Vision Evidence Extractor Lambda (ADR-006)
         # ---------------------------------------------------------
-        self.evidence_analyzer_fn = lambda_.Function(
-            self,
+        self.evidence_analyzer_fn = self._function(
             "EvidenceAnalyzerFunction",
             function_name="oerf-evidence-analyzer",
-            runtime=lambda_.Runtime.PYTHON_3_11,
             handler="oerf.platform.evidence.vision.handler",
             code=lambda_code,
             timeout=Duration.seconds(60),
@@ -113,6 +192,15 @@ class OerfComputeStack(Stack):
         )
         data_stack.evidence_bucket.grant_read(self.evidence_analyzer_fn)
         data_stack.incident_table.grant_read_write_data(self.evidence_analyzer_fn)
+        # Foundation-model ARNs
+        # (arn:aws:bedrock:us-east-1::foundation-model/<id>) do not authorize
+        # these calls. Sonnet v2 is geo-inference-profile only in us-east-1
+        # (us.anthropic.claude-3-5-sonnet-20241022-v2:0, EOL 2026-07-30).
+        # Haiku's bare id returns "on-demand throughput isn't supported";
+        # in-region and geo both EOL 2026-09-10. A cross-region profile also
+        # needs the model ARN in every destination region.
+        # TODO(OERF-310): replace this resource with the approved model and
+        # guardrail ARNs. See docs/security/iam-exceptions.md.
         self.evidence_analyzer_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["bedrock:InvokeModel"],
@@ -123,11 +211,11 @@ class OerfComputeStack(Stack):
         # ---------------------------------------------------------
         # 3. Report Generator Lambda (ADR-006)
         # ---------------------------------------------------------
-        self.report_generator_fn = lambda_.Function(
-            self,
+        # generator.py reads the incident and writes the report bucket.
+        # It does not call SES. ADR-008 keeps channel send on the router.
+        self.report_generator_fn = self._function(
             "ReportGeneratorFunction",
             function_name="oerf-report-generator",
-            runtime=lambda_.Runtime.PYTHON_3_11,
             handler="oerf.platform.report.generator.handler",
             code=lambda_code,
             timeout=Duration.seconds(30),
@@ -138,12 +226,6 @@ class OerfComputeStack(Stack):
         )
         data_stack.report_bucket.grant_read_write(self.report_generator_fn)
         data_stack.incident_table.grant_read_data(self.report_generator_fn)
-        self.report_generator_fn.add_to_role_policy(
-            iam.PolicyStatement(
-                actions=["ses:SendEmail"],
-                resources=["*"],
-            )
-        )
 
         # Cognito app client shared by the HTTP API authorizer and by the
         # WebSocket $connect authorizer.
@@ -156,11 +238,9 @@ class OerfComputeStack(Stack):
         # ---------------------------------------------------------
         # 4. WebSocket Handler & API Gateway (ADR-010)
         # ---------------------------------------------------------
-        self.ws_handler_fn = lambda_.Function(
-            self,
+        self.ws_handler_fn = self._function(
             "WsHandlerFunction",
             function_name="oerf-ws-handler",
-            runtime=lambda_.Runtime.PYTHON_3_11,
             handler="oerf.platform.api.ws_handler.handler",
             code=lambda_code,
             timeout=Duration.seconds(10),
@@ -170,13 +250,13 @@ class OerfComputeStack(Stack):
         )
         data_stack.routing_table.grant_read_write_data(self.ws_handler_fn)
 
-        # $connect authorizer: verifies the Cognito access token supplied as the
-        # ?token= query parameter and binds the connection to its tenant.
-        self.ws_authorizer_fn = lambda_.Function(
-            self,
+        # $connect authorizer. cognito-idp:GetUser is authorized by the
+        # caller's access token. Cognito does not evaluate IAM for that
+        # operation, so this role has no cognito-idp statement.
+        # https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_GetUser.html
+        self.ws_authorizer_fn = self._function(
             "WsAuthorizerFunction",
             function_name="oerf-ws-authorizer",
-            runtime=lambda_.Runtime.PYTHON_3_11,
             handler="oerf.platform.api.ws_authorizer.handler",
             code=lambda_code,
             timeout=Duration.seconds(10),
@@ -194,7 +274,6 @@ class OerfComputeStack(Stack):
             identity_source=["route.request.querystring.token"],
         )
 
-        # Create WebSocket API
         self.ws_api = apigwv2.WebSocketApi(
             self,
             "OerfWebSocketApi",
@@ -232,16 +311,17 @@ class OerfComputeStack(Stack):
             auto_deploy=True,
         )
 
-        ws_callback_url = f"https://{self.ws_api.api_id}.execute-api.{self.region}.amazonaws.com/{self.ws_stage.stage_name}"
+        ws_callback_url = (
+            f"https://{self.ws_api.api_id}.execute-api.{self.region}.amazonaws.com/"
+            f"{self.ws_stage.stage_name}"
+        )
 
         # ---------------------------------------------------------
         # 5. DynamoDB Stream Broadcaster Lambda (ADR-010)
         # ---------------------------------------------------------
-        self.stream_broadcaster_fn = lambda_.Function(
-            self,
+        self.stream_broadcaster_fn = self._function(
             "StreamBroadcasterFunction",
             function_name="oerf-stream-broadcaster",
-            runtime=lambda_.Runtime.PYTHON_3_11,
             handler="oerf.platform.api.stream_broadcaster.handler",
             code=lambda_code,
             timeout=Duration.seconds(15),
@@ -251,14 +331,22 @@ class OerfComputeStack(Stack):
             },
         )
         data_stack.routing_table.grant_read_write_data(self.stream_broadcaster_fn)
+        # PostToConnection is execute-api:ManageConnections on POST /@connections.
         self.stream_broadcaster_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["execute-api:ManageConnections"],
-                resources=[f"arn:aws:execute-api:{self.region}:{self.account}:{self.ws_api.api_id}/*"],
+                resources=[
+                    (
+                        f"arn:aws:execute-api:{self.region}:{self.account}:"
+                        f"{self.ws_api.api_id}/{self.ws_stage.stage_name}/POST/@connections/*"
+                    )
+                ],
             )
         )
 
-        # Hook up DynamoDB Stream on IncidentTable to Stream Broadcaster
+        # DynamoEventSource adds dynamodb:ListStreams on Resource *.
+        # ListStreams has no resource type. The stream read actions stay on
+        # this table's stream ARN. See docs/security/iam-exceptions.md.
         self.stream_broadcaster_fn.add_event_source(
             event_sources.DynamoEventSource(
                 data_stack.incident_table,
@@ -269,13 +357,73 @@ class OerfComputeStack(Stack):
         )
 
         # ---------------------------------------------------------
-        # 6. REST / HTTP Action & Ingestion API (ADR-004, ADR-009)
+        # 6. Inbound topic, queue, and handler
         # ---------------------------------------------------------
-        self.action_handler_fn = lambda_.Function(
+        # EUM Social event destinations publish to a standard topic. FIFO is
+        # not supported. Next WhatsApp step: PutWhatsAppBusinessAccountEventDestinations
+        # on the WABA, targeting this topic. That call needs the deployed topic
+        # ARN, so the destination is not created in this stack.
+        self.inbound_topic = sns.Topic(
             self,
+            "InboundTopic",
+            display_name="oerf-inbound",
+            fifo=False,
+        )
+        self.inbound_dlq = sqs.Queue(
+            self,
+            "InboundDlq",
+            encryption=sqs.QueueEncryption.SQS_MANAGED,
+            retention_period=Duration.days(14),
+        )
+        self.inbound_queue = sqs.Queue(
+            self,
+            "InboundQueue",
+            encryption=sqs.QueueEncryption.SQS_MANAGED,
+            visibility_timeout=Duration.seconds(
+                _INBOUND_TIMEOUT.to_seconds() * _VISIBILITY_MULTIPLE
+            ),
+            dead_letter_queue=sqs.DeadLetterQueue(
+                max_receive_count=3,
+                queue=self.inbound_dlq,
+            ),
+        )
+        self.inbound_topic.add_subscription(subscriptions.SqsSubscription(self.inbound_queue))
+
+        self.inbound_fn = self._function(
+            "InboundFunction",
+            function_name="oerf-inbound",
+            handler="oerf.platform.inbound.handler.handler",
+            code=lambda_code,
+            timeout=_INBOUND_TIMEOUT,
+            environment={
+                "TENANT_TABLE_NAME": data_stack.tenant_table.table_name,
+                "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
+                "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
+                "PLATFORM_TABLE_NAME": data_stack.platform_table.table_name,
+                "EVIDENCE_BUCKET_NAME": data_stack.evidence_bucket.bucket_name,
+                "LOG_LEVEL": "INFO",
+            },
+        )
+        data_stack.routing_table.grant_read_write_data(self.inbound_fn)
+        data_stack.incident_table.grant_read_write_data(self.inbound_fn)
+        data_stack.tenant_table.grant_read_data(self.inbound_fn)
+        data_stack.platform_table.grant_read_data(self.inbound_fn)
+        data_stack.evidence_bucket.grant_put(self.inbound_fn)
+        # Inbound is the role that resumes a paused execution (ADR-028).
+        self._grant_task_token(self.inbound_fn)
+        self.inbound_fn.add_event_source(
+            event_sources.SqsEventSource(
+                self.inbound_queue,
+                report_batch_item_failures=True,
+            )
+        )
+
+        # ---------------------------------------------------------
+        # 7. REST / HTTP Action & Ingestion API (ADR-004, ADR-009)
+        # ---------------------------------------------------------
+        self.action_handler_fn = self._function(
             "ActionHandlerFunction",
             function_name="oerf-action-handler",
-            runtime=lambda_.Runtime.PYTHON_3_11,
             handler="oerf.platform.api.action_handler.handler",
             code=lambda_code,
             timeout=Duration.seconds(15),
@@ -283,19 +431,21 @@ class OerfComputeStack(Stack):
                 "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
                 "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
                 "STATE_MACHINE_ARN": data_stack.cold_chain_state_machine.state_machine_arn,
+                "INBOUND_QUEUE_URL": self.inbound_queue.queue_url,
             },
         )
         data_stack.incident_table.grant_read_write_data(self.action_handler_fn)
         data_stack.routing_table.grant_read_write_data(self.action_handler_fn)
         data_stack.cold_chain_state_machine.grant_start_execution(self.action_handler_fn)
-        self.action_handler_fn.add_to_role_policy(
-            iam.PolicyStatement(
-                actions=["states:SendTaskSuccess", "states:SendTaskFailure"],
-                resources=["*"],
-            )
-        )
+        self.inbound_queue.grant_send_messages(self.action_handler_fn)
+        # OERF-208: action_handler.py still calls SendTaskSuccess. The contract
+        # gives that action to the inbound role. Keep it here while
+        # compat:actionHandlerTaskToken is true (the default) so the deployed
+        # handler keeps working. Set the flag to false once OERF-208 sends the
+        # action to INBOUND_QUEUE_URL instead.
+        if _context_enabled(self, "compat:actionHandlerTaskToken", default=True):
+            self._grant_task_token(self.action_handler_fn)
 
-        # HTTP API
         self.http_api = apigwv2.HttpApi(
             self,
             "OerfHttpApi",
@@ -311,7 +461,6 @@ class OerfComputeStack(Stack):
             ),
         )
 
-        # Add UserPoolClient to UserPool for HTTP API Authorizer
         http_authorizer = authorizers.HttpUserPoolAuthorizer(
             "OerfHttpAuthorizer",
             pool=data_stack.user_pool,
@@ -342,6 +491,59 @@ class OerfComputeStack(Stack):
         )
 
         # ---------------------------------------------------------
+        # 8. Ingest: sim.reefer TemperatureReading
+        # ---------------------------------------------------------
+        ingest_concurrency = _context_int(
+            self, "ingest:reservedConcurrency", _DEFAULT_INGEST_CONCURRENCY
+        )
+        self.ingest_fn = self._function(
+            "IngestFunction",
+            function_name="oerf-ingest",
+            handler="oerf.platform.ingest.handler.handler",
+            code=lambda_code,
+            timeout=Duration.seconds(30),
+            reserved_concurrent_executions=ingest_concurrency,
+            environment={
+                "TENANT_TABLE_NAME": data_stack.tenant_table.table_name,
+                "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
+                "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
+                "EVENT_BUS_NAME": data_stack.event_bus.event_bus_name,
+                "STATE_MACHINE_ARN": data_stack.cold_chain_state_machine.state_machine_arn,
+                "LOG_LEVEL": "INFO",
+            },
+        )
+        data_stack.tenant_table.grant_read_data(self.ingest_fn)
+        data_stack.routing_table.grant_read_data(self.ingest_fn)
+        data_stack.incident_table.grant_read_write_data(self.ingest_fn)
+        # The placeholder handler does not call StartExecution. The real ingest
+        # (project lead, OERF-201-205) starts this state machine and no other.
+        data_stack.cold_chain_state_machine.grant_start_execution(self.ingest_fn)
+
+        ingest_dlq = sqs.Queue(
+            self,
+            "IngestTargetDlq",
+            encryption=sqs.QueueEncryption.SQS_MANAGED,
+            retention_period=Duration.days(14),
+        )
+        temperature_rule = events.Rule(
+            self,
+            "TemperatureReadingRule",
+            event_bus=data_stack.event_bus,
+            event_pattern=events.EventPattern(
+                source=["sim.reefer"],
+                detail_type=["TemperatureReading"],
+            ),
+        )
+        temperature_rule.add_target(
+            targets.LambdaFunction(
+                self.ingest_fn,
+                dead_letter_queue=ingest_dlq,
+                retry_attempts=2,
+                max_event_age=Duration.hours(1),
+            )
+        )
+
+        # ---------------------------------------------------------
         # Stack Outputs
         # ---------------------------------------------------------
         CfnOutput(self, "WebSocketApiUrl", value=self.ws_stage.url)
@@ -350,3 +552,55 @@ class OerfComputeStack(Stack):
         CfnOutput(self, "ChannelRouterArn", value=self.channel_router_fn.function_arn)
         CfnOutput(self, "EvidenceAnalyzerArn", value=self.evidence_analyzer_fn.function_arn)
         CfnOutput(self, "ReportGeneratorArn", value=self.report_generator_fn.function_arn)
+
+    def _function(
+        self,
+        construct_id: str,
+        *,
+        function_name: str,
+        handler: str,
+        code: lambda_.Code,
+        timeout: Duration,
+        environment: dict[str, str],
+        memory_size: int = 128,
+        reserved_concurrent_executions: int | None = None,
+    ) -> lambda_.Function:
+        """One role, a 30-day log group, and active X-Ray tracing."""
+        log_group = logs.LogGroup(
+            self,
+            f"{construct_id}LogGroup",
+            retention=logs.RetentionDays.ONE_MONTH,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        role = iam.Role(
+            self,
+            f"{construct_id}Role",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+        )
+        log_group.grant_write(role)
+        return lambda_.Function(
+            self,
+            construct_id,
+            function_name=function_name,
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            handler=handler,
+            code=code,
+            role=role,
+            log_group=log_group,
+            timeout=timeout,
+            memory_size=memory_size,
+            environment=environment,
+            reserved_concurrent_executions=reserved_concurrent_executions,
+            # tracing ACTIVE adds xray:PutTraceSegments and xray:PutTelemetryRecords
+            # on Resource *. X-Ray rejects a resource ARN. See iam-exceptions.md.
+            tracing=lambda_.Tracing.ACTIVE,
+        )
+
+    def _grant_task_token(self, fn: lambda_.Function) -> None:
+        """Allow SendTaskSuccess and SendTaskFailure. Resource must be ``*``."""
+        fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=_TASK_TOKEN_ACTIONS,
+                resources=["*"],
+            )
+        )
