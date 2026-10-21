@@ -6,6 +6,7 @@ redirected to a temporary directory to keep the repository clean. These tests
 never make real AWS calls (see guide section 24).
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -39,10 +40,21 @@ def run_app(outdir: Path, **env_overrides: str) -> subprocess.CompletedProcess:
     )
 
 
+def stack_names(outdir: Path) -> set[str]:
+    """CloudFormation stack ids in a synth output directory."""
+    manifest = json.loads((outdir / "manifest.json").read_text())
+    return {
+        name
+        for name, artifact in manifest["artifacts"].items()
+        if artifact.get("type") == "aws:cloudformation:stack"
+    }
+
+
 def test_app_synthesizes_with_placeholder_account_when_unresolved(tmp_path):
     result = run_app(tmp_path)
 
     assert result.returncode == 0, result.stderr
+    assert stack_names(tmp_path) == {"OerfDataStack", "OerfComputeStack"}
     message = "Refusing to deploy with the synth placeholder account 000000000000"
     for name in ("OerfDataStack.template.json", "OerfComputeStack.template.json"):
         template = (tmp_path / name).read_text()
@@ -53,6 +65,16 @@ def test_app_synthesizes_stack_when_account_is_resolved(tmp_path):
     result = run_app(tmp_path, CDK_DEFAULT_ACCOUNT=ACCOUNT)
 
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / "OerfDataStack.template.json").exists()
-    assert (tmp_path / "OerfComputeStack.template.json").exists()
+    assert stack_names(tmp_path) == {"OerfDataStack", "OerfComputeStack"}
+
+
+def test_dashboard_flag_synthesizes_the_api_stack(tmp_path):
+    result = run_app(
+        tmp_path,
+        CDK_DEFAULT_ACCOUNT=ACCOUNT,
+        CDK_CONTEXT_JSON=json.dumps({"dashboard:enabled": "true"}),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert stack_names(tmp_path) == {"OerfDataStack", "OerfComputeStack", "OerfApiStack"}
 

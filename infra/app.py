@@ -1,9 +1,10 @@
-"""CDK app entry point for the OERF data and compute stacks."""
+"""CDK app entry point for the OERF data, compute, and optional API stacks."""
 
 import os
 
 import aws_cdk as cdk
 
+from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
 
@@ -15,6 +16,11 @@ PLACEHOLDER_DEPLOY_MESSAGE = (
     "Refusing to deploy with the synth placeholder account "
     "000000000000. Set CDK_DEFAULT_ACCOUNT or context key 'account'."
 )
+
+
+def _dashboard_enabled(app: cdk.App) -> bool:
+    """The dashboard stack stays off unless context dashboard:enabled is true."""
+    return app.node.try_get_context("dashboard:enabled") == "true"
 
 
 def _reject_placeholder_deploy(stack: cdk.Stack) -> None:
@@ -56,8 +62,21 @@ compute_stack = OerfComputeStack(
     env=cdk_env,
 )
 
+stacks = [data_stack, compute_stack]
+if _dashboard_enabled(app):
+    # Mudita owns api_stack.py. It stays out of the default synth until
+    # dashboard:enabled=true. The constructor takes the data stack only.
+    stacks.append(
+        OerfApiStack(
+            app,
+            "OerfApiStack",
+            data_stack=data_stack,
+            env=cdk_env,
+        )
+    )
+
 if account == SYNTH_PLACEHOLDER_ACCOUNT:
-    _reject_placeholder_deploy(data_stack)
-    _reject_placeholder_deploy(compute_stack)
+    for stack in stacks:
+        _reject_placeholder_deploy(stack)
 
 app.synth()
