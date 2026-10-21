@@ -179,11 +179,17 @@ def test_dynamodb_tables_use_on_demand_billing(template: Template) -> None:
 
 
 def test_dynamodb_tables_use_pk_sk_composite_key(template: Template) -> None:
+    gsi_attributes = [
+        *COMPOSITE_ATTRIBUTES,
+        {"AttributeName": "GSI1PK", "AttributeType": "S"},
+        {"AttributeName": "GSI1SK", "AttributeType": "S"},
+    ]
     for logical_id, table in template.find_resources("AWS::DynamoDB::Table").items():
         assert table["Properties"]["KeySchema"] == COMPOSITE_KEY_SCHEMA, logical_id
-        assert table["Properties"]["AttributeDefinitions"] == COMPOSITE_ATTRIBUTES, (
-            logical_id
+        expected = (
+            gsi_attributes if logical_id.startswith("IncidentTable") else COMPOSITE_ATTRIBUTES
         )
+        assert table["Properties"]["AttributeDefinitions"] == expected, logical_id
 
 
 def test_dynamodb_tables_have_point_in_time_recovery(template: Template) -> None:
@@ -193,11 +199,27 @@ def test_dynamodb_tables_have_point_in_time_recovery(template: Template) -> None
         }, logical_id
 
 
-def test_dynamodb_tables_do_not_define_global_secondary_indexes(
+def test_incident_table_defines_exactly_one_gsi_by_status(
     template: Template,
 ) -> None:
+    gsi1 = {
+        "IndexName": "GSI1",
+        "KeySchema": [
+            {"AttributeName": "GSI1PK", "KeyType": "HASH"},
+            {"AttributeName": "GSI1SK", "KeyType": "RANGE"},
+        ],
+        "Projection": {"ProjectionType": "ALL"},
+    }
+    found: list[tuple[str, dict]] = []
     for logical_id, table in template.find_resources("AWS::DynamoDB::Table").items():
-        assert "GlobalSecondaryIndexes" not in table["Properties"], logical_id
+        indexes = table["Properties"].get("GlobalSecondaryIndexes", [])
+        assert len(indexes) <= 1, logical_id
+        found.extend((logical_id, index) for index in indexes)
+
+    assert len(found) == 1
+    logical_id, index = found[0]
+    assert logical_id.startswith("IncidentTable"), logical_id
+    assert index == gsi1
 
 
 def test_s3_buckets_block_public_access(template: Template) -> None:
@@ -226,6 +248,55 @@ def test_s3_buckets_use_managed_encryption(template: Template) -> None:
         }, logical_id
 
 
+def test_user_pool_keeps_its_id_and_adds_tenant_claim_outside_schema(
+    template: Template,
+) -> None:
+    pools = template.find_resources("AWS::Cognito::UserPool")
+    assert len(pools) == 1
+    logical_id, pool = next(iter(pools.items()))
+    properties = pool["Properties"]
+
+    assert logical_id.startswith("OerfUserPool")
+    assert properties["UserPoolName"] == "oerf-users"
+    assert "Schema" not in properties
+    assert properties["UserPoolTier"] == "ESSENTIALS"
+    assert pool["DeletionPolicy"] == "Retain"
+    assert pool["UpdateReplacePolicy"] == "Retain"
+    pre_token = properties["LambdaConfig"]["PreTokenGenerationConfig"]
+    assert pre_token["LambdaVersion"] == "V2_0"
+    assert "PreTokenGeneration" not in properties["LambdaConfig"]
+
+
+def test_tenant_attribute_custom_resource_targets_the_existing_pool(
+    template: Template,
+) -> None:
+    resources = template.find_resources("AWS::CloudFormation::CustomResource")
+    assert len(resources) == 1
+    properties = next(iter(resources.values()))["Properties"]
+    assert "UserPoolId" in properties
+    assert set(properties) >= {"ServiceToken", "UserPoolId"}
+
+
+def test_tenant_attribute_role_is_limited_to_the_user_pool(template: Template) -> None:
+    statements = []
+    for policy in template.find_resources("AWS::IAM::Policy").values():
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            actions = statement.get("Action", [])
+            if isinstance(actions, str):
+                actions = [actions]
+            if "cognito-idp:AddCustomAttributes" in actions:
+                statements.append(statement)
+
+    assert len(statements) == 1
+    statement = statements[0]
+    assert statement["Action"] == [
+        "cognito-idp:DescribeUserPool",
+        "cognito-idp:AddCustomAttributes",
+    ]
+    assert statement["Resource"] != "*"
+    assert "Fn::GetAtt" in statement["Resource"] or isinstance(statement["Resource"], dict)
+
+
 def test_persistent_resources_use_retain_removal_policy(
     template: Template,
 ) -> None:
@@ -237,3 +308,9 @@ def test_persistent_resources_use_retain_removal_policy(
     for logical_id, resource in persistent_resources.items():
         assert resource["DeletionPolicy"] == "Retain", logical_id
         assert resource["UpdateReplacePolicy"] == "Retain", logical_id
+
+def test_cold_chain_state_machine_has_tracing(template):
+    template.has_resource_properties(
+        "AWS::StepFunctions::StateMachine",
+        {"StateMachineName": "oerf-cold-chain", "TracingConfiguration": {"Enabled": True}},
+    )

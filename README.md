@@ -113,6 +113,13 @@ Ops manager (`approval_fast`). Quiet hours apply. Stop at 2 minutes, then auto-p
 | `oerf/platform/incidents/debounce.py` | In-memory and DynamoDB streak counters. `observe` records a breach or clears the streak when the reading is back in range. |
 | `oerf/platform/incidents/dynamo.py` | DynamoDB incident store and shipment lock. Create writes the incident, the first timeline row, and the lock in one transaction. Close and cancel delete the lock in the transition transaction. |
 
+### Workflow steps
+
+| File | Role |
+| --- | --- |
+| `oerf/platform/agent/envelope.py` | The accumulator envelope every step handler reads and returns: `step`, the tenant, incident, and shipment ids, `workflow`, `context`, `incident_state`, `current_stage`, `last_completed_step`, `decision`, and an optional `task_token`. `parse_envelope` accepts the definition's `{"step": ..., "workflow": <state>}` event, lifts the execution start input onto the envelope, and rejects a missing identifier, an unknown step, or an unexpected field. |
+| `oerf/platform/agent/idempotency.py` | `StepResultStore`, keyed by tenant, incident, and step, with the in-memory implementation. The first write wins, so a retried step replays the stored decision instead of repeating the work. |
+
 ### Inbound messages
 
 | File | Role |
@@ -212,6 +219,8 @@ The incident logic does not call these AWS resources yet. The DynamoDB adapters 
 | `tests/unit/inbound/test_normalize.py` | WhatsApp text and media normalization. |
 | `tests/unit/inbound/test_dedupe.py` | In-memory 7-day dedupe, judged by the clock. |
 | `tests/unit/inbound/test_dynamo_dedupe.py` | DynamoDB dedupe, including a retry that does not write. |
+| `tests/unit/agent/test_envelope.py` | Identity, workflow, and context survive a hop; the execution start input is lifted onto the envelope; `decision` sits at the root for the choice states; a missing or blank identifier, an unknown step, and an unexpected field are rejected. |
+| `tests/unit/agent/test_idempotency.py` | First write wins for a repeated step, another step and another tenant are separate keys, and the stored record cannot be mutated. |
 | `tests/unit/support/fake_dynamo.py` | Fake low-level DynamoDB client used by the adapter tests. |
 | `tests/unit/test_app.py` | CDK app fails clearly when no account is resolved. |
 | `tests/unit/test_data_stack.py` | Data-stack resources and outputs, plus the state machine's execution role, the stub Lambda, the placeholder-to-ARN substitution, and the retry and catch blocks on every task. |
