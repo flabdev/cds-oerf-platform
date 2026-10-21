@@ -96,7 +96,7 @@ jobs:
       - name: Install dependencies
         run: |
           set -euo pipefail
-          npm install -g aws-cdk
+          npm install -g aws-cdk@2.1145.0
           pip install -e .
 
       - name: Assemble CDK context
