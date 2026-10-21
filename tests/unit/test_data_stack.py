@@ -179,11 +179,17 @@ def test_dynamodb_tables_use_on_demand_billing(template: Template) -> None:
 
 
 def test_dynamodb_tables_use_pk_sk_composite_key(template: Template) -> None:
+    gsi_attributes = [
+        *COMPOSITE_ATTRIBUTES,
+        {"AttributeName": "GSI1PK", "AttributeType": "S"},
+        {"AttributeName": "GSI1SK", "AttributeType": "S"},
+    ]
     for logical_id, table in template.find_resources("AWS::DynamoDB::Table").items():
         assert table["Properties"]["KeySchema"] == COMPOSITE_KEY_SCHEMA, logical_id
-        assert table["Properties"]["AttributeDefinitions"] == COMPOSITE_ATTRIBUTES, (
-            logical_id
+        expected = (
+            gsi_attributes if logical_id.startswith("IncidentTable") else COMPOSITE_ATTRIBUTES
         )
+        assert table["Properties"]["AttributeDefinitions"] == expected, logical_id
 
 
 def test_dynamodb_tables_have_point_in_time_recovery(template: Template) -> None:
@@ -193,11 +199,27 @@ def test_dynamodb_tables_have_point_in_time_recovery(template: Template) -> None
         }, logical_id
 
 
-def test_dynamodb_tables_do_not_define_global_secondary_indexes(
+def test_incident_table_defines_exactly_one_gsi_by_status(
     template: Template,
 ) -> None:
+    gsi1 = {
+        "IndexName": "GSI1",
+        "KeySchema": [
+            {"AttributeName": "GSI1PK", "KeyType": "HASH"},
+            {"AttributeName": "GSI1SK", "KeyType": "RANGE"},
+        ],
+        "Projection": {"ProjectionType": "ALL"},
+    }
+    found: list[tuple[str, dict]] = []
     for logical_id, table in template.find_resources("AWS::DynamoDB::Table").items():
-        assert "GlobalSecondaryIndexes" not in table["Properties"], logical_id
+        indexes = table["Properties"].get("GlobalSecondaryIndexes", [])
+        assert len(indexes) <= 1, logical_id
+        found.extend((logical_id, index) for index in indexes)
+
+    assert len(found) == 1
+    logical_id, index = found[0]
+    assert logical_id.startswith("IncidentTable"), logical_id
+    assert index == gsi1
 
 
 def test_s3_buckets_block_public_access(template: Template) -> None:
