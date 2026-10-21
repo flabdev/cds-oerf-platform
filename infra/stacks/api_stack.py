@@ -113,7 +113,7 @@ class OerfApiStack(Stack):
         incidents.add_method("GET", query_integration, **authorization)
         one = incidents.add_resource("{id}")
         one.add_method("GET", query_integration, **authorization)
-        one.add_resource("actions").add_method("POST", action_integration, **authorization)
+        one.add_resource("action").add_method("POST", action_integration, **authorization)
         admin = self.rest_api.root.add_resource("admin")
         tenants = admin.add_resource("tenants")
         tenants.add_method("GET", query_integration, **authorization)

@@ -68,10 +68,13 @@ export async function exchangeCode({ domain, clientId, redirectUri, code, verifi
     throw new Error("Cognito did not return a session");
   }
   const payload = await response.json();
-  if (!payload.id_token) {
+  if (!payload.access_token) {
     throw new Error("Cognito did not return a session");
   }
-  return payload.id_token;
+  return {
+    idToken: payload.id_token || payload.access_token,
+    accessToken: payload.access_token,
+  };
 }
 
 export async function loadIncidents(apiUrl, token, fetchImpl = fetch) {

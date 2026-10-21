@@ -60,7 +60,7 @@ test("incidents and actions use the bearer token and hide no task token", async 
   const calls = [];
   const fetchImpl = async (url, options) => {
     calls.push({ url, options });
-    if (url.endsWith("/actions")) {
+    if (url.endsWith("/action")) {
       return { ok: true, status: 202, json: async () => ({ action_id: "act-1" }) };
     }
     return {
@@ -86,7 +86,7 @@ test("incidents and actions use the bearer token and hide no task token", async 
     "id-token",
     {
       method: "POST",
-      path: "/incidents/INC-1/actions",
+      path: "/incidents/INC-1/action",
       idempotencyKey: "act-1",
       body: { action: "cancel" },
     },
@@ -95,6 +95,23 @@ test("incidents and actions use the bearer token and hide no task token", async 
   assert.equal(queued.action_id, "act-1");
   assert.equal(calls[1].options.headers["Idempotency-Key"], "act-1");
   assert.equal(calls[1].options.body.includes("task_token"), false);
+});
+
+test("the code exchange keeps the access token for the HTTP API", async () => {
+  const session = await exchangeCode({
+    domain: "oerf.auth.us-east-1.amazoncognito.com",
+    clientId: "client-1",
+    redirectUri: "http://127.0.0.1:5173",
+    code: "code-1",
+    verifier: "verifier",
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ id_token: "id-1", access_token: "access-1" }),
+    }),
+  });
+  assert.equal(session.idToken, "id-1");
+  assert.equal(session.accessToken, "access-1");
 });
 
 test("a failed code exchange does not invent a session", async () => {

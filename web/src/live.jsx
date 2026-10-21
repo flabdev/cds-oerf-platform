@@ -12,10 +12,11 @@ import {
 } from "./session.js";
 
 const TOKEN_KEY = "oerf.idToken";
+const ACCESS_KEY = "oerf.accessToken";
 const VERIFIER_KEY = "oerf.codeVerifier";
 
 export function LiveDesk({ config }) {
-  const [token, setToken] = useState(() => sessionStorage.getItem(TOKEN_KEY) || "");
+  const [token, setToken] = useState(() => sessionStorage.getItem(ACCESS_KEY) || "");
   const [principal, setPrincipal] = useState(() => principalFromIdToken(tokenFromStorage()));
   const [incidents, setIncidents] = useState(null);
   const redirectUri = window.location.origin;
@@ -28,15 +29,16 @@ export function LiveDesk({ config }) {
     }
     let cancel = false;
     exchangeCode({ ...config, redirectUri, code, verifier })
-      .then((idToken) => {
+      .then((session) => {
         if (cancel) {
           return;
         }
-        sessionStorage.setItem(TOKEN_KEY, idToken);
+        sessionStorage.setItem(TOKEN_KEY, session.idToken);
+        sessionStorage.setItem(ACCESS_KEY, session.accessToken);
         sessionStorage.removeItem(VERIFIER_KEY);
         window.history.replaceState({}, "", window.location.pathname);
-        setToken(idToken);
-        setPrincipal(principalFromIdToken(idToken));
+        setToken(session.accessToken);
+        setPrincipal(principalFromIdToken(session.idToken));
       })
       .catch((error) => {
         if (!cancel) {
@@ -66,6 +68,7 @@ export function LiveDesk({ config }) {
         }
         if (error.message === "Sign in required") {
           sessionStorage.removeItem(TOKEN_KEY);
+          sessionStorage.removeItem(ACCESS_KEY);
           setToken("");
           setPrincipal(principalFromIdToken(""));
         }

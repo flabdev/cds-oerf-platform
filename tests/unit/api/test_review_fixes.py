@@ -225,14 +225,25 @@ def test_dashboard_action_is_queued_and_does_not_resume_the_workflow(monkeypatch
     assert "task_token" not in body
 
 
-def test_old_action_route_is_not_served():
+def test_deployed_action_route_queues_the_contract_body(monkeypatch):
+    sent = []
+
+    class Queue:
+        def send_message(self, **kwargs):
+            sent.append(kwargs)
+
+    monkeypatch.setattr(action_handler, "INBOUND_QUEUE_URL", "https://example/inbound")
+    monkeypatch.setattr(action_handler, "get_sqs", lambda: Queue())
     event = _action_event()
     event["rawPath"] = "/incidents/INC-1/action"
+
+    queued = action_handler.handler(event, None)
     event["body"] = json.dumps({"action": "APPROVE"})
+    rejected = action_handler.handler(event, None)
 
-    response = action_handler.handler(event, None)
-
-    assert response["statusCode"] == 404
+    assert queued["statusCode"] == 202
+    assert rejected["statusCode"] == 400
+    assert len(sent) == 1
 
 
 def _action_event() -> dict:
