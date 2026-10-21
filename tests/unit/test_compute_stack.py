@@ -36,7 +36,13 @@ EXPECTED_FUNCTIONS = {
     },
     "oerf-evidence-analyzer": {
         "handler": "oerf.platform.evidence.vision.handler",
-        "env": {"INCIDENT_TABLE_NAME", "BEDROCK_MODEL_ID", "USE_MOCK_BEDROCK"},
+        "env": {
+            "INCIDENT_TABLE_NAME",
+            "BEDROCK_MODEL_ID",
+            "USE_MOCK_BEDROCK",
+            "GUARDRAIL_ID",
+            "GUARDRAIL_VERSION",
+        },
     },
     "oerf-report-generator": {
         "handler": "oerf.platform.report.generator.handler",
@@ -467,6 +473,68 @@ def test_channels_live_disables_mocks_and_scopes_whatsapp_to_the_phone_number() 
     assert vision["BEDROCK_MODEL_ID"] == "amazon.nova-lite-v1:0"
 
 
+def test_guardrail_is_versioned_and_only_vision_can_apply_it(template: Template) -> None:
+    config = json.loads((REPO_ROOT / "infra" / "config" / "guardrail.json").read_text())
+    guards = template.find_resources("AWS::Bedrock::Guardrail")
+    assert len(guards) == 1
+    props = next(iter(guards.values()))["Properties"]
+    assert props["Name"] == config["name"]
+    assert props["BlockedInputMessaging"] == config["blocked_input_message"]
+    assert props["BlockedOutputsMessaging"] == config["blocked_output_message"]
+    assert props["ContentPolicyConfig"]["ContentFiltersTierConfig"] == {
+        "TierName": config["content_filters_tier"]
+    }
+    filters = props["ContentPolicyConfig"]["FiltersConfig"]
+    expected_filters = config["content_filters"]
+    assert [item["Type"] for item in filters] == [item["type"] for item in expected_filters]
+    for item, expected in zip(filters, expected_filters, strict=True):
+        assert item["InputStrength"] == expected["input_strength"]
+        assert item["OutputStrength"] == expected["output_strength"]
+        assert "IMAGE" not in item.get("InputModalities", [])
+        assert "IMAGE" not in item.get("OutputModalities", [])
+    topics = props["TopicPolicyConfig"]["TopicsConfig"]
+    assert [item["Name"] for item in topics] == [item["name"] for item in config["denied_topics"]]
+    assert props["TopicPolicyConfig"]["TopicsTierConfig"] == {"TierName": config["topics_tier"]}
+    pii = props["SensitiveInformationPolicyConfig"]["PiiEntitiesConfig"]
+    assert [(item["Type"], item["OutputAction"]) for item in pii] == [
+        (item["type"], item["output_action"]) for item in config["pii_entities"]
+    ]
+    profile_id = config["guardrail_profile_identifier"]
+    assert props["CrossRegionConfig"] == {
+        "GuardrailProfileArn": (
+            f"arn:aws:bedrock:{REGION}:{ACCOUNT}:guardrail-profile/{profile_id}"
+        )
+    }
+
+    versions = template.find_resources("AWS::Bedrock::GuardrailVersion")
+    assert len(versions) == 1
+    version = next(iter(versions.values()))["Properties"]
+    assert version["GuardrailIdentifier"]["Fn::GetAtt"][1] == "GuardrailId"
+
+    functions = functions_by_name(template)
+    for name, function in functions.items():
+        variables = function["Environment"]["Variables"]
+        if name == "oerf-evidence-analyzer":
+            assert set(variables["GUARDRAIL_ID"]["Fn::GetAtt"]) >= {"GuardrailId"}
+            assert variables["GUARDRAIL_VERSION"]["Fn::GetAtt"][1] == "Version"
+        else:
+            assert "GUARDRAIL_ID" not in variables
+            assert "GUARDRAIL_VERSION" not in variables
+
+    for name in functions:
+        statements = statements_for_role(template, role_logical_id(functions[name]))
+        apply = _statements_with_action(statements, "bedrock:ApplyGuardrail")
+        if name == "oerf-evidence-analyzer":
+            assert len(apply) == 1
+            _assert_apply_guardrail(apply[0], profile_id)
+            invoke = _statements_with_action(statements, "bedrock:InvokeModel")
+            assert _resource_list(invoke[0]["Resource"]) == [
+                f"arn:aws:bedrock:{REGION}::foundation-model/amazon.nova-lite-v1:0"
+            ]
+        else:
+            assert apply == []
+
+
 def test_bedrock_model_id_comes_from_context() -> None:
     saved = _without_synth_env()
     try:
@@ -504,6 +572,117 @@ def test_ses_send_is_scoped_to_the_identity_arn(monkeypatch: pytest.MonkeyPatch)
     if isinstance(resource, str):
         resource = [resource]
     assert resource == [f"arn:aws:ses:{REGION}:{ACCOUNT}:identity/ops@example.com"]
+
+
+def test_agentcore_runtime_stays_out_of_the_default_synth(template: Template) -> None:
+    assert template.find_resources("AWS::BedrockAgentCore::Runtime") == {}
+    assert template.find_resources("AWS::ECR::Repository") == {}
+    assert "AgentRuntimeArn" not in template.to_json().get("Outputs", {})
+
+
+def test_agentcore_flag_scopes_the_runtime_and_the_caller() -> None:
+    saved = _without_synth_env()
+    try:
+        _stack, enabled = synthesize(context={"agentcore:enabled": "true"})
+    finally:
+        _restore_env(saved)
+
+    runtimes = enabled.find_resources("AWS::BedrockAgentCore::Runtime")
+    assert len(runtimes) == 1
+    runtime = next(iter(runtimes.values()))["Properties"]
+    assert runtime["AgentRuntimeName"] == "oerf_agent"
+    assert runtime["NetworkConfiguration"]["NetworkMode"] == "PUBLIC"
+    assert runtime["LifecycleConfiguration"]["IdleRuntimeSessionTimeout"] == 60
+    assert runtime["LifecycleConfiguration"]["MaxLifetime"] == 300
+    assert "ContainerUri" in runtime["AgentRuntimeArtifact"]["ContainerConfiguration"]
+    variables = runtime["EnvironmentVariables"]
+    assert variables["BEDROCK_MODEL_ID"] == "amazon.nova-lite-v1:0"
+    assert variables["GUARDRAIL_ID"]["Fn::GetAtt"][1] == "GuardrailId"
+    assert variables["GUARDRAIL_VERSION"]["Fn::GetAtt"][1] == "Version"
+
+    assert enabled.find_resources("AWS::ECR::Repository") == {}
+
+    execution = _role_by_name(enabled, "oerf-agent-runtime")
+    actions = action_names(statements_for_role(enabled, execution))
+    for prefix in ("states:", "social-messaging:", "sms-voice:", "ses:", "sns:"):
+        matched = [name for name in actions if name.startswith(prefix)]
+        assert matched == [], matched
+    writes = {
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:BatchWriteItem",
+    }
+    assert actions.isdisjoint(writes)
+    assert "bedrock:InvokeModel" in actions
+    assert "bedrock:ApplyGuardrail" in actions
+    statements = statements_for_role(enabled, execution)
+    invoke = _statements_with_action(statements, "bedrock:InvokeModel")
+    assert _resource_list(invoke[0]["Resource"]) == [
+        f"arn:aws:bedrock:{REGION}::foundation-model/amazon.nova-lite-v1:0"
+    ]
+    apply = _statements_with_action(statements, "bedrock:ApplyGuardrail")
+    _assert_apply_guardrail(apply[0], "us.guardrail.v1:0")
+    for action in ("ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"):
+        pull = _statements_with_action(statements, action)
+        assert len(pull) == 1
+        assert _resource_list(pull[0]["Resource"]) == [
+            _asset_repository_arn(),
+        ]
+    assert "ecr:PutImage" not in actions
+    token = _statements_with_action(statements, "ecr:GetAuthorizationToken")
+    assert token[0]["Resource"] == "*"
+
+    caller = _role_by_name(enabled, "oerf-agent-caller")
+    caller_actions = action_names(statements_for_role(enabled, caller))
+    assert caller_actions == {"bedrock-agentcore:InvokeAgentRuntime"}
+    invoke_runtime = _statements_with_action(
+        statements_for_role(enabled, caller), "bedrock-agentcore:InvokeAgentRuntime"
+    )
+    assert invoke_runtime[0]["Resource"]["Fn::GetAtt"][1] == "AgentRuntimeArn"
+    output = enabled.to_json()["Outputs"]["AgentRuntimeArn"]
+    assert output["Export"]["Name"] == "AGENT-RUNTIME-ARN"
+
+    allowed = allowed_star_actions()
+    offenders = []
+    for statement in iter_allow_statements(enabled):
+        if not resource_is_star(statement.get("Resource")):
+            continue
+        action = statement.get("Action", [])
+        names = [action] if isinstance(action, str) else list(action)
+        offenders.extend(name for name in names if name not in allowed)
+    assert offenders == [], "Resource * is outside iam-exceptions.md: " + ", ".join(offenders)
+
+
+def _asset_repository_arn() -> dict:
+    """CDK bootstrap repository that DockerImageAsset publishes into."""
+    name = f"cdk-hnb659fds-container-assets-{ACCOUNT}-{REGION}"
+    return {
+        "Fn::Join": [
+            "",
+            [
+                "arn:",
+                {"Ref": "AWS::Partition"},
+                f":ecr:{REGION}:{ACCOUNT}:repository/{name}",
+            ],
+        ]
+    }
+
+
+def _assert_apply_guardrail(statement: dict, profile_id: str) -> None:
+    resources = _resource_list(statement["Resource"])
+    assert resources[0]["Fn::GetAtt"][1] == "GuardrailArn"
+    assert resources[1:] == [
+        f"arn:aws:bedrock:{region}:{ACCOUNT}:guardrail-profile/{profile_id}"
+        for region in ("us-east-1", "us-east-2", "us-west-2")
+    ]
+
+
+def _role_by_name(template: Template, role_name: str) -> str:
+    for logical_id, role in template.find_resources("AWS::IAM::Role").items():
+        if role["Properties"].get("RoleName") == role_name:
+            return logical_id
+    raise AssertionError(f"no role named {role_name}")
 
 
 def test_synth_without_cdk_default_account(tmp_path: Path) -> None:

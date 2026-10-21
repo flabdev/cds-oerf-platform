@@ -1,0 +1,108 @@
+{
+  "name": "oerf-guardrail",
+  "description": "Standard-tier text filters. Masks phone, email, and name. Blocks product disposition and medical or safety claims.",
+  "blocked_input_message": "This request was blocked by the OERF safety check.",
+  "blocked_output_message": "This response was blocked by the OERF safety check.",
+  "content_filters_tier": "STANDARD",
+  "topics_tier": "STANDARD",
+  "guardrail_profile_identifier": "us.guardrail.v1:0",
+  "content_filters": [
+    {
+      "type": "HATE",
+      "input_strength": "HIGH",
+      "output_strength": "HIGH",
+      "input_action": "BLOCK",
+      "output_action": "BLOCK",
+      "input_modalities": ["TEXT"],
+      "output_modalities": ["TEXT"]
+    },
+    {
+      "type": "INSULTS",
+      "input_strength": "HIGH",
+      "output_strength": "HIGH",
+      "input_action": "BLOCK",
+      "output_action": "BLOCK",
+      "input_modalities": ["TEXT"],
+      "output_modalities": ["TEXT"]
+    },
+    {
+      "type": "SEXUAL",
+      "input_strength": "HIGH",
+      "output_strength": "HIGH",
+      "input_action": "BLOCK",
+      "output_action": "BLOCK",
+      "input_modalities": ["TEXT"],
+      "output_modalities": ["TEXT"]
+    },
+    {
+      "type": "VIOLENCE",
+      "input_strength": "HIGH",
+      "output_strength": "HIGH",
+      "input_action": "BLOCK",
+      "output_action": "BLOCK",
+      "input_modalities": ["TEXT"],
+      "output_modalities": ["TEXT"]
+    },
+    {
+      "type": "MISCONDUCT",
+      "input_strength": "HIGH",
+      "output_strength": "HIGH",
+      "input_action": "BLOCK",
+      "output_action": "BLOCK",
+      "input_modalities": ["TEXT"],
+      "output_modalities": ["TEXT"]
+    },
+    {
+      "type": "PROMPT_ATTACK",
+      "input_strength": "HIGH",
+      "output_strength": "NONE",
+      "input_action": "BLOCK",
+      "output_action": "NONE",
+      "input_modalities": ["TEXT"]
+    }
+  ],
+  "denied_topics": [
+    {
+      "name": "product-release-or-rejection",
+      "definition": "A decision to release, accept, reject, condemn, or dispose of a product or shipment.",
+      "type": "DENY",
+      "examples": [
+        "Release this shipment for sale.",
+        "Reject the lot and discard it."
+      ],
+      "input_action": "BLOCK",
+      "output_action": "BLOCK"
+    },
+    {
+      "name": "medical-or-safety-claim",
+      "definition": "A medical, clinical, or safety determination about a person or a product.",
+      "type": "DENY",
+      "examples": [
+        "This product is safe for patients.",
+        "The load meets the safety standard."
+      ],
+      "input_action": "BLOCK",
+      "output_action": "BLOCK"
+    }
+  ],
+  "pii_entities": [
+    {
+      "type": "PHONE",
+      "action": "ANONYMIZE",
+      "input_action": "ANONYMIZE",
+      "output_action": "ANONYMIZE"
+    },
+    {
+      "type": "EMAIL",
+      "action": "ANONYMIZE",
+      "input_action": "ANONYMIZE",
+      "output_action": "ANONYMIZE"
+    },
+    {
+      "type": "NAME",
+      "action": "ANONYMIZE",
+      "input_action": "ANONYMIZE",
+      "output_action": "ANONYMIZE"
+    }
+  ]
+}

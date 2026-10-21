@@ -72,6 +72,8 @@ def test_converse_uses_the_configured_model_and_parses_the_schema(
 
     monkeypatch.setattr(vision, "USE_MOCK_BEDROCK", False)
     monkeypatch.setattr(vision, "BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
+    monkeypatch.setattr(vision, "GUARDRAIL_ID", "")
+    monkeypatch.setattr(vision, "GUARDRAIL_VERSION", "")
     monkeypatch.setattr(vision, "INCIDENT_TABLE_NAME", "")
     monkeypatch.setattr(vision, "get_s3", lambda: _S3())
     monkeypatch.setattr(vision, "get_bedrock", lambda: _Bedrock())
@@ -85,6 +87,7 @@ def test_converse_uses_the_configured_model_and_parses_the_schema(
     assert image["source"]["bytes"] == b"jpeg-bytes"
     assert "anthropic.claude" not in json.dumps(calls["converse"]["system"])
     assert "setpoint_temp_c" in calls["converse"]["system"][0]["text"]
+    assert "guardrailConfig" not in calls["converse"]
 
 
 def test_converse_failure_does_not_call_a_second_model(
@@ -110,6 +113,7 @@ def test_converse_failure_does_not_call_a_second_model(
 
     monkeypatch.setattr(vision, "USE_MOCK_BEDROCK", False)
     monkeypatch.setattr(vision, "BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
+    monkeypatch.setattr(vision, "GUARDRAIL_ID", "")
     monkeypatch.setattr(vision, "get_s3", lambda: _S3())
     monkeypatch.setattr(vision, "get_bedrock", lambda: _Bedrock())
 
@@ -118,3 +122,39 @@ def test_converse_failure_does_not_call_a_second_model(
     assert result["success"] is False
     assert result["fallback_required"] is True
     assert "claude" not in result["error"].lower()
+
+
+def test_guardrail_config_is_sent_only_on_the_live_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: dict = {}
+
+    class _Body:
+        def read(self) -> bytes:
+            return b"jpeg-bytes"
+
+    class _S3:
+        def get_object(self, **kwargs):
+            return {"Body": _Body()}
+
+    class _Bedrock:
+        def converse(self, **kwargs):
+            calls["converse"] = kwargs
+            return {"output": {"message": {"content": [{"text": "{}"}]}}}
+
+    monkeypatch.setattr(vision, "GUARDRAIL_ID", "guardrail-1")
+    monkeypatch.setattr(vision, "GUARDRAIL_VERSION", "1")
+    monkeypatch.setattr(vision, "get_s3", lambda: _S3())
+    monkeypatch.setattr(vision, "get_bedrock", lambda: _Bedrock())
+
+    monkeypatch.setattr(vision, "USE_MOCK_BEDROCK", True)
+    mocked = vision.handler(_EVENT, None)
+    assert mocked["source"] == "mock"
+    assert "converse" not in calls
+
+    monkeypatch.setattr(vision, "USE_MOCK_BEDROCK", False)
+    monkeypatch.setattr(vision, "INCIDENT_TABLE_NAME", "")
+    vision.handler(_EVENT, None)
+    assert calls["converse"]["guardrailConfig"] == {
+        "guardrailIdentifier": "guardrail-1",
+        "guardrailVersion": "1",
+        "trace": "disabled",
+    }

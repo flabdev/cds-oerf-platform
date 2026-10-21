@@ -20,6 +20,8 @@ logger.setLevel(logging.INFO)
 BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
 INCIDENT_TABLE_NAME = os.environ.get("INCIDENT_TABLE_NAME", "")
 USE_MOCK_BEDROCK = os.environ.get("USE_MOCK_BEDROCK", "true").lower() == "true"
+GUARDRAIL_ID = os.environ.get("GUARDRAIL_ID", "")
+GUARDRAIL_VERSION = os.environ.get("GUARDRAIL_VERSION", "")
 
 _s3 = None
 _bedrock = None
@@ -129,10 +131,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     try:
         s3_obj = get_s3().get_object(Bucket=bucket, Key=key)
         image_bytes = s3_obj["Body"].read()
-        response = get_bedrock().converse(
-            modelId=BEDROCK_MODEL_ID,
-            system=[{"text": VISION_SYSTEM_PROMPT}],
-            messages=[
+        converse = {
+            "modelId": BEDROCK_MODEL_ID,
+            "system": [{"text": VISION_SYSTEM_PROMPT}],
+            "messages": [
                 {
                     "role": "user",
                     "content": [
@@ -146,8 +148,16 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     ],
                 }
             ],
-            inferenceConfig={"maxTokens": 1024},
-        )
+            "inferenceConfig": {"maxTokens": 1024},
+        }
+        if GUARDRAIL_ID:
+            # Trace stays off. A guardrail trace can carry unmasked values.
+            converse["guardrailConfig"] = {
+                "guardrailIdentifier": GUARDRAIL_ID,
+                "guardrailVersion": GUARDRAIL_VERSION,
+                "trace": "disabled",
+            }
+        response = get_bedrock().converse(**converse)
         blocks = response.get("output", {}).get("message", {}).get("content") or []
         text_content = next(
             (block.get("text", "") for block in blocks if isinstance(block, dict)),

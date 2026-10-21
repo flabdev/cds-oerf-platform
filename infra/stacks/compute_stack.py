@@ -29,6 +29,8 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from infra.constructs.agentcore_runtime import AgentCoreRuntime
+from infra.constructs.bedrock_guardrail import BedrockGuardrail
 from infra.stacks.data_stack import OerfDataStack
 
 # Task-token APIs have no resource type in the IAM Service Authorization
@@ -184,6 +186,9 @@ class OerfComputeStack(Stack):
         # The model card publishes a bedrock-runtime endpoint for this id and
         # the sample Invoke uses the bare id, so the resource is the
         # foundation-model ARN. Converse is authorized as bedrock:InvokeModel.
+        # ApplyGuardrail covers the guardrail and the US profile in each
+        # destination region. See BedrockGuardrail.apply_resources.
+        self.guardrail = BedrockGuardrail(self, "Guardrail")
         bedrock_model_id = _context_str(self, "bedrock:modelId", _DEFAULT_MODEL_ID)
         bedrock_mock = "false" if _context_enabled(self, "channels:live", default=False) else "true"
         self.evidence_analyzer_fn = self._function(
@@ -196,6 +201,8 @@ class OerfComputeStack(Stack):
                 "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
                 "BEDROCK_MODEL_ID": bedrock_model_id,
                 "USE_MOCK_BEDROCK": bedrock_mock,
+                "GUARDRAIL_ID": self.guardrail.guardrail_id,
+                "GUARDRAIL_VERSION": self.guardrail.guardrail_version,
             },
         )
         data_stack.evidence_bucket.grant_read(self.evidence_analyzer_fn)
@@ -206,6 +213,12 @@ class OerfComputeStack(Stack):
                 resources=[
                     f"arn:aws:bedrock:{self.region}::foundation-model/{bedrock_model_id}"
                 ],
+            )
+        )
+        self.evidence_analyzer_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["bedrock:ApplyGuardrail"],
+                resources=self.guardrail.apply_resources,
             )
         )
 
@@ -549,6 +562,30 @@ class OerfComputeStack(Stack):
                 max_event_age=Duration.hours(1),
             )
         )
+
+        # ---------------------------------------------------------
+        # 9. AgentCore runtime (OERF-312). Off unless agentcore:enabled.
+        # ---------------------------------------------------------
+        # The image build needs Docker, so CI synth leaves this out.
+        if _context_enabled(self, "agentcore:enabled", default=False):
+            agent = AgentCoreRuntime(
+                self,
+                "AgentCore",
+                incident_table=data_stack.incident_table,
+                tenant_table=data_stack.tenant_table,
+                guardrail_resources=self.guardrail.apply_resources,
+                guardrail_id=self.guardrail.guardrail_id,
+                guardrail_version=self.guardrail.guardrail_version,
+                model_id=bedrock_model_id,
+            )
+            # Export names cannot contain underscores. The env name stays
+            # AGENT_RUNTIME_ARN; this export is the cross-stack form.
+            CfnOutput(
+                self,
+                "AgentRuntimeArn",
+                value=agent.agent_runtime_arn,
+                export_name="AGENT-RUNTIME-ARN",
+            )
 
         # ---------------------------------------------------------
         # Stack Outputs

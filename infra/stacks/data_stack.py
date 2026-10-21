@@ -112,6 +112,8 @@ class OerfDataStack(Stack):
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
         )
+        # TTL stays off. SBXSESSION rows store expires_at and are still read
+        # after that time, including an opted-out session.
 
         # ---------------------------------------------------------
         # DynamoDB: Incident Table
@@ -131,6 +133,7 @@ class OerfDataStack(Stack):
             stream=dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
+            time_to_live_attribute="expires_at",
         )
         self.incident_table.add_global_secondary_index(
             index_name="GSI1",
@@ -162,6 +165,7 @@ class OerfDataStack(Stack):
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
+            time_to_live_attribute="expires_at",
         )
 
         # ---------------------------------------------------------

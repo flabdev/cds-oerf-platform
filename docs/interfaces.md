@@ -1,9 +1,12 @@
 # OERF interface contract
 
-**FROZEN v1.3** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.6** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.6 (2026-10-21, OERF-312) documents the AgentCore placeholder: envelope, timeout, fallback, and `AGENT_RUNTIME_ARN`.
+- v1.5 (2026-10-21, OERF-310) sets `GUARDRAIL_ID` and `GUARDRAIL_VERSION` on the vision function, and documents `record_invocation`.
+- v1.4 (2026-10-21, OERF-301) records DynamoDB retention. TTL attribute `expires_at` is enabled on the incident and routing tables only. Routing rows that used `ttl` now write `expires_at`. The `ttl` attribute is not used.
 - v1.3 (2026-10-21, ADR-020) vision uses `amazon.nova-lite-v1:0`. `USE_MOCK_BEDROCK` defaults to true unless context `channels:live` is true. `BEDROCK_MODEL_ID` comes from context `bedrock:modelId`.
 
 - v1.2 (2026-10-21, WhatsApp) channel mocks default to true unless context `channels:live` is true. `WHATSAPP_PHONE_NUMBER_ID` comes from context `whatsapp:phoneNumberId`. `WA_PHONE_NUMBER_ID_PARAM` is set on the router.
@@ -265,7 +268,7 @@ Dedupe item, agreed by the spec and [oerf/platform/inbound/dedupe.py](../oerf/pl
 | Table | routing |
 | PK | `INMSG#{provider_msg_id}` or `INMSG#{action_id}` |
 | SK | `META` |
-| Retention | 7 days from accept time, not from `received_at` |
+| Retention | 7 days from accept time, not from `received_at`. `expires_at` is a number of epoch seconds (§6.1). |
 
 Correlation keys, agreed by the LLD and [oerf/platform/storage/dynamo.py](../oerf/platform/storage/dynamo.py):
 
@@ -308,6 +311,28 @@ Lock item (ADR-016): `PK=TENANT#{tid}#SHIP#{sid}`, `SK=OPEN_INCIDENT`, condition
 | 19 | Platform settings | platform | `PK=SETTINGS`, `SK=PLATFORM` |
 
 Pattern 12 is not deployed. The incident table has no GSI, and the data-stack unit test asserts that. `GET /incidents` (OERF-302) depends on it. Change request: [2026-10-18-incident-gsi1-by-status.md](change-requests/2026-10-18-incident-gsi1-by-status.md).
+
+### 6.1 DynamoDB retention
+
+`expires_at` is a number of Unix epoch seconds. DynamoDB TTL on that attribute is enabled on the incident table and the routing table, and on no other table. Each table has one TTL attribute. Deletion can lag by hours, so readers still compare `expires_at` with the clock.
+
+| Item | Table | Key | Retention | TTL deletes the row |
+| --- | --- | --- | --- | --- |
+| `INGEST#` | incident | `PK=INGEST#{event_id}`, `SK=META` | 7 days from accept | yes |
+| `DEBOUNCE#` | incident | `PK=DEBOUNCE#{tid}#{shipment_id}#{device_id}`, `SK=META` | 10 minutes from the reading | yes |
+| `INMSG#` | routing | `PK=INMSG#{id}`, `SK=META` | 7 days from accept, not from `received_at` | yes |
+| `OUTMSG#` | routing | `PK=OUTMSG#{provider_msg_id}`, `SK=ENG#{tid}#{iid}#{eid}` | 90 days from registration | yes |
+| `ADDR#` | routing | `PK=ADDR#{channel}#{address}`, `SK=ENG#{tid}#{iid}#{eid}` | until the engagement leaves `WAITING` | no. `expires_at` is not written; the row is deleted then. |
+| `SBXSESSION` | tenant | `PK=TENANT#sbx`, `SK=SBXSESSION#{e164}` | 24 hours in the application | no. The row stays so an expired or opted-out session can still be read. |
+| `WS#` | routing | `PK=WS#{connection_id}`, `SK=METADATA` | 24 hours from the write | yes |
+| `WS_SUB#` | routing | `PK=WS_SUB#{tid}`, `SK=CONN#{connection_id}` | 24 hours from the subscribe write | yes |
+| `MSG#` | routing | `PK=TENANT#{tid}#INCIDENT#{iid}`, `SK=MSG#{message_id}` | 7 days from the send record | yes |
+| `ACTIVE_TASK_TOKEN` | routing | `PK=TENANT#{tid}#INCIDENT#{iid}`, `SK=ACTIVE_TASK_TOKEN` | 7 days from the send record | yes |
+| `MSG_CORRELATION#` | routing | `PK=MSG_CORRELATION#{message_id}`, `SK=TOKEN` | 7 days from the send record | yes |
+
+These items are not written with `expires_at` and must not expire: incident `SK=META`, timeline `EVT#`, the `OPEN_INCIDENT` lock, the engagement item `SK=ENG#{eid}` on the incident table, `CONTACTENG#`, and tenant config rows (`CONFIG#`, `CADENCE#`, `COMMS#`, `CALENDAR#`, contacts, facilities, fault codes, shipments, audit).
+
+No item writes an attribute named `ttl`. Expiry is `expires_at`, a number of epoch seconds.
 
 S3 prefixes start with `tenants/{tid}/`.
 
@@ -424,13 +449,13 @@ IAM column is the target. Current wildcards are called out and are not the targe
 | `oerf.platform.api.ws_handler` | `handler` | Mudita (OERF-302) | `$connect`, `$disconnect`, `subscribe` | Read/write routing connection items only. | deployed `oerf-ws-handler` |
 | `oerf.platform.api.ws_authorizer` | `handler` | Mudita (OERF-302) | WebSocket `$connect` authorizer | `cognito-idp:GetUser`. Write the connection binding. | deployed `oerf-ws-authorizer` |
 | `oerf.platform.api.action_handler` | `handler` | Mudita (OERF-208) | HTTP API | Read token claims. Send the action message to the inbound queue. Read incident for `GET`. No `states:SendTaskSuccess`. | deployed `oerf-action-handler` |
-| `oerf.platform.evidence.vision` | `handler` | OERF-207 (behaviour, name pending). Ananda (OERF-310) for model and guardrail env. | Step Functions / async invoke | Read evidence object. Write the evidence result on the incident. `bedrock:InvokeModel` on the approved model ARN only, with the guardrail id from the environment. | deployed `oerf-evidence-analyzer` |
-| AgentCore runtime | entry owned by OERF-206 | OERF-206 behaviour. Ananda (OERF-312) for `AGENT_RUNTIME_ARN`. | Invoke from Interpret | Read tools' data through the tool layer. No incident transition, no channel send. | not deployed |
+| `oerf.platform.evidence.vision` | `handler` | OERF-207 (behaviour, name pending). Ananda (OERF-310) for model and guardrail env. | Step Functions / async invoke | Read evidence object. Write the evidence result on the incident. `bedrock:InvokeModel` on the approved model ARN. `bedrock:ApplyGuardrail` on the guardrail ARN and on `us.guardrail.v1:0` in us-east-1, us-east-2, and us-west-2. | deployed `oerf-evidence-analyzer` |
+| AgentCore runtime | `oerf/platform/agent/agentcore/app.py` | OERF-206 behaviour. Ananda (OERF-312) for the runtime. | Invoke from Interpret | Read incident and tenant tables. `bedrock:InvokeModel` on Nova Lite. `bedrock:ApplyGuardrail` on the guardrail ARN and on `us.guardrail.v1:0` in us-east-1, us-east-2, and us-west-2. Pull the CDK asset repository. No incident writes, no channel send, no task token. | synth when context `agentcore:enabled` is true; default false |
 
 Current IAM that the target replaces:
 
 - Channel router: `ses:SendEmail`, `sns:Publish`, `socialmessaging:*` on `*`.
-- Evidence analyzer: `bedrock:InvokeModel` on `*`. No guardrail.
+- Evidence analyzer: `bedrock:InvokeModel` on the approved foundation-model ARN. `bedrock:ApplyGuardrail` on the guardrail ARN and on `us.guardrail.v1:0` in us-east-1, us-east-2, and us-west-2.
 - Report generator: `ses:SendEmail` on `*`.
 - Action handler: `states:SendTaskSuccess` and `states:SendTaskFailure` on `*`. Removal of `SendTaskSuccess` from this role is Ananda (OERF-301). The inbound role is the one that receives it (ADR-028). `SendTaskFailure` is not the inbound role's either: a decline or an unusable reply travels through the engagement decision branch (section 5), so no role sends it.
 
@@ -470,9 +495,25 @@ This ticket does not rename variables on deployed functions. OERF-301 sets missi
 | `USE_MOCK_BEDROCK` | Vision. Default `true`. `false` only when context `channels:live` is true. | ADR-020 |
 | `BEDROCK_MODEL_ID` | Vision. Context `bedrock:modelId`, default `amazon.nova-lite-v1:0`. | ADR-020 |
 | `WA_PHONE_NUMBER_ID_PARAM` | Router. Value `/oerf/whatsapp/phone-number-id`. The handler does not read it yet. | WhatsApp infra |
-| `GUARDRAIL_ID` | reserved. Not set. | OERF-310 |
-| `GUARDRAIL_VERSION` | reserved. Not set. | OERF-310 |
-| `AGENT_RUNTIME_ARN` | reserved. Not set. | OERF-312 |
+| `GUARDRAIL_ID` | Vision only. Id of the guardrail in `OerfComputeStack`. | OERF-310 |
+| `GUARDRAIL_VERSION` | Vision only. Published version of that guardrail. | OERF-310 |
+| `AGENT_RUNTIME_ARN` | Value of stack output `AgentRuntimeArn` when context `agentcore:enabled` is true. Cross-stack export name is `AGENT-RUNTIME-ARN` because an export name cannot contain underscores. Not set on a function. Default synth leaves it unset. | OERF-312 |
+
+`GUARDRAIL_ID` and `GUARDRAIL_VERSION` are set on `oerf-evidence-analyzer` only. Values come from `infra/config/guardrail.json`. Content filters use the Standard tier at high strength. That tier requires the US guardrail profile `us.guardrail.v1:0`, which the stack passes as `arn:aws:bedrock:{region}:{account}:guardrail-profile/us.guardrail.v1:0`. Denied topics are a product release or rejection, and a medical or safety claim. Phone, email, and name are anonymized on input and output. The vision role may call `bedrock:ApplyGuardrail` on that guardrail ARN and on `arn:aws:bedrock:{region}:{account}:guardrail-profile/us.guardrail.v1:0` for `region` in us-east-1, us-east-2, and us-west-2. It may call `bedrock:InvokeModel` on the Nova Lite foundation-model ARN. Those three profile ARNs are the destination regions for source us-east-1 in the [guardrail profile permissions guide](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrail-profiles-permissions.html).
+
+The live Converse call sends `guardrailConfig` with `trace` set to `disabled` when `GUARDRAIL_ID` is set. The mock path does not. The [Converse guardrail guide](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html) evaluates message text and `guardContent`. It does not list the model `image` content block. Image filters are off by default and, in the [image-filter guide](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-mmfilter.html), are shown on ApplyGuardrail and on image-generation InvokeModel. This guardrail leaves the image modality unset. Vision may still send a WebP image, which those filters do not accept.
+
+### 9.1 Agent runtime
+
+Context `agentcore:enabled` defaults to false so synth does not build an image. When it is true, `OerfComputeStack` adds an AgentCore runtime (`aws_cdk.aws_bedrockagentcore.Runtime` and `CfnRuntime` underneath). The image context is [oerf/platform/agent/agentcore/](../oerf/platform/agent/agentcore/). `oerf/platform/agent/runtime.py` stays the step composition root.
+
+The placeholder listens on port 8080. `POST /invocations` reads a JSON object with `tenant_id`, `incident_id`, `task`, `inputs`, and `trace_id`. It returns `{"status": "placeholder", "fallback": true}` and does not echo those fields. `GET /ping` returns `{"status": "Healthy"}`. The docstring on `handle` is `placeholder, behaviour owned by OERF-206`.
+
+The runtime idle timeout is 60 seconds and the max lifetime is 5 minutes. The network mode is public. The execution role may pull the image, write its log group, call X-Ray, invoke Nova Lite, apply the guardrail, and read the incident and tenant tables. It cannot write those tables or call Step Functions, WhatsApp, SMS, SES, or SNS.
+
+Section 8 does not name a caller role for OERF-206. The stack adds placeholder role `oerf-agent-caller`, trusted by `lambda.amazonaws.com`, with `bedrock-agentcore:InvokeAgentRuntime` on the runtime ARN only. OERF-206 replaces that role when it names the real caller.
+
+The image is published to the CDK asset repository. The execution role pulls that repository: `ecr:BatchGetImage` and `ecr:GetDownloadUrlForLayer` on its ARN. `ecr:GetAuthorizationToken` is `*` because ECR authorization has no resource type.
 
 Provider secrets stay in Secrets Manager, referenced by name or ARN. They are not environment variables.
 
@@ -496,6 +537,12 @@ One JSON object per line, UTC timestamp, correlation ids when the caller has the
 ```
 
 Absent ids are omitted. The logger must not accept task tokens, message bodies, phone numbers, names, prompts, images, raw model output, or raw DynamoDB images. OERF-303 defines what happens when a caller passes those keys.
+
+### 10.1 Model-call trace
+
+Owner: Ananda (OERF-310). Module: [oerf/platform/observability/ai_trace.py](../oerf/platform/observability/ai_trace.py). OERF-206 and OERF-207 call `record_invocation` from their own handlers. This contract does not wire it into a handler owned by someone else.
+
+The mapping has exactly `model_id`, `latency_ms`, `input_tokens`, `output_tokens`, `guardrail_action`, and `outcome`. With an open X-Ray segment, each one is an annotation. `record_invocation` raises `TraceRejected` for any other field, including a prompt, an image, raw model output, a phone number, an email address, or a name. `guardrail_action` and `outcome` are short tokens such as `NONE`, `BLOCKED`, `ANONYMIZED`, `SUCCESS`, or `ERROR`. The guardrail trace is not an argument.
 
 ## 11. Message templates
 
@@ -524,7 +571,7 @@ No `CODEOWNERS` file is in the repo. This map is the contract until one is added
 | `oerf/platform/api/ws_handler.py`, `ws_authorizer.py` | Mudita (OERF-302) |
 | `oerf/platform/api/stream_broadcaster.py` | Ananda (OERF-308). Stays in `api/` unless OERF-302 agrees to move it. |
 | `oerf/platform/evidence/vision.py` | OERF-207 for behaviour. Ananda (OERF-310) for model, guardrail, and IAM scope. |
-| `oerf/platform/observability/` | Ananda (OERF-303). Not created yet. |
+| `oerf/platform/observability/ai_trace.py` | Ananda (OERF-310). `logging.py` remains OERF-303 and is not created yet. |
 | `web/**` | Mudita (OERF-302 and the dashboard tickets) |
 | `scripts/whatsapp/` | Ananda (WhatsApp channel infrastructure) |
 | `docs/interfaces.md` | Ananda (OERF-304), then OERF-306 |

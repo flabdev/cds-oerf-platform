@@ -71,7 +71,7 @@ def record_outbound_message(
 
     table = get_dynamodb().Table(ROUTING_TABLE_NAME)
     now = int(time.time())
-    ttl = now + (7 * 86400)  # 7-day TTL
+    expires_at = now + (7 * 86400)  # 7-day retention
 
     item = {
         "pk": f"TENANT#{tenant_id}#INCIDENT#{incident_id}",
@@ -83,7 +83,7 @@ def record_outbound_message(
         "recipient": recipient,
         "status": status,
         "created_at": now,
-        "ttl": ttl,
+        "expires_at": expires_at,
     }
     if task_token:
         item["task_token"] = task_token
@@ -100,7 +100,7 @@ def record_outbound_message(
                 "channel": channel,
                 "message_id": message_id,
                 "created_at": now,
-                "ttl": ttl,
+                "expires_at": expires_at,
             }
         )
 
@@ -112,7 +112,7 @@ def record_outbound_message(
                 "task_token": task_token,
                 "incident_id": incident_id,
                 "tenant_id": tenant_id,
-                "ttl": ttl,
+                "expires_at": expires_at,
             }
         )
 
