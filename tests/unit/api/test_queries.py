@@ -49,11 +49,13 @@ def test_list_and_detail_stay_in_one_tenant_and_hide_secrets() -> None:
     encoded = json.dumps(detail[1])
 
     assert [row["incident_id"] for row in listed[1]["incidents"]] == ["INC-1"]
-    assert detail[1]["engagement_status"] == "WAITING"
-    assert detail[1]["timeline"][0]["state"] == "ASSESSING"
-    assert detail[1]["evidence"] == {"fault_code": "E17"}
+    assert set(listed[1]["incidents"][0]) == {"incident_id", "state", "stage", "version"}
+    assert detail[1]["shipment_id"] == "PH-2841"
+    assert detail[1]["config_snapshot"]["fault_code"] == "E17"
+    assert "phone" not in detail[1]["config_snapshot"]
     assert "secret-token" not in encoded
     assert "task_token" not in encoded
+    assert "pk" not in detail[1]
     assert other == (404, {"error": "not_found"})
 
 
@@ -90,7 +92,7 @@ def test_a_disallowed_action_is_rejected_and_the_queue_is_untouched() -> None:
         idempotency_key="act-1",
     )
 
-    assert rejected == (409, {"error": "action_not_allowed"})
+    assert rejected == (400, {"error": "invalid_body"})
     assert services.queue.messages == []
 
 
@@ -140,7 +142,7 @@ def test_queue_failure_returns_503_and_does_not_claim_success() -> None:
         "POST",
         "/incidents/INC-1/actions",
         Principal("t1", "ops_user", "user-1", True),
-        {"action": "confirm_transfer"},
+        {"action": "confirm_transfer", "action_id": "act-1", "engagement_id": "ENG-03"},
         services,
         idempotency_key="act-1",
     )
@@ -177,7 +179,7 @@ def test_sqs_message_uses_the_idempotency_id_and_omits_the_task_token() -> None:
         "POST",
         "/incidents/INC-1/actions",
         Principal("t1", "ops_user", "user-1", True),
-        {"action": "confirm_transfer"},
+        {"action": "confirm_transfer", "action_id": "act-1", "engagement_id": "ENG-03"},
         services,
         idempotency_key="act-1",
     )
@@ -190,6 +192,9 @@ def test_sqs_message_uses_the_idempotency_id_and_omits_the_task_token() -> None:
     assert client.messages[0]["MessageGroupId"] == "t1"
     assert body["tenant_id"] == "t1"
     assert body["channel"] == "dashboard"
+    assert body["engagement_id"] == "ENG-03"
+    assert body["user_id"] == "user-1"
+    assert body["text"] is None
     assert "task_token" not in body
 
 
@@ -207,7 +212,11 @@ def _incident(
         "tenant_id": s(tenant_id),
         "shipment_id": s(shipment_id),
         "state": s(state),
-        "evidence": s(json.dumps({"fault_code": "E17", "phone": "+910000000101"})),
+        "reason": s("excursion"),
+        "opened_at": s("2026-10-20T09:00:00Z"),
+        "GSI1PK": s(f"TENANT#{tenant_id}#STATUS#{state}"),
+        "GSI1SK": s("2026-10-20T09:00:00Z"),
+        "config_snapshot": s(json.dumps({"fault_code": "E17", "phone": "+910000000101"})),
     }
     if allowance is not None:
         item["allowance_remaining"] = {"N": str(allowance)}

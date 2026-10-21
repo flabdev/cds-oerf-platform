@@ -121,18 +121,52 @@ def test_subscribe_uses_connection_tenant_not_client_requested_tenant():
         {("WS#conn-1", "METADATA"): {"tenant_id": "tenant-1", "role": "ops_user"}}
     )
 
-    response = ws_handler.handle_subscribe(
+    rejected = ws_handler.handle_subscribe(
         table,
-        {"body": json.dumps({"tenant_id": "tenant-2", "incident_id": "INC-1"})},
+        {
+            "body": json.dumps(
+                {"tenant_id": "tenant-2", "scope": "incident", "incident_id": "INC-1"}
+            )
+        },
+        "conn-1",
+        12345,
+    )
+    accepted = ws_handler.handle_subscribe(
+        table,
+        {"body": json.dumps({"scope": "incident", "incident_id": "INC-1"})},
         "conn-1",
         12345,
     )
 
     subscription = table.put_items[-1]
-    assert response["statusCode"] == 200
+    assert rejected["statusCode"] == 400
+    assert accepted["statusCode"] == 200
     assert subscription["pk"] == "WS_SUB#tenant-1"
     assert subscription["tenant_id"] == "tenant-1"
+    assert subscription["scope"] == "incident"
     assert subscription["incident_id"] == "INC-1"
+
+
+def test_subscribe_rejects_all_and_stores_a_tenant_scope():
+    table = FakeTable({("WS#conn-1", "METADATA"): {"tenant_id": "tenant-1"}})
+
+    rejected = ws_handler.handle_subscribe(
+        table,
+        {"body": json.dumps({"scope": "incident", "incident_id": "ALL"})},
+        "conn-1",
+        12345,
+    )
+    accepted = ws_handler.handle_subscribe(
+        table,
+        {"body": json.dumps({"scope": "tenant"})},
+        "conn-1",
+        12345,
+    )
+
+    assert rejected["statusCode"] == 400
+    assert accepted["statusCode"] == 200
+    assert table.put_items[-1]["scope"] == "tenant"
+    assert "incident_id" not in table.put_items[-1]
 
 
 def test_subscribe_rejects_connection_without_tenant_binding():
@@ -164,32 +198,63 @@ def test_email_without_source_address_is_not_reported_as_success(monkeypatch):
     assert "SES_SOURCE_EMAIL not configured" in result["error"]
 
 
-def test_failed_stepfunctions_callback_keeps_stored_task_token(monkeypatch):
-    token_key = {"pk": "TENANT#tenant-1#INCIDENT#INC-1", "sk": "ACTIVE_TASK_TOKEN"}
-    table = FakeTable(
-        {
-            (token_key["pk"], token_key["sk"]): {
-                **token_key,
-                "task_token": "task-token-1",
-                "ttl": 9999999999,
+def test_dashboard_action_is_queued_and_does_not_resume_the_workflow(monkeypatch):
+    sent = []
+
+    class Queue:
+        def send_message(self, **kwargs):
+            sent.append(kwargs)
+
+    monkeypatch.setattr(action_handler, "INBOUND_QUEUE_URL", "https://example/inbound")
+    monkeypatch.setattr(action_handler, "get_sqs", lambda: Queue())
+    monkeypatch.setattr(
+        action_handler,
+        "get_sfn",
+        lambda: (_ for _ in ()).throw(AssertionError("step functions")),
+    )
+
+    response = action_handler.handler(_action_event(), None)
+    body = json.loads(sent[0]["MessageBody"])
+
+    assert response["statusCode"] == 202
+    assert json.loads(response["body"]) == {"action_id": "act-1", "status": "queued"}
+    assert body["action"] == "confirm_transfer"
+    assert body["tenant_id"] == "t1"
+    assert body["user_id"] == "user-1"
+    assert body["text"] is None
+    assert "task_token" not in body
+
+
+def test_old_action_route_is_not_served():
+    event = _action_event()
+    event["rawPath"] = "/incidents/INC-1/action"
+    event["body"] = json.dumps({"action": "APPROVE"})
+
+    response = action_handler.handler(event, None)
+
+    assert response["statusCode"] == 404
+
+
+def _action_event() -> dict:
+    return {
+        "rawPath": "/incidents/INC-1/actions",
+        "requestContext": {
+            "http": {"method": "POST"},
+            "authorizer": {
+                "jwt": {
+                    "claims": {
+                        "sub": "user-1",
+                        "custom:tenant_id": "t1",
+                        "cognito:groups": "ops_user",
+                    }
+                }
+            },
+        },
+        "body": json.dumps(
+            {
+                "action": "confirm_transfer",
+                "action_id": "act-1",
+                "engagement_id": "ENG-03",
             }
-        }
-    )
-
-    monkeypatch.setattr(action_handler, "INCIDENT_TABLE_NAME", "")
-    monkeypatch.setattr(action_handler, "ROUTING_TABLE_NAME", "routing")
-    monkeypatch.setattr(action_handler, "get_dynamodb", lambda: FakeDynamoDB(table))
-
-    class FailedStepFunctions:
-        def send_task_success(self, **_kwargs):
-            raise RuntimeError("callback unavailable")
-
-    monkeypatch.setattr(action_handler, "get_sfn", lambda: FailedStepFunctions())
-
-    response = action_handler.handle_operator_action(
-        "tenant-1", "INC-1", {"action": "APPROVE"}
-    )
-
-    assert response["statusCode"] == 502
-    assert json.loads(response["body"])["success"] is False
-    assert table.deleted_keys == []
+        ),
+    }

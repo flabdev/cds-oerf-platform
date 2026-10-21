@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from oerf.platform.incidents.repository import TRANSITIONS
 from oerf.platform.storage.dynamo import incident_pk, key, s, text
 from oerf.platform.tenancy.context import TenantContext
 
@@ -59,63 +60,29 @@ class DynamoIncidentQuery:
         item = loaded.get("Item")
         if not item or text(item.get("tenant_id", {"S": ""})) != context.tenant_id:
             return None
-        view = _summary(item)
-        view["timeline"] = self._timeline(context.tenant_id, incident)
-        view["options"] = _json_field(item, "options") or []
-        view["recommendation"] = _optional_text(item, "recommendation")
-        view["approval"] = _optional_text(item, "approval")
-        view["evidence"] = _public(_json_field(item, "evidence") or {})
-        view["engagement_status"] = self._engagement_status(context.tenant_id, incident)
-        return view
+        return {
+            "incident_id": text(item["incident_id"]),
+            "tenant_id": text(item["tenant_id"]),
+            "shipment_id": text(item["shipment_id"]),
+            "state": text(item["state"]),
+            "reason": _optional_text(item, "reason") or "",
+            "opened_at": _optional_text(item, "opened_at") or "",
+            "config_version": _optional_number(item, "config_version"),
+            "config_snapshot": _json_field(item, "config_snapshot"),
+        }
 
     def _metas(self, tenant_id: str) -> list[dict[str, Any]]:
-        prefix = f"TENANT#{tenant_id}#INC#"
-        response = self._client.scan(TableName=self._table)
-        found = []
-        for item in response.get("Items", []):
-            pk = text(item.get("pk", {"S": ""}))
-            sk = text(item.get("sk", {"S": ""}))
-            if sk == "META" and pk.startswith(prefix):
-                found.append(item)
-        return found
-
-    def _timeline(self, tenant_id: str, incident_id: str) -> list[dict[str, Any]]:
-        response = self._client.query(
-            TableName=self._table,
-            KeyConditionExpression="#pk = :pk AND begins_with(#sk, :prefix)",
-            ExpressionAttributeNames={"#pk": "pk", "#sk": "sk"},
-            ExpressionAttributeValues={
-                ":pk": s(incident_pk(tenant_id, incident_id)),
-                ":prefix": s("EVT#"),
-            },
-        )
-        events = []
-        for item in response.get("Items", []):
-            reason = item.get("reason")
-            events.append(
-                {
-                    "sk": text(item["sk"]),
-                    "previous_state": text(item["previous_state"]),
-                    "state": text(item["state"]),
-                    "reason": text(reason) if reason else None,
-                }
+        found: list[dict[str, Any]] = []
+        for state in sorted(TRANSITIONS):
+            response = self._client.query(
+                TableName=self._table,
+                IndexName="GSI1",
+                KeyConditionExpression="#pk = :pk",
+                ExpressionAttributeNames={"#pk": "GSI1PK"},
+                ExpressionAttributeValues={":pk": s(f"TENANT#{tenant_id}#STATUS#{state}")},
             )
-        return events
-
-    def _engagement_status(self, tenant_id: str, incident_id: str) -> str | None:
-        response = self._client.query(
-            TableName=self._table,
-            KeyConditionExpression="#pk = :pk AND begins_with(#sk, :prefix)",
-            ExpressionAttributeNames={"#pk": "pk", "#sk": "sk"},
-            ExpressionAttributeValues={
-                ":pk": s(incident_pk(tenant_id, incident_id)),
-                ":prefix": s("ENG#"),
-            },
-        )
-        statuses = [text(item["status"]) for item in response.get("Items", []) if "status" in item]
-        if "WAITING" in statuses:
-            return "WAITING"
-        return statuses[-1] if statuses else None
+            found.extend(response.get("Items", []))
+        return found
 
 
 class SqsActionQueue:
@@ -137,13 +104,12 @@ class SqsActionQueue:
 
 def _summary(item: dict[str, Any]) -> dict[str, Any]:
     state = text(item["state"])
+    version = _optional_number(item, "version")
     return {
         "incident_id": text(item["incident_id"]),
-        "tenant_id": text(item["tenant_id"]),
         "state": state,
         "stage": _optional_text(item, "stage") or state,
-        "shipment_id": text(item["shipment_id"]),
-        "allowance_remaining": _optional_number(item, "allowance_remaining"),
+        "version": 1 if version is None else int(version),
     }
 
 

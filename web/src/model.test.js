@@ -40,12 +40,17 @@ test("incident list covers loading, empty, error, and a shipment", () => {
   assert.equal(ready.incidents[0].shipment_id, "PH-2841");
 });
 
-test("an action is a post with an idempotency key and no task token", () => {
-  const request = actionRequest("INC-1", "pick_option", "FACILITY_A", "act-1");
+test("an action is a post with the client ids and no task token", () => {
+  const request = actionRequest("INC-1", "pick_option", "FACILITY_A", "act-1", "ENG-03");
   assert.equal(request.method, "POST");
   assert.equal(request.path, "/incidents/INC-1/actions");
   assert.equal(request.idempotencyKey, "act-1");
-  assert.deepEqual(request.body, { action: "pick_option", option_id: "FACILITY_A" });
+  assert.deepEqual(request.body, {
+    action: "pick_option",
+    action_id: "act-1",
+    engagement_id: "ENG-03",
+    option_id: "FACILITY_A",
+  });
   assert.equal("task_token" in request.body, false);
 });
 

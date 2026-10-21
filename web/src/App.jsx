@@ -21,6 +21,7 @@ const SAMPLE = [
     approval: "pending",
     evidence: { fault_code: "E17" },
     engagement_status: "WAITING",
+    engagement_id: "ENG-01",
   },
   {
     incident_id: "INC-000002",
@@ -34,6 +35,7 @@ const SAMPLE = [
     recommendation: null,
     evidence: {},
     engagement_status: "WAITING",
+    engagement_id: "ENG-02",
   },
   {
     incident_id: "INC-000003",
@@ -47,6 +49,7 @@ const SAMPLE = [
     recommendation: null,
     evidence: { fault_code: "E05" },
     engagement_status: "WAITING",
+    engagement_id: "ENG-03",
   },
 ];
 
@@ -80,7 +83,18 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
     if (!current) {
       return;
     }
-    const request = actionRequest(current.incident_id, action, optionId, `${action}-1`);
+    if ((action === "confirm_transfer" || action === "pick_option") && !current.engagement_id) {
+      setNotice("This shipment has no waiting engagement");
+      return;
+    }
+    const actionId = globalThis.crypto?.randomUUID?.() || `${action}-${Date.now()}`;
+    const request = actionRequest(
+      current.incident_id,
+      action,
+      optionId,
+      actionId,
+      current.engagement_id,
+    );
     try {
       await onSubmit?.(request);
       setNotice(`Queued ${request.body.action.replaceAll("_", " ")}`);
@@ -224,10 +238,16 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
                       onSelect?.(item.incident_id);
                     }}
                   >
-                    <span className="avatar small" aria-hidden="true">{item.shipment_id.slice(0, 1)}</span>
+                    <span className="avatar small" aria-hidden="true">
+                      {(item.shipment_id || item.incident_id).slice(0, 1)}
+                    </span>
                     <span className="row-copy">
-                      <strong>{item.shipment_id}</strong>
-                      <span>{item.state} · {item.allowance_remaining} min left</span>
+                      <strong>{item.shipment_id || item.incident_id}</strong>
+                      <span>
+                        {item.allowance_remaining == null
+                          ? item.state
+                          : `${item.state} · ${item.allowance_remaining} min left`}
+                      </span>
                     </span>
                     <time>{item.time}</time>
                   </button>

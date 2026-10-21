@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import re
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -30,17 +29,11 @@ from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 from oerf.platform.tenancy.publisher import ConfigPublisher
 
 _ACTIONS = frozenset({"confirm_transfer", "pick_option", "cancel"})
+_ACTION_FIELDS = frozenset({"action", "action_id", "engagement_id", "option_id", "reason"})
 _ACTION_ROLES = frozenset({"platform_admin", "tenant_admin", "ops_user"})
-_ACTION_STATES = {
-    "confirm_transfer": frozenset(
-        {"ASSESSING", "AWAITING_APPROVAL", "SECURING_FACILITY", "IN_TRANSIT"}
-    ),
-    "pick_option": frozenset({"ASSESSING", "AWAITING_APPROVAL"}),
-}
-_TERMINAL = frozenset({"CLOSED", "CANCELLED"})
+_NEEDS_ENGAGEMENT = frozenset({"confirm_transfer", "pick_option"})
 _CATALOGS = frozenset({"contacts", "facilities", "faultcodes"})
 _ADMIN_ROLES = frozenset({PLATFORM_ADMIN_GROUP, "tenant_admin"})
-_NAMESPACE = uuid.UUID("6f8f1c0e-1b5a-4c1d-9c3a-0e7c6a2b9d11")
 
 
 class IncidentQuery(Protocol):
@@ -270,16 +263,7 @@ def _list(
     if denied:
         return denied
     page = services.queries.list_incidents(principal.tenant_id or "", limit=limit, cursor=cursor)
-    rows = [
-        {
-            "incident_id": item.get("incident_id"),
-            "state": item.get("state"),
-            "stage": item.get("stage") or item.get("state"),
-            "shipment_id": item.get("shipment_id"),
-            "allowance_remaining": item.get("allowance_remaining"),
-        }
-        for item in page["incidents"]
-    ]
+    rows = [_summary_row(item) for item in page["incidents"]]
     return 200, {"incidents": rows, "next_cursor": page.get("next_cursor")}
 
 
@@ -294,16 +278,13 @@ def _detail(
         return 404, {"error": "not_found"}
     return 200, {
         "incident_id": item.get("incident_id"),
-        "state": item.get("state"),
-        "stage": item.get("stage") or item.get("state"),
+        "tenant_id": item.get("tenant_id"),
         "shipment_id": item.get("shipment_id"),
-        "allowance_remaining": item.get("allowance_remaining"),
-        "timeline": item.get("timeline") or [],
-        "options": item.get("options") or [],
-        "recommendation": item.get("recommendation"),
-        "approval": item.get("approval"),
-        "evidence": _public(item.get("evidence") or {}),
-        "engagement_status": item.get("engagement_status"),
+        "state": item.get("state"),
+        "reason": item.get("reason") or "",
+        "opened_at": item.get("opened_at") or "",
+        "config_version": item.get("config_version"),
+        "config_snapshot": item.get("config_snapshot"),
     }
 
 
@@ -317,40 +298,37 @@ def _action(
     denied = _need_tenant(principal)
     if denied:
         return denied
-    action = body.get("action")
-    if action not in _ACTIONS:
-        return 400, {"error": "invalid_action"}
-    if action == "pick_option" and not body.get("option_id"):
-        return 400, {"error": "option_required"}
     if principal.role not in _ACTION_ROLES:
         return 403, {"error": "forbidden"}
-    incident = services.queries.get_incident(principal.tenant_id or "", incident_id)
-    if incident is None:
-        return 404, {"error": "not_found"}
-    if not _action_allowed(action, str(incident.get("state") or "")):
-        return 409, {"error": "action_not_allowed"}
+    parsed = _action_body(body)
+    if parsed and idempotency_key and idempotency_key != parsed["action_id"]:
+        return 400, {"error": "invalid_body"}
+    if parsed is None:
+        return 400, {"error": "invalid_body"}
     if services.queue is None:
         return 503, {"error": "queue_unavailable"}
-    token = idempotency_key or str(uuid.uuid4())
-    action_id = str(
-        uuid.uuid5(_NAMESPACE, f"{principal.tenant_id}:{incident_id}:{action}:{token}")
-    )
+    action_id = parsed["action_id"]
     message = {
-        "action_id": action_id,
-        "action": action,
-        "option_id": body.get("option_id"),
         "tenant_id": principal.tenant_id,
         "incident_id": incident_id,
-        "actor": principal.sub,
+        "engagement_id": parsed["engagement_id"],
         "channel": "dashboard",
+        "provider_msg_id": None,
+        "context_msg_id": None,
+        "action_id": action_id,
+        "action": parsed["action"],
+        "option_id": parsed["option_id"],
+        "user_id": principal.sub,
         "type": "text",
-        "text": body.get("option_id") or action,
+        "text": None,
+        "media_ref": None,
+        "received_at": services.clock().strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     try:
         services.queue.send(body=message, dedup_id=action_id)
     except Exception:
         return 503, {"error": "queue_unavailable"}
-    return 202, {"action_id": action_id}
+    return 202, {"action_id": action_id, "status": "queued"}
 
 
 def _admin(
@@ -519,23 +497,44 @@ def _audit(
     )
 
 
-def _action_allowed(action: str, state: str) -> bool:
-    if state in _TERMINAL:
-        return False
-    allowed = _ACTION_STATES.get(action)
-    return True if allowed is None else state in allowed
+def _summary_row(item: dict[str, Any]) -> dict[str, Any]:
+    state = item.get("state")
+    version = item.get("version")
+    return {
+        "incident_id": item.get("incident_id"),
+        "state": state,
+        "stage": item.get("stage") or state,
+        "version": 1 if version is None else int(version),
+    }
 
 
-def _public(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: _public(item)
-            for key, item in value.items()
-            if key not in {"task_token", "phone", "e164", "email", "recipient"}
-        }
-    if isinstance(value, list):
-        return [_public(item) for item in value]
-    return value
+def _action_body(body: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(body, dict) or set(body) - _ACTION_FIELDS:
+        return None
+    action = body.get("action")
+    action_id = body.get("action_id")
+    if action not in _ACTIONS or not isinstance(action_id, str) or not action_id.strip():
+        return None
+    engagement = body.get("engagement_id")
+    if action in _NEEDS_ENGAGEMENT and not _text(engagement):
+        return None
+    option = body.get("option_id")
+    if action == "pick_option" and not _text(option):
+        return None
+    if option is not None and not isinstance(option, str):
+        return None
+    if "reason" in body and not isinstance(body.get("reason"), str):
+        return None
+    return {
+        "action": action,
+        "action_id": action_id.strip(),
+        "engagement_id": engagement.strip() if _text(engagement) else None,
+        "option_id": option.strip() if _text(option) else None,
+    }
+
+
+def _text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _limit(raw: Any) -> int:
