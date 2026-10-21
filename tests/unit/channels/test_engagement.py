@@ -126,6 +126,18 @@ def test_duplicate_provider_id_for_another_engagement_is_rejected(store) -> None
         engagements.register_outbound("wamid-1", second)
 
 
+def test_address_row_tracks_a_waiting_engagement_and_is_removed_on_stop(store) -> None:
+    engagements, _clock = store
+    opened = _open(engagements)
+
+    engagements.register_address("SMS", "+910000000101", opened)
+    waiting = engagements.for_address("sms", "+910000000101")
+    engagements.stop("t1", "INC-000001", "eng-1")
+
+    assert [item.engagement_id for item in waiting] == ["eng-1"]
+    assert engagements.for_address("sms", "+910000000101") == []
+
+
 def _open(engagements):
     return engagements.open_engagement(
         "t1",

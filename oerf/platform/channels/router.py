@@ -419,6 +419,7 @@ def route_outbound(
         if engagement is None:
             raise ValueError(f"engagement {request.engagement_id!r} is not open")
         engagements.register_outbound(sent.provider_msg_id, engagement)
+        engagements.register_address(channel, recipient, engagement)
         return _result(
             request,
             attempts,

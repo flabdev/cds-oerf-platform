@@ -14,6 +14,7 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from oerf.platform.storage.dynamo import (
+    addr_pk,
     incident_pk,
     is_conditional_failure,
     iso_z,
@@ -84,6 +85,12 @@ class EngagementStore(Protocol):
     def register_outbound(self, provider_msg_id: str, engagement: Engagement) -> None:
         """Map one provider message id to a waiting engagement."""
 
+    def register_address(self, channel: str, address: str, engagement: Engagement) -> None:
+        """Map one channel address to the open engagement a later unquoted reply can use."""
+
+    def for_address(self, channel: str, address: str) -> list[Engagement]:
+        """Return WAITING engagements registered at this channel address."""
+
     def correlate(self, provider_msg_id: str) -> Engagement | None:
         """Return the WAITING engagement quoted by this id, if it is still waiting."""
 
@@ -110,6 +117,7 @@ class MemoryEngagementStore:
         self._engagements: dict[tuple[str, str, str], Engagement] = {}
         self._outbound: dict[str, tuple[Engagement, datetime]] = {}
         self._by_contact: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        self._by_address: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
 
     def open_engagement(
         self,
@@ -185,6 +193,23 @@ class MemoryEngagementStore:
                 return
             raise ValueError(f"provider message {message_id!r} is already correlated")
         self._outbound[message_id] = (current, self._clock() + CORRELATION_TTL)
+
+    def register_address(self, channel: str, address: str, engagement: Engagement) -> None:
+        current = _waiting(self, engagement)
+        pointer = (current.tenant_id, current.incident_id, current.engagement_id)
+        refs = self._by_address.setdefault(_address_key(channel, address), [])
+        if pointer not in refs:
+            refs.append(pointer)
+
+    def for_address(self, channel: str, address: str) -> list[Engagement]:
+        found: list[Engagement] = []
+        for tenant_id, incident_id, engagement_id in self._by_address.get(
+            _address_key(channel, address), []
+        ):
+            current = self.get(tenant_id, incident_id, engagement_id)
+            if current is not None and current.status == "WAITING":
+                found.append(current)
+        return found
 
     def correlate(self, provider_msg_id: str) -> Engagement | None:
         found = self._outbound.get(required_text(provider_msg_id, "provider_msg_id"))
@@ -415,6 +440,48 @@ class DynamoEngagementStore:
                 return
             raise ValueError(f"provider message {message_id!r} is already correlated") from exc
 
+    def register_address(self, channel: str, address: str, engagement: Engagement) -> None:
+        current = _waiting(self, engagement)
+        normalized_channel, normalized_address = _address_key(channel, address)
+        self._client.put_item(
+            TableName=self._routing,
+            Item={
+                **key(
+                    addr_pk(normalized_channel, normalized_address),
+                    f"ENG#{current.tenant_id}#{current.incident_id}#{current.engagement_id}",
+                ),
+                "tenant_id": s(current.tenant_id),
+                "incident_id": s(current.incident_id),
+                "engagement_id": s(current.engagement_id),
+                "contact_id": s(current.contact_id),
+                "status": s("WAITING"),
+                "channel": s(normalized_channel),
+                "address": s(normalized_address),
+            },
+        )
+
+    def for_address(self, channel: str, address: str) -> list[Engagement]:
+        normalized_channel, normalized_address = _address_key(channel, address)
+        response = self._client.query(
+            TableName=self._routing,
+            KeyConditionExpression="#pk = :pk AND begins_with(#sk, :prefix)",
+            ExpressionAttributeNames={"#pk": "pk", "#sk": "sk"},
+            ExpressionAttributeValues={
+                ":pk": s(addr_pk(normalized_channel, normalized_address)),
+                ":prefix": s("ENG#"),
+            },
+        )
+        found: list[Engagement] = []
+        for item in response.get("Items", []):
+            if text(item.get("status", {"S": ""})) != "WAITING":
+                continue
+            current = self.get(
+                text(item["tenant_id"]), text(item["incident_id"]), text(item["engagement_id"])
+            )
+            if current is not None and current.status == "WAITING":
+                found.append(current)
+        return found
+
     def correlate(self, provider_msg_id: str) -> Engagement | None:
         message_id = required_text(provider_msg_id, "provider_msg_id")
         response = self._client.query(
@@ -521,7 +588,16 @@ class DynamoEngagementStore:
         response = self._client.scan(TableName=self._routing)
         prefix = f"ENG#{engagement.tenant_id}#{engagement.incident_id}#{engagement.engagement_id}"
         for item in response.get("Items", []):
-            if not text(item["pk"]).startswith("OUTMSG#") or text(item["sk"]) != prefix:
+            pk = text(item["pk"])
+            if text(item["sk"]) != prefix:
+                continue
+            if pk.startswith("ADDR#") and engagement.status != "WAITING":
+                self._client.delete_item(
+                    TableName=self._routing,
+                    Key={"pk": item["pk"], "sk": item["sk"]},
+                )
+                continue
+            if not pk.startswith("OUTMSG#"):
                 continue
             self._client.update_item(
                 TableName=self._routing,
@@ -545,6 +621,26 @@ class DynamoEngagementStore:
         if not items:
             return None
         return Engagement.model_validate_json(text(items[0]["document"]))
+
+
+_ADDRESS_CHANNELS = frozenset({"whatsapp", "sms", "rcs", "email", "voice", "dashboard"})
+
+
+def _waiting(store: EngagementStore, engagement: Engagement) -> Engagement:
+    current = store.get(engagement.tenant_id, engagement.incident_id, engagement.engagement_id)
+    if current is None or current.status != "WAITING":
+        raise ValueError("address correlation requires a WAITING engagement")
+    return current
+
+
+def _address_key(channel: str, address: str) -> tuple[str, str]:
+    normalized = required_text(channel, "channel").strip().lower()
+    if normalized not in _ADDRESS_CHANNELS:
+        raise ValueError(f"channel {channel!r} cannot be correlated by address")
+    value = required_text(address, "address").strip()
+    if normalized == "email":
+        value = value.lower()
+    return normalized, value
 
 
 def open_engagement(

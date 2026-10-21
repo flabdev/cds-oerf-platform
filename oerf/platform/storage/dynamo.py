@@ -75,6 +75,14 @@ def outmsg_pk(provider_msg_id: str) -> str:
     return f"OUTMSG#{provider_msg_id}"
 
 
+def addr_pk(channel: str, address: str) -> str:
+    return f"ADDR#{channel}#{address}"
+
+
+def device_pk(device_id: str) -> str:
+    return f"DEVICE#{device_id}"
+
+
 def phone_pk(e164: str) -> str:
     return f"PHONE#{e164}"
 
