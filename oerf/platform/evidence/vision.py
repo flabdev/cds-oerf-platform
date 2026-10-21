@@ -1,13 +1,11 @@
-"""Multimodal Bedrock Vision Evidence Extractor (ADR-006).
+"""Multimodal Bedrock vision evidence extractor (ADR-006, ADR-020).
 
-Invokes Anthropic Claude 3.5 Sonnet on photos of reefer temperature displays,
-7-segment control panels, and alarm indicators stored in S3 EvidenceBucket.
-Extracts structured telemetry for deterministic SOP rule evaluation.
+Reads a reefer display photo from the evidence bucket and asks the configured
+Bedrock model, default Amazon Nova Lite, for the telemetry JSON below.
 """
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
@@ -19,13 +17,9 @@ from botocore.exceptions import ClientError
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-BEDROCK_MODEL_ID = os.environ.get(
-    "BEDROCK_MODEL_ID",
-    "anthropic.claude-3-5-sonnet-20241022-v2:0",
-)
-FALLBACK_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
+BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
 INCIDENT_TABLE_NAME = os.environ.get("INCIDENT_TABLE_NAME", "")
-USE_MOCK_BEDROCK = os.environ.get("USE_MOCK_BEDROCK", "false").lower() == "true"
+USE_MOCK_BEDROCK = os.environ.get("USE_MOCK_BEDROCK", "true").lower() == "true"
 
 _s3 = None
 _bedrock = None
@@ -71,10 +65,36 @@ Extract the following exact fields in JSON:
 }
 Return ONLY valid raw JSON with no markdown backticks or explanation."""
 
+_EXTRACT_INSTRUCTION = (
+    "Please extract the telemetry from this reefer display according to your instructions."
+)
+
+
+def _image_format(key: str) -> str:
+    """Map an object key suffix to a Converse image format."""
+    ext = key.lower().rsplit(".", 1)[-1] if "." in key else ""
+    if ext == "png":
+        return "png"
+    if ext == "webp":
+        return "webp"
+    return "jpeg"
+
+
+def _analysis_from_text(text_content: str) -> dict[str, Any]:
+    """Parse the model text. The field set is the prompt schema."""
+    if "```json" in text_content:
+        text_content = text_content.split("```json", 1)[1].split("```", 1)[0].strip()
+    elif "```" in text_content:
+        text_content = text_content.split("```", 1)[1].split("```", 1)[0].strip()
+    analysis = json.loads(text_content)
+    if not isinstance(analysis, dict):
+        raise ValueError("model text was not a JSON object")
+    return analysis
+
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Lambda entry point for evidence image analysis.
-    
+
     Expected event payload:
     {
         "bucket": "evidence-bucket-name",
@@ -107,83 +127,36 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return {"success": True, "analysis": mock_result, "source": "mock"}
 
     try:
-        s3 = get_s3()
-        s3_obj = s3.get_object(Bucket=bucket, Key=key)
+        s3_obj = get_s3().get_object(Bucket=bucket, Key=key)
         image_bytes = s3_obj["Body"].read()
-        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-
-        # Detect image format from key extension
-        ext = key.lower().split(".")[-1]
-        media_type = "image/jpeg"
-        if ext == "png":
-            media_type = "image/png"
-        elif ext == "webp":
-            media_type = "image/webp"
-
-        payload = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 1024,
-            "system": VISION_SYSTEM_PROMPT,
-            "messages": [
+        response = get_bedrock().converse(
+            modelId=BEDROCK_MODEL_ID,
+            system=[{"text": VISION_SYSTEM_PROMPT}],
+            messages=[
                 {
                     "role": "user",
                     "content": [
                         {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": image_b64,
-                            },
+                            "image": {
+                                "format": _image_format(key),
+                                "source": {"bytes": image_bytes},
+                            }
                         },
-                        {
-                            "type": "text",
-                            "text": (
-                                "Please extract the telemetry from this reefer display "
-                                "according to your instructions."
-                            ),
-                        },
+                        {"text": _EXTRACT_INSTRUCTION},
                     ],
                 }
             ],
-        }
+            inferenceConfig={"maxTokens": 1024},
+        )
+        blocks = response.get("output", {}).get("message", {}).get("content") or []
+        text_content = next(
+            (block.get("text", "") for block in blocks if isinstance(block, dict)),
+            "",
+        )
+        analysis = _analysis_from_text(text_content)
 
-        bedrock = get_bedrock()
-        try:
-            response = bedrock.invoke_model(
-                modelId=BEDROCK_MODEL_ID,
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps(payload),
-            )
-        except ClientError as exc:
-            logger.warning(
-                "Primary Bedrock model %s failed, attempting fallback %s: %s",
-                BEDROCK_MODEL_ID,
-                FALLBACK_MODEL_ID,
-                exc,
-            )
-            response = bedrock.invoke_model(
-                modelId=FALLBACK_MODEL_ID,
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps(payload),
-            )
-
-        resp_body = json.loads(response["body"].read().decode("utf-8"))
-        text_content = resp_body.get("content", [{}])[0].get("text", "{}")
-        # Strip potential markdown code blocks
-        if "```json" in text_content:
-            text_content = text_content.split("```json")[1].split("```")[0].strip()
-        elif "```" in text_content:
-            text_content = text_content.split("```")[1].split("```")[0].strip()
-
-        analysis = json.loads(text_content)
-
-        # Update Incident record if table is provided
         if INCIDENT_TABLE_NAME:
-            table = get_dynamodb().Table(INCIDENT_TABLE_NAME)
-            table.update_item(
+            get_dynamodb().Table(INCIDENT_TABLE_NAME).update_item(
                 Key={"pk": f"TENANT#{tenant_id}", "sk": f"INCIDENT#{incident_id}"},
                 UpdateExpression="SET evidence_analysis = :ea, last_analyzed_key = :k",
                 ExpressionAttributeValues={":ea": analysis, ":k": key},
@@ -191,7 +164,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         return {"success": True, "analysis": analysis}
 
-    except Exception as exc:
+    except (ClientError, ValueError, KeyError, json.JSONDecodeError) as exc:
         logger.error("Failed to analyze evidence image: %s", exc)
         return {
             "success": False,
