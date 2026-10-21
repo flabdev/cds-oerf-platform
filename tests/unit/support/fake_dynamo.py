@@ -55,8 +55,19 @@ class FakeDynamoClient:
         TableName: str,
         KeyConditionExpression: str,
         ExpressionAttributeValues: dict[str, dict[str, str]],
+        IndexName: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
+        if IndexName == "GSI1":
+            gsi_pk = ExpressionAttributeValues[":pk"]["S"]
+            with self._guard:
+                found = [
+                    _copy(item)
+                    for (table, _, _), item in self._items.items()
+                    if table == TableName and item.get("GSI1PK", {}).get("S") == gsi_pk
+                ]
+            found.sort(key=lambda item: item.get("GSI1SK", {}).get("S", ""))
+            return {"Items": found}
         if ":pk" not in KeyConditionExpression or ":prefix" not in KeyConditionExpression:
             raise client_error("ValidationException")
         pk = ExpressionAttributeValues[":pk"]["S"]

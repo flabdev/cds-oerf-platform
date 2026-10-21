@@ -51,6 +51,9 @@ class PhoneRegistry(Protocol):
     def get_contact(self, tenant_id: str, contact_id: str) -> ContactMatch | None:
         """Return one contact, or None when this tenant has no such contact."""
 
+    def remove_contact(self, tenant_id: str, contact_id: str) -> None:
+        """Delete one tenant contact and its phone-index row."""
+
 
 class MemoryPhoneRegistry:
     def __init__(self) -> None:
@@ -96,6 +99,18 @@ class MemoryPhoneRegistry:
     def get_contact(self, tenant_id: str, contact_id: str) -> ContactMatch | None:
         context = TenantContext(tenant_id=tenant_id)
         return self._contacts.get((context.tenant_id, required_text(contact_id, "contact_id")))
+
+    def remove_contact(self, tenant_id: str, contact_id: str) -> None:
+        current = self.get_contact(tenant_id, contact_id)
+        if current is None:
+            return
+        ref = (current.tenant_id, current.contact_id)
+        self._contacts.pop(ref, None)
+        refs = [item for item in self._by_phone.get(current.e164, []) if item != ref]
+        if refs:
+            self._by_phone[current.e164] = refs
+        else:
+            self._by_phone.pop(current.e164, None)
 
 
 class DynamoPhoneRegistry:
@@ -157,6 +172,19 @@ class DynamoPhoneRegistry:
         if not item:
             return None
         return _match_from_item(item)
+
+    def remove_contact(self, tenant_id: str, contact_id: str) -> None:
+        current = self.get_contact(tenant_id, contact_id)
+        if current is None:
+            return
+        self._client.delete_item(
+            TableName=self._tenant,
+            Key=key(f"TENANT#{current.tenant_id}", f"CONTACT#{current.contact_id}"),
+        )
+        self._client.delete_item(
+            TableName=self._routing,
+            Key=key(phone_pk(current.e164), contact_sk(current.tenant_id, current.contact_id)),
+        )
 
 
 def resolve_sender(registry: PhoneRegistry, e164: str) -> SenderResolution:

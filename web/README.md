@@ -2,7 +2,7 @@
 
 The dashboard is a local React page for the Operational Exception Resolution Framework. It shows cold-chain incidents, the ranked recovery options for a shipment that is being assessed, and the actions a desk user can queue.
 
-This page reads the sample list in `src/App.jsx`. Refreshing the browser restores that list. It does not call the dashboard API, DynamoDB, or the in-memory incident store. Allowance publish and the action buttons only set a notice on the page. The HTTP contract those buttons would use is described in `docs/interfaces.md`.
+Without Cognito settings, the page reads the sample list in `src/App.jsx`. Refreshing the browser restores that list. With `VITE_API_URL`, `VITE_COGNITO_DOMAIN`, and `VITE_USER_POOL_CLIENT_ID` set, Sign in opens the Cognito hosted page and the desk loads `GET /incidents` with the id token. Actions are posted to the API. The contract is in `docs/interfaces.md`.
 
 ## Setup
 
@@ -58,6 +58,19 @@ Search matches the shipment id, incident id, or state. The default selection is 
 **Allowance.** A tenant admin on tenant `t2` can type a minute value and press Publish. The notice says whether facility B is inside or outside that allowance. The sample rows on the page stay as they are. Any other role, or tenant `t1`, sees that editing is limited to a tenant admin on `t2`.
 
 The three buttons at the bottom of the shipment pane queue the same actions.
+
+## Live sign-in
+
+Set these before `npm run dev` when the API stack has been deployed. The domain, client id, and API URL are the `CognitoDomain`, `UserPoolClientId`, and `RestApiUrl` outputs.
+
+```powershell
+$env:VITE_API_URL = "https://example.execute-api.us-east-1.amazonaws.com/prod"
+$env:VITE_COGNITO_DOMAIN = "oerf-123456789012.auth.us-east-1.amazoncognito.com"
+$env:VITE_USER_POOL_CLIENT_ID = "client-id"
+npm run dev
+```
+
+The hosted page redirects back to `http://localhost:5173` or `http://127.0.0.1:5173`. Those two callbacks are registered on the dashboard user-pool client, along with the CloudFront site URL. Leave the variables unset to keep the sample desk.
 
 ## Session
 

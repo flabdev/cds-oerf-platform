@@ -479,6 +479,12 @@ class OerfComputeStack(Stack):
             authorizer=http_authorizer,
         )
         self.http_api.add_routes(
+            path="/incidents",
+            methods=[apigwv2.HttpMethod.GET],
+            integration=action_integration,
+            authorizer=http_authorizer,
+        )
+        self.http_api.add_routes(
             path="/incidents/{id}/action",
             methods=[apigwv2.HttpMethod.POST],
             integration=action_integration,

@@ -226,14 +226,24 @@ class DynamoIncidentStore:
                 "Update": {
                     "TableName": self._table,
                     "Key": key(pk, "META"),
-                    "UpdateExpression": "SET #state = :state, #event_seq = #event_seq + :one",
+                    "UpdateExpression": (
+                        "SET #state = :state, #event_seq = #event_seq + :one, "
+                        "#gsi1pk = :gsi1pk, #gsi1sk = :gsi1sk"
+                    ),
                     "ConditionExpression": "#state = :from_state AND #event_seq = :current",
-                    "ExpressionAttributeNames": {"#state": "state", "#event_seq": "event_seq"},
+                    "ExpressionAttributeNames": {
+                        "#state": "state",
+                        "#event_seq": "event_seq",
+                        "#gsi1pk": "GSI1PK",
+                        "#gsi1sk": "GSI1SK",
+                    },
                     "ExpressionAttributeValues": {
                         ":state": s(to_state),
                         ":from_state": s(from_state),
                         ":one": n(1),
                         ":current": n(sequence),
+                        ":gsi1pk": s(f"TENANT#{context.tenant_id}#STATUS#{to_state}"),
+                        ":gsi1sk": s(text(current["opened_at"])),
                     },
                 }
             },
@@ -365,6 +375,8 @@ def _meta_item(
         "reason": s(reason),
         "opened_at": s(opened_at),
         "event_seq": n(event_seq),
+        "GSI1PK": s(f"TENANT#{tenant_id}#STATUS#{state}"),
+        "GSI1SK": s(opened_at),
     }
     if config_version is not None:
         item["config_version"] = n(config_version)

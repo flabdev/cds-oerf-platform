@@ -23,6 +23,7 @@ from oerf.platform.channels.engagement import EngagementStore
 from oerf.platform.channels.providers.base import MessageProvider
 from oerf.platform.channels.registry import PhoneRegistry
 from oerf.platform.channels.templates import MissingFacts, MissingTemplate, render_message
+from oerf.platform.sandbox.join import SANDBOX_TENANT, SandboxGate
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -123,7 +124,12 @@ def send_whatsapp(recipient: str, message: str) -> dict[str, Any]:
     msg_id = f"wa-{uuid.uuid4().hex[:12]}"
     if USE_MOCK_WHATSAPP:
         logger.info("[SIMULATED WHATSAPP] To: %s | Message: %s", recipient, message)
-        return {"success": True, "message_id": msg_id, "channel": "WHATSAPP", "status": "SIMULATED"}
+        return {
+            "success": False,
+            "message_id": msg_id,
+            "channel": "WHATSAPP",
+            "status": "SIMULATED",
+        }
 
     if not WHATSAPP_PHONE_NUMBER_ID:
         logger.warning(
@@ -167,7 +173,7 @@ def send_sms(recipient: str, message: str) -> dict[str, Any]:
     msg_id = f"sms-{uuid.uuid4().hex[:12]}"
     if USE_MOCK_SMS:
         logger.info("[SIMULATED SMS] To: %s | Message: %s", recipient, message)
-        return {"success": True, "message_id": msg_id, "channel": "SMS", "status": "SIMULATED"}
+        return {"success": False, "message_id": msg_id, "channel": "SMS", "status": "SIMULATED"}
 
     try:
         sns = boto3.client("sns")
@@ -185,7 +191,7 @@ def send_email(recipient: str, subject: str, body: str) -> dict[str, Any]:
     if USE_MOCK_EMAIL:
         logger.info("[SIMULATED EMAIL] To: %s | Subject: %s", recipient, subject)
         return {
-            "success": True,
+            "success": False,
             "message_id": msg_id,
             "channel": "EMAIL",
             "status": "SIMULATED",
@@ -261,6 +267,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         result["attempts"].append(res)
 
+        if res.get("status") == "SIMULATED":
+            result["success"] = False
+            result["simulated"] = True
+            result["channel"] = ch_upper
+            break
+
         if res.get("success"):
             result["success"] = True
             result["delivered_channel"] = ch_upper
@@ -327,6 +339,7 @@ class DeliveryResult(BaseModel):
     provider_msg_id: str | None = None
     attempts: list[DeliveryAttempt]
     reason: str | None = None
+    simulated: bool = False
     tenant_id: str
     incident_id: str
     engagement_id: str
@@ -339,8 +352,16 @@ def route_outbound(
     engagements: EngagementStore,
     providers: dict[str, MessageProvider],
     messages: dict[str, Any],
+    sandbox: SandboxGate | None = None,
 ) -> DeliveryResult:
     """Validate opt-in, render a template, fall back across channels, then correlate."""
+
+    if (
+        sandbox is not None
+        and request.tenant_id == SANDBOX_TENANT
+        and not sandbox.channel_send_allowed()
+    ):
+        return _result(request, [], delivered=False, channel="dashboard", reason="simulated")
 
     attempts: list[DeliveryAttempt] = []
     if not _opted_in(registry, request.tenant_id, request.contact_id):
@@ -381,6 +402,15 @@ def route_outbound(
                 reason=sent.reason,
             )
         )
+        if sent.simulated:
+            return _result(
+                request,
+                attempts,
+                delivered=False,
+                channel=channel,
+                reason="simulated",
+                simulated=True,
+            )
         if not sent.delivered or not sent.provider_msg_id:
             continue
         engagement = engagements.get(
@@ -436,6 +466,7 @@ def _result(
     channel: str | None = None,
     provider_msg_id: str | None = None,
     reason: str | None = None,
+    simulated: bool = False,
 ) -> DeliveryResult:
     return DeliveryResult(
         delivered=delivered,
@@ -443,6 +474,7 @@ def _result(
         provider_msg_id=provider_msg_id,
         attempts=attempts,
         reason=reason,
+        simulated=simulated,
         tenant_id=request.tenant_id,
         incident_id=request.incident_id,
         engagement_id=request.engagement_id,

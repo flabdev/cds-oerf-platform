@@ -13,6 +13,7 @@ class ProviderResult(BaseModel):
     delivered: bool
     provider_msg_id: str | None = None
     reason: str | None = None
+    simulated: bool = False
 
 
 class MessageProvider(Protocol):
