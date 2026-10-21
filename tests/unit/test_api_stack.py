@@ -73,3 +73,9 @@ def test_websocket_routes_and_outputs_exist(template: Template) -> None:
     outputs = template.find_outputs("*")
     names = set(outputs)
     assert {"DashboardUrl", "RestApiUrl", "WebSocketUrl", "ActionQueueUrl"} <= names
+    assert {"CognitoDomain", "UserPoolClientId", "UserPoolId"} <= names
+    template.resource_count_is("AWS::Cognito::UserPoolDomain", 1)
+    template.has_resource_properties(
+        "AWS::Cognito::UserPoolClient",
+        {"AllowedOAuthFlows": ["code"]},
+    )

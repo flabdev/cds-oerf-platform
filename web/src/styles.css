@@ -517,6 +517,28 @@ h2 {
   padding-left: 1.1rem;
 }
 
+.gate {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: #e7eef2;
+}
+
+.gate-card {
+  width: min(28rem, 100%);
+  background: #fff;
+  padding: 1.5rem;
+}
+
+.gate-card h1 {
+  margin: 0.2rem 0 0.6rem;
+}
+
+.gate-card .send {
+  margin-top: 1rem;
+}
+
 @media (max-width: 760px) {
   .window,
   .window.collapsed {
