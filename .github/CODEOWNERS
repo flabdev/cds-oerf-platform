@@ -14,7 +14,7 @@
 /oerf/platform/report/ @mudita-srivastava-eng
 
 # Chaitanya
-/infra/stacks/data_stack.py @chaitanyafl
+/infra/ @chaitanyafl
 
 # Vivek
 /domains/ @vivek-sharma-fission
