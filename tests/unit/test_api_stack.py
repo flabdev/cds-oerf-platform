@@ -2,6 +2,7 @@
 
 import aws_cdk as cdk
 import pytest
+from aws_cdk import aws_sqs as sqs
 from aws_cdk.assertions import Template
 
 from infra.stacks.api_stack import OerfApiStack
@@ -9,15 +10,30 @@ from infra.stacks.data_stack import OerfDataStack
 
 ACCOUNT = "123456789012"
 REGION = "us-east-1"
+WEBSOCKET_URL = "wss://abc.execute-api.us-east-1.amazonaws.com/prod"
 
 
 @pytest.fixture(scope="module")
-def template() -> Template:
+def templates() -> tuple[Template, Template]:
     app = cdk.App()
     env = cdk.Environment(account=ACCOUNT, region=REGION)
     data = OerfDataStack(app, "OerfDataStack", env=env)
-    stack = OerfApiStack(app, "OerfApiStack", data_stack=data, env=env)
-    return Template.from_stack(stack)
+    refs = cdk.Stack(app, "InboundRefs", env=env)
+    queue = sqs.Queue(refs, "InboundQueue")
+    stack = OerfApiStack(
+        app,
+        "OerfApiStack",
+        data_stack=data,
+        inbound_queue=queue,
+        websocket_url=WEBSOCKET_URL,
+        env=env,
+    )
+    return Template.from_stack(stack), Template.from_stack(refs)
+
+
+@pytest.fixture(scope="module")
+def template(templates: tuple[Template, Template]) -> Template:
+    return templates[0]
 
 
 def test_rest_routes_require_the_cognito_authorizer(template: Template) -> None:
@@ -36,14 +52,37 @@ def test_rest_routes_require_the_cognito_authorizer(template: Template) -> None:
     assert all(
         method["Properties"]["AuthorizationType"] == "COGNITO_USER_POOLS" for method in protected
     )
+    resources = template.find_resources("AWS::ApiGateway::Resource")
+    actions_id = next(
+        logical
+        for logical, resource in resources.items()
+        if resource["Properties"].get("PathPart") == "actions"
+    )
+    assert all(
+        resource["Properties"].get("PathPart") != "action" for resource in resources.values()
+    )
+    posts = [
+        method
+        for method in template.find_resources("AWS::ApiGateway::Method").values()
+        if method["Properties"].get("HttpMethod") == "POST"
+        and method["Properties"].get("ResourceId", {}).get("Ref") == actions_id
+    ]
+    assert len(posts) == 1
 
 
-def test_actions_use_the_fifo_queue_and_cannot_transition_state(template: Template) -> None:
-    template.has_resource_properties("AWS::SQS::Queue", {"FifoQueue": True})
+def test_actions_enqueue_on_the_inbound_queue_and_cannot_transition_state(
+    templates: tuple[Template, Template],
+) -> None:
+    template, refs = templates
+    template.resource_count_is("AWS::SQS::Queue", 0)
     rendered = str(template.to_json())
+    assert "ACTION_QUEUE_URL" not in rendered
+    assert "INBOUND_QUEUE_URL" in rendered
     assert "states:SendTaskSuccess" not in rendered
     assert "states:StartExecution" not in rendered
-    assert "sqs:SendMessage" in rendered
+    actions, resources = _sqs_statements(template)
+    assert actions == [["sqs:SendMessage"]]
+    assert resources == [{"Fn::ImportValue": _inbound_queue_export(refs)}]
 
 
 def test_dashboard_bucket_is_private_behind_cloudfront(template: Template) -> None:
@@ -62,20 +101,69 @@ def test_dashboard_bucket_is_private_behind_cloudfront(template: Template) -> No
     template.resource_count_is("AWS::CloudFront::OriginAccessControl", 1)
 
 
-def test_websocket_routes_and_outputs_exist(template: Template) -> None:
-    template.has_resource_properties(
-        "AWS::ApiGatewayV2::Api",
-        {"ProtocolType": "WEBSOCKET"},
-    )
-    routes = template.find_resources("AWS::ApiGatewayV2::Route")
-    keys = {route["Properties"]["RouteKey"] for route in routes.values()}
-    assert {"$connect", "$disconnect", "$default", "subscribe"} <= keys
+def test_websocket_is_the_compute_endpoint_and_cors_is_cloudfront(
+    template: Template,
+) -> None:
+    template.resource_count_is("AWS::ApiGatewayV2::Api", 0)
+    template.resource_count_is("AWS::ApiGatewayV2::Stage", 0)
+    template.resource_count_is("AWS::Lambda::Function", 2)
     outputs = template.find_outputs("*")
     names = set(outputs)
-    assert {"DashboardUrl", "RestApiUrl", "WebSocketUrl", "ActionQueueUrl"} <= names
+    assert {"DashboardUrl", "RestApiUrl", "WebSocketUrl"} <= names
+    assert "ActionQueueUrl" not in names
     assert {"CognitoDomain", "UserPoolClientId", "UserPoolId"} <= names
+    assert outputs["WebSocketUrl"]["Value"] == WEBSOCKET_URL
     template.resource_count_is("AWS::Cognito::UserPoolDomain", 1)
     template.has_resource_properties(
         "AWS::Cognito::UserPoolClient",
         {"AllowedOAuthFlows": ["code"]},
     )
+    origins = _allow_origins(template.to_json())
+    assert origins
+    for origin in origins:
+        rendered = str(origin)
+        assert "*" not in rendered
+        assert "DomainName" in rendered
+
+
+def _sqs_statements(template: Template) -> tuple[list[list[str]], list[object]]:
+    actions: list[list[str]] = []
+    resources: list[object] = []
+    for policy in template.find_resources("AWS::IAM::Policy").values():
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            raw = statement.get("Action", [])
+            names = [raw] if isinstance(raw, str) else list(raw)
+            if any(name.startswith("sqs:") for name in names):
+                actions.append(names)
+                resources.append(statement["Resource"])
+    return actions, resources
+
+
+def _inbound_queue_export(template: Template) -> str:
+    for output in template.to_json()["Outputs"].values():
+        value = output["Value"]
+        target = value.get("Fn::GetAtt") if isinstance(value, dict) else None
+        if target and target[0].startswith("InboundQueue") and target[1] == "Arn":
+            return output["Export"]["Name"]
+    raise AssertionError("inbound queue ARN is not exported")
+
+
+def _allow_origins(template: dict) -> list[object]:
+    found: list[object] = []
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if (
+                    key == "method.response.header.Access-Control-Allow-Origin"
+                    and not isinstance(value, bool)
+                ):
+                    found.append(value)
+                else:
+                    walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(template)
+    return found

@@ -65,12 +65,15 @@ compute_stack = OerfComputeStack(
 stacks = [data_stack, compute_stack]
 if _dashboard_enabled(app):
     # Mudita owns api_stack.py. It stays out of the default synth until
-    # dashboard:enabled=true. The constructor takes the data stack only.
+    # dashboard:enabled=true. Actions use the compute inbound queue, and the
+    # dashboard publishes that stack's WebSocket endpoint.
     stacks.append(
         OerfApiStack(
             app,
             "OerfApiStack",
             data_stack=data_stack,
+            inbound_queue=compute_stack.inbound_queue,
+            websocket_url=compute_stack.ws_stage.url,
             env=cdk_env,
         )
     )
