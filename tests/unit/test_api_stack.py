@@ -99,6 +99,24 @@ def test_dashboard_bucket_is_private_behind_cloudfront(template: Template) -> No
     )
     template.resource_count_is("AWS::CloudFront::Distribution", 1)
     template.resource_count_is("AWS::CloudFront::OriginAccessControl", 1)
+    buckets = template.find_resources("AWS::S3::Bucket")
+    assert len(buckets) == 1
+    rule = next(iter(buckets.values()))["Properties"]["BucketEncryption"]
+    default = rule["ServerSideEncryptionConfiguration"][0]
+    assert default["ServerSideEncryptionByDefault"] == {"SSEAlgorithm": "AES256"}
+    assert "BucketKeyEnabled" not in default
+
+
+def test_dashboard_roles_are_not_granted_kms(template: Template) -> None:
+    found = []
+    for policy in template.find_resources("AWS::IAM::Policy").values():
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            if statement.get("Effect") == "Deny":
+                continue
+            action = statement.get("Action", [])
+            names = [action] if isinstance(action, str) else list(action)
+            found.extend(name for name in names if name.startswith("kms:"))
+    assert found == []
 
 
 def test_dashboard_functions_trace_and_keep_logs_for_thirty_days(template: Template) -> None:
