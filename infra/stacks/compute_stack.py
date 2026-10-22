@@ -32,6 +32,7 @@ from constructs import Construct
 from infra.constructs.agentcore_runtime import AgentCoreRuntime
 from infra.constructs.bedrock_guardrail import BedrockGuardrail
 from infra.constructs.waba_event_destination import WabaEventDestination
+from infra.runtime_asset import runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
 
 # Task-token APIs have no resource type in the IAM Service Authorization
@@ -80,27 +81,9 @@ class OerfComputeStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
 
         # Shared asset. Packaged from the repo root so imports stay ``oerf.*``
-        # and do not shadow the stdlib ``platform`` module.
-        lambda_code = lambda_.Code.from_asset(
-            ".",
-            exclude=[
-                "cdk.out",
-                ".git",
-                ".github",
-                ".venv",
-                "venv",
-                "tests",
-                "web",
-                "sim",
-                "node_modules",
-                "infra/custom_resources",
-                "**/*.pyc",
-                "**/__pycache__",
-                ".pytest_cache",
-                "*.md",
-                "cds_oerf_platform.egg-info",
-            ],
-        )
+        # and do not shadow the stdlib ``platform`` module. The allow-list is
+        # ``oerf``, ``domains``, and ``sim``.
+        lambda_code = lambda_.Code.from_asset(".", **runtime_code_args())
 
         # ---------------------------------------------------------
         # 1. Channel Router Lambda (ADR-008)
