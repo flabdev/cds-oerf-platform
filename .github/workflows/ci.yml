@@ -1,6 +1,14 @@
 name: CI
 
-# Credential-free checks. This workflow does not request an OIDC token or AWS credentials.
+# Pull-request and main-branch checks for this repo. A failing job blocks the change.
+#
+# Python installs the package with the dev extra, then runs ruff, pytest with the aws
+# marker excluded, and two CDK synths: the default stacks, then dashboard:enabled=true.
+# Synth uses account 000000000000 and --lookups false, so it makes no AWS API calls.
+# Web runs npm ci and node --test in web/.
+#
+# The job token can read the repo and nothing else. It does not request OIDC or AWS
+# credentials. Manual deploy stays in deploy.yml.
 
 on:
   pull_request:
