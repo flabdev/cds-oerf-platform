@@ -38,7 +38,7 @@ from infra.stacks.data_stack import OerfDataStack
 
 # Task-token APIs have no resource type in the IAM Service Authorization
 # Reference. The resource stays "*"; see docs/security/iam-exceptions.md.
-_TASK_TOKEN_ACTIONS = ["states:SendTaskSuccess", "states:SendTaskFailure"]
+_TASK_TOKEN_ACTIONS = ["states:SendTaskSuccess"]
 _INBOUND_TIMEOUT = Duration.seconds(30)
 _VISIBILITY_MULTIPLE = 6
 _DEFAULT_INGEST_CONCURRENCY = 5
@@ -651,7 +651,7 @@ class OerfComputeStack(Stack):
         )
 
     def _grant_task_token(self, fn: lambda_.Function) -> None:
-        """Allow SendTaskSuccess and SendTaskFailure. Resource must be ``*``."""
+        """Allow SendTaskSuccess. SendTaskFailure is not granted. Resource is ``*``."""
         fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=_TASK_TOKEN_ACTIONS,

@@ -353,6 +353,10 @@ class OerfDataStack(Stack):
         # custom_attributes here: Schema is create-only and would replace this pool.
         # V2 pre-token events, which copy custom:tenant_id onto the access token,
         # require Essentials or Plus.
+        # Password policy, MfaConfiguration, EnabledMfas, and
+        # TemporaryPasswordValidityDays are "Update requires: No interruption"
+        # (CloudFormation UserPool and PasswordPolicy). UserPoolAddOns is paid
+        # threat protection and stays unset.
         self.user_pool = cognito.UserPool(
             self,
             "OerfUserPool",
@@ -360,6 +364,16 @@ class OerfDataStack(Stack):
             self_sign_up_enabled=False,
             auto_verify=cognito.AutoVerifiedAttrs(email=True),
             feature_plan=cognito.FeaturePlan.ESSENTIALS,
+            password_policy=cognito.PasswordPolicy(
+                min_length=12,
+                require_lowercase=True,
+                require_uppercase=True,
+                require_digits=True,
+                require_symbols=True,
+                temp_password_validity=Duration.days(3),
+            ),
+            mfa=cognito.Mfa.OPTIONAL,
+            mfa_second_factor=cognito.MfaSecondFactor(sms=False, otp=True),
             removal_policy=RemovalPolicy.RETAIN,
         )
         self.user_pool.add_trigger(

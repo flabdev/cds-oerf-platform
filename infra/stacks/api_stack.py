@@ -6,6 +6,8 @@ stack's WebSocket endpoint. Stack registration lives in ``infra/app.py``.
 
 from __future__ import annotations
 
+import json
+
 from aws_cdk import (
     CfnOutput,
     Duration,
@@ -26,6 +28,28 @@ from constructs import Construct
 from infra.iam_conditions import pin_source_account
 from infra.runtime_asset import runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
+
+_DEFAULT_THROTTLE_RATE = 20
+_DEFAULT_THROTTLE_BURST = 40
+_ACCESS_LOG = json.dumps(
+    {
+        "requestId": "$context.requestId",
+        "ip": "$context.identity.sourceIp",
+        "httpMethod": "$context.httpMethod",
+        "resourcePath": "$context.resourcePath",
+        "status": "$context.status",
+        "responseLatency": "$context.responseLatency",
+        "sub": "$context.authorizer.claims.sub",
+    },
+    separators=(",", ":"),
+)
+
+
+def _context_int(scope: Construct, key: str, default: int) -> int:
+    raw = scope.node.try_get_context(key)
+    if raw is None or raw == "":
+        return default
+    return int(raw)
 
 
 def _dashboard_function(stack: Stack, construct_id: str, **kwargs: object) -> lambda_.Function:
@@ -115,6 +139,7 @@ class OerfApiStack(Stack):
             default_behavior=cloudfront.BehaviorOptions(
                 origin=origins.S3BucketOrigin.with_origin_access_control(self.dashboard_bucket),
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                response_headers_policy=cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
             ),
         )
         dashboard_origin = f"https://{self.distribution.distribution_domain_name}"
@@ -128,10 +153,31 @@ class OerfApiStack(Stack):
             "authorizer": authorizer,
             "authorization_type": apigw.AuthorizationType.COGNITO,
         }
+        access_logs = logs.LogGroup(
+            self,
+            "DashboardRestAccessLogs",
+            retention=logs.RetentionDays.ONE_MONTH,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        # Access logging needs the account CloudWatch role. CDK grants that
+        # role when cloud_watch_role is true. Deleting this stack retains it,
+        # because the role is account-wide.
         self.rest_api = apigw.RestApi(
             self,
             "OerfDashboardRestApi",
             rest_api_name="oerf-dashboard",
+            cloud_watch_role=True,
+            cloud_watch_role_removal_policy=RemovalPolicy.RETAIN,
+            deploy_options=apigw.StageOptions(
+                throttling_rate_limit=_context_int(
+                    self, "api:throttleRate", _DEFAULT_THROTTLE_RATE
+                ),
+                throttling_burst_limit=_context_int(
+                    self, "api:throttleBurst", _DEFAULT_THROTTLE_BURST
+                ),
+                access_log_destination=apigw.LogGroupLogDestination(access_logs),
+                access_log_format=apigw.AccessLogFormat.custom(_ACCESS_LOG),
+            ),
             default_cors_preflight_options=apigw.CorsOptions(
                 allow_origins=[dashboard_origin],
                 allow_methods=["GET", "POST", "PUT", "OPTIONS"],
