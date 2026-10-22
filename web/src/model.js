@@ -52,7 +52,7 @@ export function actionRequest(incidentId, action, optionId, actionId, engagement
   }
   return {
     method: "POST",
-    path: `/incidents/${incidentId}/action`,
+    path: `/incidents/${incidentId}/actions`,
     idempotencyKey: actionId,
     body,
   };

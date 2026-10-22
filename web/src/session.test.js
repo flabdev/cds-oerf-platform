@@ -26,6 +26,17 @@ test("a live config drops a trailing slash and the https prefix", () => {
   assert.equal(config.mode, "live");
   assert.equal(config.apiUrl, "https://api.example.com");
   assert.equal(config.domain, "oerf.auth.us-east-1.amazoncognito.com");
+  assert.equal(config.wsUrl, "");
+});
+
+test("the websocket url is the compute stack output", () => {
+  const config = liveConfig({
+    VITE_API_URL: "https://api.example.com",
+    VITE_COGNITO_DOMAIN: "oerf.auth.us-east-1.amazoncognito.com",
+    VITE_USER_POOL_CLIENT_ID: "client-1",
+    VITE_WS_URL: "wss://abc.execute-api.us-east-1.amazonaws.com/prod/",
+  });
+  assert.equal(config.wsUrl, "wss://abc.execute-api.us-east-1.amazonaws.com/prod");
 });
 
 test("the id token supplies the tenant and role, and an expired token signs out", () => {
@@ -60,8 +71,8 @@ test("incidents and actions use the bearer token and hide no task token", async 
   const calls = [];
   const fetchImpl = async (url, options) => {
     calls.push({ url, options });
-    if (url.endsWith("/action")) {
-      return { ok: true, status: 202, json: async () => ({ action_id: "act-1" }) };
+    if (url.endsWith("/actions")) {
+      return { ok: true, status: 202, json: async () => ({ action_id: "act-1", status: "queued" }) };
     }
     return {
       ok: true,
@@ -86,7 +97,7 @@ test("incidents and actions use the bearer token and hide no task token", async 
     "id-token",
     {
       method: "POST",
-      path: "/incidents/INC-1/action",
+      path: "/incidents/INC-1/actions",
       idempotencyKey: "act-1",
       body: { action: "cancel" },
     },

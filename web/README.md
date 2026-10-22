@@ -61,12 +61,13 @@ The three buttons at the bottom of the shipment pane queue the same actions.
 
 ## Live sign-in
 
-Set these before `npm run dev` when the API stack has been deployed. The domain, client id, and API URL are the `CognitoDomain`, `UserPoolClientId`, and `RestApiUrl` outputs.
+Set these before `npm run dev` when the API stack has been deployed. The domain, client id, and API URL are the `CognitoDomain`, `UserPoolClientId`, and `RestApiUrl` outputs. `VITE_WS_URL` is the `WebSocketApiUrl` output of `OerfComputeStack`.
 
 ```powershell
 $env:VITE_API_URL = "https://example.execute-api.us-east-1.amazonaws.com/prod"
 $env:VITE_COGNITO_DOMAIN = "oerf-123456789012.auth.us-east-1.amazoncognito.com"
 $env:VITE_USER_POOL_CLIENT_ID = "client-id"
+$env:VITE_WS_URL = "wss://example.execute-api.us-east-1.amazonaws.com/prod"
 npm run dev
 ```
 
