@@ -142,6 +142,7 @@ Queued message (tenant and user come from the token):
   "action_id": "act-9f3c",
   "action": "pick_option",
   "option_id": "OPT-B",
+  "reason": null,
   "user_id": "user-1",
   "type": "text",
   "text": null,
@@ -227,6 +228,7 @@ Owner: inbound handler (name pending, OERF-201–207). The queue message, after 
     "action_id": { "type": ["string", "null"] },
     "action": { "enum": ["confirm_transfer", "pick_option", "cancel", null] },
     "option_id": { "type": ["string", "null"] },
+    "reason": { "type": ["string", "null"] },
     "user_id": { "type": ["string", "null"] },
     "type": { "enum": ["button", "text", "image", "audio", "document"] },
     "text": { "type": ["string", "null"] },
@@ -256,7 +258,7 @@ Dashboard messages skip steps 2–4 and correlate on `engagement_id`.
 
 The handler resumes only when the resolved sender's `tenant_id` and `contact_id` both match the correlated engagement: a quoted message id cannot cross a tenant boundary, and a shared number stays bound to the party that was contacted. Every duplicate, unknown, late, invalid, or mismatched record is acknowledged and logged without a callback.
 
-`oerf.platform.inbound.handler` covers steps 1 and 2, the `OUTMSG#` half of step 4, and the resume in step 5. The `ADDR#` fallback with its `disambiguation` and out-of-context replies, `JOIN` in step 3, and evidence storage in step 5 are not in that module yet and remain open.
+`oerf.platform.inbound.handler` covers steps 1 and 2, both the `OUTMSG#` and unique `ADDR#` paths of step 4, and the resume in step 5. A quoted reply never falls back to the sender address if its quoted id is unknown. An unquoted reply resumes only when exactly one waiting engagement matches; ambiguous and out-of-context messages are acknowledged without a callback. Sending the corresponding `disambiguation` and out-of-context replies, `JOIN` in step 3, and evidence storage in step 5 remain open.
 
 Dedupe item, agreed by the spec and [oerf/platform/inbound/dedupe.py](../oerf/platform/inbound/dedupe.py):
 

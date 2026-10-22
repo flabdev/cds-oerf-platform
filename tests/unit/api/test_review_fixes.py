@@ -221,6 +221,7 @@ def test_dashboard_action_is_queued_and_does_not_resume_the_workflow(monkeypatch
     assert body["action"] == "confirm_transfer"
     assert body["tenant_id"] == "t1"
     assert body["user_id"] == "user-1"
+    assert body["reason"] == "manual selection"
     assert body["text"] is None
     assert "task_token" not in body
 
@@ -266,6 +267,7 @@ def _action_event() -> dict:
                 "action": "confirm_transfer",
                 "action_id": "act-1",
                 "engagement_id": "ENG-03",
+                "reason": "manual selection",
             }
         ),
     }

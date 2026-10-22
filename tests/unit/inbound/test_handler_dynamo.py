@@ -54,6 +54,7 @@ def wired() -> tuple[InboundDependencies, FakeDynamoClient, CallbackClient]:
         deadline=DEADLINE,
     )
     engagements.register_outbound("wamid-outbound-1", engagement)
+    engagements.register_address("whatsapp", "+15550000001", engagement)
     return InboundDependencies(dedupe, engagements, callbacks, registry), client, callbacks
 
 
@@ -133,6 +134,44 @@ def test_a_late_reply_after_the_engagement_stopped_does_not_resume(
     assert callbacks.calls == []
 
 
+def test_dashboard_action_for_waiting_engagement_resumes_with_action_envelope(
+    wired: tuple[InboundDependencies, FakeDynamoClient, CallbackClient],
+) -> None:
+    deps, _client, callbacks = wired
+    action = {
+        "tenant_id": "t1",
+        "incident_id": "INC-000001",
+        "engagement_id": "ENG-01",
+        "channel": "dashboard",
+        "action_id": "act-9f3c",
+        "action": "pick_option",
+        "option_id": "OPT-B",
+        "reason": "driver selected alternate",
+        "received_at": "2026-10-20T10:20:00Z",
+    }
+
+    assert _run(deps, _record(action)) == {"batchItemFailures": []}
+    assert len(callbacks.calls) == 1
+    assert callbacks.calls[0]["taskToken"] == "token-t1"
+    output = json.loads(callbacks.calls[0]["output"])
+    assert output == {
+        "channel": "dashboard",
+        "action_id": "act-9f3c",
+        "action": "pick_option",
+        "option_id": "OPT-B",
+        "reason": "driver selected alternate",
+        "received_at": "2026-10-20T10:20:00Z",
+        "engagement": {
+            "engagement_id": "ENG-01",
+            "role": "driver",
+            "ask": "diagnose",
+            "rung": 1,
+        },
+    }
+    assert _run(deps, _record(action, "sqs-duplicate")) == {"batchItemFailures": []}
+    assert len(callbacks.calls) == 1
+
+
 def test_dashboard_action_for_another_tenant_never_resumes(
     wired: tuple[InboundDependencies, FakeDynamoClient, CallbackClient],
 ) -> None:
@@ -189,6 +228,57 @@ def test_a_number_shared_by_two_tenants_resumes_the_correlated_contact(
     assert _run(deps, _record(_provider())) == {"batchItemFailures": []}
 
     assert [call["taskToken"] for call in callbacks.calls] == ["token-t1"]
+
+
+def test_unquoted_reply_uses_the_unique_dynamo_address_match(
+    wired: tuple[InboundDependencies, FakeDynamoClient, CallbackClient],
+) -> None:
+    deps, _client, callbacks = wired
+
+    assert _run(deps, _record(_provider(context_msg_id=None))) == {"batchItemFailures": []}
+
+    assert [call["taskToken"] for call in callbacks.calls] == ["token-t1"]
+
+
+def test_ambiguous_dynamo_address_matches_do_not_resume_any_engagement(
+    wired: tuple[InboundDependencies, FakeDynamoClient, CallbackClient],
+) -> None:
+    deps, _client, callbacks = wired
+    second = deps.engagements.open_engagement(
+        "t1",
+        "INC-000002",
+        "ENG-02",
+        "driver",
+        "follow up",
+        "critical_field",
+        "token-t2",
+        {},
+        contact_id="C-T1-DRV",
+        rung=1,
+        deadline=DEADLINE,
+    )
+    deps.engagements.register_address("whatsapp", "+15550000001", second)
+
+    assert _run(deps, _record(_provider(context_msg_id=None))) == {"batchItemFailures": []}
+
+    assert callbacks.calls == []
+    first = deps.engagements.get("t1", "INC-000001", "ENG-01")
+    waiting_second = deps.engagements.get("t1", "INC-000002", "ENG-02")
+    assert first is not None and first.status == "WAITING"
+    assert waiting_second is not None and waiting_second.status == "WAITING"
+
+
+def test_unknown_quoted_dynamo_correlation_does_not_use_address_fallback(
+    wired: tuple[InboundDependencies, FakeDynamoClient, CallbackClient],
+) -> None:
+    deps, _client, callbacks = wired
+
+    assert _run(
+        deps,
+        _record(_provider(context_msg_id="wamid-unknown")),
+    ) == {"batchItemFailures": []}
+
+    assert callbacks.calls == []
 
 
 def test_a_sender_from_another_tenant_cannot_resume_a_quoted_engagement(

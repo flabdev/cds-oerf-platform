@@ -187,6 +187,7 @@ def handle_dashboard_action(
         "action_id": parsed["action_id"],
         "action": parsed["action"],
         "option_id": parsed["option_id"],
+        "reason": parsed["reason"],
         "user_id": user_id,
         "type": "text",
         "text": None,
@@ -318,11 +319,13 @@ def _action_body(body: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if "reason" in body and not isinstance(body.get("reason"), str):
         return None
+    reason = body.get("reason")
     return {
         "action": action,
         "action_id": action_id.strip(),
         "engagement_id": engagement.strip() if _text(engagement) else None,
         "option_id": option.strip() if _text(option) else None,
+        "reason": reason.strip()[:4000] if isinstance(reason, str) and reason.strip() else None,
     }
 
 

@@ -2,10 +2,11 @@
 
 Ordering for a provider message follows ``docs/interfaces.md`` section 5:
 normalize, dedupe on ``INMSG#{provider_msg_id}``, opt-out keywords, correlate on
-``OUTMSG#{context_msg_id}`` (or nothing when the reply quotes nothing), check the
-engagement is still ``WAITING``, then ``states:SendTaskSuccess`` on the persisted
-token. A dashboard action skips opt-out and correlation: the API already wrote
-``tenant_id``, ``incident_id`` and ``engagement_id`` from a verified token, so the
+``OUTMSG#{context_msg_id}`` or, when no context is present, resolve a unique
+``ADDR#{channel}#{address}`` engagement, check the engagement is still ``WAITING``,
+then ``states:SendTaskSuccess`` on the persisted token. A dashboard action skips
+opt-out and correlation: the API already wrote ``tenant_id``, ``incident_id`` and
+``engagement_id`` from a verified token, so the
 engagement is loaded with a tenant-scoped ``get``.
 
 Boundaries this module keeps:
@@ -25,9 +26,12 @@ Boundaries this module keeps:
   request/response ``OutputPath: $.Payload`` and resolves to ``__STUB_ARN__``; the
   engagement step that replaces it owns the reply contract (ADR-017), and OERF-203
   confirms the wiring against this output.
-* Duplicate, unknown, late, or sender-mismatched messages are acknowledged and
-  logged without a Step Functions call. A failure before the callback releases the
+* Duplicate, unknown, late, ambiguous, or sender-mismatched messages are acknowledged
+  and logged without a Step Functions call. A failure before the callback releases the
   dedupe id and is reported as an SQS partial-batch failure so it can be retried.
+* Quoted replies correlate only by their quoted outbound id. Unquoted replies may
+  correlate by the trusted sender address, and only when exactly one engagement is
+  waiting there; ambiguous and out-of-context messages are safely ignored.
 * No ``states:SendTaskFailure`` is sent. The agreement in section 5 keeps reply
   classification in the engagement Interpret step (ADR-017), and the state machine
   already routes a decline or cancellation through its own decision branch. Failing
@@ -39,9 +43,9 @@ Boundaries this module keeps:
 while removing it from the action handler (ADR-028). The module reads
 ``INCIDENT_TABLE_NAME``, ``ROUTING_TABLE_NAME`` and ``TENANT_TABLE_NAME``, all
 of which the deployed ``oerf-inbound`` function already sets; no infrastructure
-is changed here. Section 5 items still owned elsewhere: the ``ADDR#`` fallback
-with its ``disambiguation`` and out-of-context replies, the ``JOIN`` sandbox
-path, and evidence storage of inbound media (OERF-207).
+is changed here. Section 5 items still owned elsewhere: sending the ``disambiguation`` and
+out-of-context replies, the ``JOIN`` sandbox path, and evidence storage of inbound
+media (OERF-207). The unique ``ADDR#`` fallback is implemented below.
 """
 
 from __future__ import annotations
@@ -58,7 +62,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from oerf.platform.channels.engagement import DynamoEngagementStore, Engagement, EngagementStore
-from oerf.platform.channels.optout import handle_reply
+from oerf.platform.channels.optout import apply_opt_out, is_opt_out
 from oerf.platform.channels.registry import (
     DynamoPhoneRegistry,
     PhoneRegistry,
@@ -165,27 +169,37 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
         return "duplicate"
     if dependencies.registry is None:
         raise RuntimeError("provider inbound requires a sender registry")
-    reply = handle_reply(
-        message.text,
-        context_id or message.provider_msg_id,
-        message.sender,
-        engagements=dependencies.engagements,
-        registry=dependencies.registry,
-    )
-    if reply.kind == "opt_out":
-        logger.info("Handled provider opt-out; stopped=%d", len(reply.stopped_ids))
+    if is_opt_out(message.text):
+        result = apply_opt_out(dependencies.registry, dependencies.engagements, message.sender)
+        logger.info("Handled provider opt-out; stopped=%d", len(result.stopped_ids))
         return "opt_out"
-    if reply.engagement is None:
-        logger.info("Ignoring unknown or late provider reply id=%s", message.provider_msg_id)
-        return "ignored"
+
+    if context_id:
+        engagement = dependencies.engagements.correlate(context_id)
+        if engagement is None:
+            logger.info("Ignoring uncorrelated quoted reply id=%s", message.provider_msg_id)
+            return "ignored"
+    else:
+        candidates = dependencies.engagements.for_address(message.channel, message.sender)
+        if len(candidates) != 1:
+            disposition = "ambiguous" if candidates else "out_of_context"
+            logger.info(
+                "Ignoring %s unquoted reply id=%s candidates=%d",
+                disposition,
+                message.provider_msg_id,
+                len(candidates),
+            )
+            return disposition
+        engagement = candidates[0]
+
     resolution = dependencies.registry.resolve_sender(message.sender)
-    if not _sender_owns_engagement(reply.engagement, resolution):
+    if not _sender_owns_engagement(engagement, resolution):
         logger.warning(
             "Ignoring reply from a sender that does not own engagement=%s",
-            reply.engagement.engagement_id,
+            engagement.engagement_id,
         )
         return "ignored"
-    _resume(reply.engagement, _provider_payload(message), dependencies)
+    _resume(engagement, _provider_payload(message), dependencies)
     return "resumed"
 
 
@@ -259,7 +273,12 @@ def _process_dashboard(body: dict[str, Any], dependencies: InboundDependencies) 
         logger.info("Ignoring unknown or late dashboard action id=%s", action_id)
         return "ignored"
     action, option_id = body.get("action"), _nonblank(body.get("option_id"))
-    if action not in DASHBOARD_ACTIONS or (action == "pick_option" and not option_id):
+    reason = body.get("reason")
+    if (
+        action not in DASHBOARD_ACTIONS
+        or (action == "pick_option" and not option_id)
+        or (reason is not None and not isinstance(reason, str))
+    ):
         logger.warning("Ignoring invalid dashboard action id=%s", action_id)
         return "invalid"
     payload: dict[str, Any] = {
@@ -270,6 +289,8 @@ def _process_dashboard(body: dict[str, Any], dependencies: InboundDependencies) 
     }
     if action == "pick_option":
         payload["option_id"] = option_id
+    if isinstance(reason, str) and reason.strip():
+        payload["reason"] = reason.strip()[:MAX_REPLY_TEXT]
     _resume(engagement, payload, dependencies)
     return "resumed"
 

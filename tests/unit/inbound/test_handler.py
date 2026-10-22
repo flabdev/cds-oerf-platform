@@ -57,15 +57,22 @@ def setup_inbound():
     return deps, engagements, registry, callbacks, engagement
 
 
-def _provider(message_id: str = "incoming-1", *, text: str = "yes") -> dict[str, Any]:
-    return {
+def _provider(
+    message_id: str = "incoming-1",
+    *,
+    text: str = "yes",
+    context_msg_id: str | None = "outbound-1",
+) -> dict[str, Any]:
+    body = {
         "provider": "whatsapp",
         "message_id": message_id,
         "from": "+15550000001",
         "timestamp": "2026-10-20T10:20:00Z",
         "text": text,
-        "context_msg_id": "outbound-1",
     }
+    if context_msg_id is not None:
+        body["context_msg_id"] = context_msg_id
+    return body
 
 
 def test_valid_reply_resumes_correlated_engagement_with_sanitized_output(setup_inbound) -> None:
@@ -173,6 +180,53 @@ def test_another_tenants_contact_cannot_resume_the_quoted_engagement(setup_inbou
     assert callbacks.calls == []
     waiting = engagements.get(opened.tenant_id, opened.incident_id, opened.engagement_id)
     assert waiting is not None and waiting.status == "WAITING"
+
+
+def test_unquoted_reply_resumes_the_unique_waiting_engagement_for_sender(setup_inbound) -> None:
+    deps, engagements, _registry, callbacks, opened = setup_inbound
+    engagements.register_address("whatsapp", "+15550000001", opened)
+
+    assert process_message(_provider(context_msg_id=None), deps) == "resumed"
+
+    assert [call["taskToken"] for call in callbacks.calls] == ["secret-task-token"]
+    answered = engagements.get(opened.tenant_id, opened.incident_id, opened.engagement_id)
+    assert answered is not None and answered.status == "ANSWERED"
+
+
+def test_unquoted_reply_with_multiple_waiting_engagements_is_not_resumed(setup_inbound) -> None:
+    deps, engagements, _registry, callbacks, opened = setup_inbound
+    engagements.register_address("whatsapp", "+15550000001", opened)
+    second = engagements.open_engagement(
+        opened.tenant_id,
+        "incident-2",
+        "engagement-2",
+        "driver",
+        "confirm",
+        "policy-1",
+        "second-task-token",
+        {},
+        contact_id=opened.contact_id,
+        rung=1,
+        deadline=DEADLINE,
+    )
+    engagements.register_address("whatsapp", "+15550000001", second)
+
+    assert process_message(_provider(context_msg_id=None), deps) == "ambiguous"
+
+    assert callbacks.calls == []
+    first_waiting = engagements.get(opened.tenant_id, opened.incident_id, opened.engagement_id)
+    second_waiting = engagements.get(second.tenant_id, second.incident_id, second.engagement_id)
+    assert first_waiting is not None and first_waiting.status == "WAITING"
+    assert second_waiting is not None and second_waiting.status == "WAITING"
+
+
+def test_unknown_quoted_reply_does_not_fall_back_to_sender_address(setup_inbound) -> None:
+    deps, _engagements, _registry, callbacks, opened = setup_inbound
+    deps.engagements.register_address("whatsapp", "+15550000001", opened)
+
+    assert process_message(_provider(context_msg_id="unknown-outbound"), deps) == "ignored"
+
+    assert callbacks.calls == []
 
 
 def test_callback_failure_is_returned_as_partial_batch_failure(setup_inbound) -> None:
