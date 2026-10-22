@@ -51,6 +51,10 @@ class AgentCoreRuntime(Construct):
         model_id: str,
     ) -> None:
         super().__init__(scope, construct_id)
+        # CDK v2 reads the repo-root .dockerignore into the staging exclude
+        # list and matches it with IgnoreMode.DOCKER. The flag
+        # @aws-cdk/aws-ecr-assets:dockerIgnoreSupport defaults on, so the
+        # same allow-list is not passed again as exclude.
         image_asset = ecr_assets.DockerImageAsset(
             self,
             "Image",

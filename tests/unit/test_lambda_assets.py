@@ -1,9 +1,13 @@
 """Lambda zips and the AgentCore image context ship runtime files only."""
 
+import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import aws_cdk as cdk
+import pytest
 
 from infra.constructs import agentcore_runtime
 from infra.stacks.api_stack import OerfApiStack
@@ -87,5 +91,71 @@ def test_agentcore_image_context_is_only_the_handler() -> None:
     ignore = (Path(__file__).resolve().parents[2] / ".dockerignore").read_text(
         encoding="utf-8"
     ).split()
-    assert "__pycache__" in ignore
-    assert "*.pyc" in ignore
+    assert ignore[0] == "*"
+    assert "!oerf/platform/agent/agentcore/" in ignore
+    assert "**/__pycache__" in ignore
+    assert "**/*.pyc" in ignore
+
+
+def _docker_available() -> bool:
+    """True when the docker client can reach a daemon."""
+
+    if shutil.which("docker") is None:
+        return False
+    result = subprocess.run(
+        ["docker", "info"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _docker_image_assets(outdir: Path) -> list[Path]:
+    """Staged directories for every docker-image asset in the assembly."""
+
+    found: list[Path] = []
+    for manifest_path in outdir.glob("*.assets.json"):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        images = manifest.get("dockerImages", {})
+        if not isinstance(images, dict):
+            continue
+        for image in images.values():
+            source = image.get("source") if isinstance(image, dict) else None
+            directory = source.get("directory") if isinstance(source, dict) else None
+            if isinstance(directory, str):
+                found.append(outdir / directory)
+    return found
+
+
+_IMAGE_FORBIDDEN = {"docs", "tests", "web", "infra", ".venv", "node_modules"}
+
+
+def test_staged_agentcore_image_keeps_the_allow_list(tmp_path: Path) -> None:
+    if not _docker_available():
+        pytest.skip("Docker is unavailable")
+
+    app = cdk.App(outdir=str(tmp_path), context={"agentcore:enabled": "true"})
+    env = cdk.Environment(account=_ACCOUNT, region=_REGION)
+    data = OerfDataStack(app, "OerfDataStack", env=env)
+    OerfComputeStack(app, "OerfComputeStack", data_stack=data, env=env)
+    app.synth()
+
+    assets = _docker_image_assets(tmp_path)
+    assert len(assets) == 1
+    asset = assets[0]
+    assert (asset / "oerf/platform/agent/agentcore/app.py").is_file()
+    assert (asset / "domains").is_dir()
+    assert (asset / "sim").is_dir()
+    leaked_roots = [
+        path.relative_to(asset).as_posix()
+        for path in asset.rglob("*")
+        if set(path.relative_to(asset).parts) & _IMAGE_FORBIDDEN
+    ]
+    assert not leaked_roots, f"image asset still contains {leaked_roots}"
+    leaked = [
+        name
+        for name in _dot_or_env_files(asset)
+        if Path(name).name != ".dockerignore"
+    ]
+    assert not leaked, f"image asset still contains {leaked}"
