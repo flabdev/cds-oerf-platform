@@ -16,7 +16,9 @@ COPY oerf/platform/evidence/ /app/oerf/platform/evidence/
 COPY oerf/platform/observability/ /app/oerf/platform/observability/
 COPY oerf/platform/storage/ /app/oerf/platform/storage/
 COPY oerf/platform/tenancy/ /app/oerf/platform/tenancy/
-COPY oerf/platform/agent/__init__.py /app/oerf/platform/agent/__init__.py
+# The package init imports the workflow modules, which this image does not
+# ship. An empty file keeps python -m from loading them.
+RUN mkdir -p /app/oerf/platform/agent && touch /app/oerf/platform/agent/__init__.py
 COPY oerf/platform/agent/agentcore/app.py /app/oerf/platform/agent/agentcore/app.py
 COPY oerf/platform/agent/agentcore/decision.py /app/oerf/platform/agent/agentcore/decision.py
 COPY oerf/platform/agent/agentcore/advisory.py /app/oerf/platform/agent/agentcore/advisory.py
