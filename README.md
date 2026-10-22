@@ -239,3 +239,27 @@ The incident logic does not call these AWS resources yet. The DynamoDB adapters 
 python -m pytest
 ruff check .
 ```
+
+## Deploy
+
+Deployment is a manual run of `.github/workflows/deploy.yml` (`workflow_dispatch`). The job runs only when `github.ref` is `refs/heads/main`. Concurrent runs share the group `cdk-deploy-us-east-1` and wait their turn.
+
+The account and the deploy role come from repository Actions variables:
+
+| Variable | Value |
+| --- | --- |
+| `AWS_ACCOUNT_ID` | 12-digit account id. The workflow uses region `us-east-1`. |
+| `DEPLOY_ROLE_NAME` | IAM role name only. Set this to `OerfGitHubDeployRole`. |
+
+The workflow assumes `arn:aws:iam::<AWS_ACCOUNT_ID>:role/<DEPLOY_ROLE_NAME>` with GitHub OIDC. The OIDC token stays in the credential step; the log does not decode it.
+
+Dispatch inputs become CDK context (`-c`), using the strings `true` and `false`. `whatsapp:wabaId` is included only when `waba_id` is not empty.
+
+| Input | Default | Context key |
+| --- | --- | --- |
+| `agentcore` | false | `agentcore:enabled`. When true, the job also starts QEMU (`arm64`) and Docker Buildx for the AgentCore image. |
+| `dashboard` | false | `dashboard:enabled` |
+| `channels_live` | false | `channels:live` |
+| `waba_id` | empty | `whatsapp:wabaId` |
+
+The job prints `cdk diff --all` for that context, then runs `cdk deploy --all --require-approval never`.

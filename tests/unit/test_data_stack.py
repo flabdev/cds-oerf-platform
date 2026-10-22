@@ -351,3 +351,68 @@ def test_cold_chain_state_machine_has_tracing(template):
         "AWS::StepFunctions::StateMachine",
         {"StateMachineName": "oerf-cold-chain", "TracingConfiguration": {"Enabled": True}},
     )
+
+
+_GITHUB_OIDC_SUBS = [
+    "repo:flabdev@25605151/cds-oerf-platform@1408373494:ref:refs/heads/main",
+    "repo:flabdev/cds-oerf-platform:ref:refs/heads/main",
+]
+_BOOTSTRAP_ROLE_ARN = (
+    f"arn:aws:iam::{ACCOUNT}:role/cdk-hnb659fds-*-{ACCOUNT}-{REGION}"
+)
+
+
+def _github_deploy_role(template: Template) -> tuple[str, dict]:
+    found = [
+        (logical_id, role)
+        for logical_id, role in template.find_resources("AWS::IAM::Role").items()
+        if role["Properties"].get("RoleName") == "OerfGitHubDeployRole"
+    ]
+    assert len(found) == 1
+    return found[0]
+
+
+def _statements_for_role(template: Template, role_logical_id: str) -> list[dict]:
+    statements: list[dict] = []
+    for policy in template.find_resources("AWS::IAM::Policy").values():
+        roles = policy["Properties"].get("Roles", [])
+        if {"Ref": role_logical_id} not in roles:
+            continue
+        document = policy["Properties"]["PolicyDocument"]["Statement"]
+        if isinstance(document, dict):
+            statements.append(document)
+        else:
+            statements.extend(document)
+    return statements
+
+
+def _as_list(value: str | list) -> list:
+    return value if isinstance(value, list) else [value]
+
+
+def test_github_deploy_role_trusts_only_main(template: Template) -> None:
+    _logical_id, role = _github_deploy_role(template)
+    document = role["Properties"]["AssumeRolePolicyDocument"]
+    encoded = json.dumps(document)
+    assert "StringLike" not in encoded
+    assert "*" not in encoded
+    statements = document["Statement"]
+    assert len(statements) == 1
+    condition = statements[0]["Condition"]
+    assert set(condition) == {"StringEquals"}
+    string_equals = condition["StringEquals"]
+    assert string_equals["token.actions.githubusercontent.com:aud"] == "sts.amazonaws.com"
+    assert string_equals["token.actions.githubusercontent.com:sub"] == _GITHUB_OIDC_SUBS
+
+
+def test_github_deploy_role_assumes_only_bootstrap_roles(template: Template) -> None:
+    logical_id, role = _github_deploy_role(template)
+    assert "ManagedPolicyArns" not in role["Properties"]
+    assert "AdministratorAccess" not in json.dumps(template.to_json())
+
+    statements = _statements_for_role(template, logical_id)
+    assert len(statements) == 1
+    statement = statements[0]
+    assert statement["Effect"] == "Allow"
+    assert _as_list(statement["Action"]) == ["sts:AssumeRole"]
+    assert _as_list(statement["Resource"]) == [_BOOTSTRAP_ROLE_ARN]
