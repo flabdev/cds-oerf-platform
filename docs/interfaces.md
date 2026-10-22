@@ -1,9 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.8** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.9** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.9 (2026-10-22, ADR-018) records object retention. Evidence objects expire after 90 days, and noncurrent evidence versions after 30. Report objects stay. Noncurrent report versions expire after 90 days.
 - v1.8 (2026-10-22, OERF-303) fills the logger section. A line is JSON with `ts`, `level`, `msg`, and optional `tenant_id`, `incident_id`, `engagement_id`. The placeholder keys `timestamp` and `message` are `ts` and `msg`. Sensitive keys are dropped. E.164 numbers, email addresses, and task-token values are masked.
 - v1.7 (2026-10-21, WhatsApp) documents the WABA event destination on the inbound topic. It is created only when context `whatsapp:wabaId` is set.
 - v1.6 (2026-10-21, OERF-312) documents the AgentCore placeholder: envelope, timeout, fallback, and `AGENT_RUNTIME_ARN`.
@@ -349,6 +350,10 @@ These items are not written with `expires_at` and must not expire: incident `SK=
 No item writes an attribute named `ttl`. Expiry is `expires_at`, a number of epoch seconds.
 
 S3 prefixes start with `tenants/{tid}/`.
+
+### 6.2 Object storage retention
+
+Evidence objects expire 90 days after they are written. A noncurrent evidence version expires 30 days after it is replaced. Report objects are the audit record and are not expired. A noncurrent report version expires 90 days after it is replaced. Both buckets keep versioning on.
 
 ## 7. API and WebSocket events
 

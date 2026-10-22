@@ -353,6 +353,51 @@ def test_cold_chain_state_machine_has_tracing(template):
     )
 
 
+def test_data_buckets_deny_insecure_transport_and_expire(template: Template) -> None:
+    """Evidence expires. Reports stay. Both buckets refuse plain HTTP."""
+
+    buckets = template.find_resources("AWS::S3::Bucket")
+    evidence = _bucket(buckets, "EvidenceBucket")
+    report = _bucket(buckets, "ReportBucket")
+    evidence_rule = evidence["LifecycleConfiguration"]["Rules"][0]
+    report_rule = report["LifecycleConfiguration"]["Rules"][0]
+    assert evidence_rule["ExpirationInDays"] == 90
+    assert evidence_rule["NoncurrentVersionExpiration"] == {"NoncurrentDays": 30}
+    assert "ExpirationInDays" not in report_rule
+    assert "ExpirationDate" not in report_rule
+    assert report_rule["NoncurrentVersionExpiration"] == {"NoncurrentDays": 90}
+
+    policies = template.find_resources("AWS::S3::BucketPolicy")
+    assert len(policies) == 2
+    for policy in policies.values():
+        statements = policy["Properties"]["PolicyDocument"]["Statement"]
+        assert any(_denies_insecure_transport(item) for item in statements)
+
+
+def test_both_state_machines_trace_and_log_errors_without_payloads(
+    template: Template,
+) -> None:
+    machines = template.find_resources("AWS::StepFunctions::StateMachine")
+    assert len(machines) == 2
+    log_groups = {
+        logical_id: group
+        for logical_id, group in template.find_resources("AWS::Logs::LogGroup").items()
+        if "StateMachine" in logical_id
+    }
+    assert len(log_groups) == 2
+    for group in log_groups.values():
+        assert group["Properties"]["RetentionInDays"] == 30
+
+    for machine in machines.values():
+        props = machine["Properties"]
+        assert props["TracingConfiguration"] == {"Enabled": True}
+        logging = props["LoggingConfiguration"]
+        assert logging["Level"] == "ERROR"
+        assert logging["IncludeExecutionData"] is False
+        destination = logging["Destinations"][0]["CloudWatchLogsLogGroup"]["LogGroupArn"]
+        assert isinstance(destination, dict)
+
+
 _GITHUB_OIDC_SUBS = [
     "repo:flabdev@25605151/cds-oerf-platform@1408373494:ref:refs/heads/main",
     "repo:flabdev/cds-oerf-platform:ref:refs/heads/main",
@@ -360,6 +405,23 @@ _GITHUB_OIDC_SUBS = [
 _BOOTSTRAP_ROLE_ARN = (
     f"arn:aws:iam::{ACCOUNT}:role/cdk-hnb659fds-*-{ACCOUNT}-{REGION}"
 )
+
+
+def _bucket(buckets: dict, prefix: str) -> dict:
+    matches = [
+        resource["Properties"]
+        for logical_id, resource in buckets.items()
+        if logical_id.startswith(prefix)
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _denies_insecure_transport(statement: dict) -> bool:
+    if statement.get("Effect") != "Deny":
+        return False
+    flag = statement.get("Condition", {}).get("Bool", {}).get("aws:SecureTransport")
+    return flag in ("false", False)
 
 
 def _github_deploy_role(template: Template) -> tuple[str, dict]:
