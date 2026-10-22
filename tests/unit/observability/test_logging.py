@@ -1,6 +1,5 @@
 """Router, vision, and report logs keep ids and outcomes, not PII."""
 
-import io
 import json
 import logging
 
@@ -20,6 +19,18 @@ OBJECT_KEY = "tenants/t1/INC-LOG/photos/reefer_display.jpg"
 _ROUTER = "oerf.platform.channels.router"
 
 
+def _stdout_text(capsys: pytest.CaptureFixture[str], *logger_names: str) -> str:
+    for name in logger_names:
+        logging.getLogger(name).setLevel(logging.INFO)
+    text = capsys.readouterr().out
+    lines = [line for line in text.splitlines() if line]
+    assert lines
+    for line in lines:
+        assert line.startswith("{")
+        json.loads(line)
+    return text
+
+
 def _assert_clean(text: str) -> None:
     assert PHONE not in text
     assert EMAIL not in text
@@ -30,10 +41,12 @@ def _assert_clean(text: str) -> None:
     assert "task_token" not in text
 
 
-def test_redaction_drops_sensitive_keys_and_masks_values(caplog: pytest.LogCaptureFixture) -> None:
+def test_redaction_drops_sensitive_keys_and_masks_values(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     logger = get_logger("oerf.test.redaction")
-    with caplog.at_level(logging.INFO, logger="oerf.test.redaction"):
-        log(
+    logger.setLevel(logging.INFO)
+    log(
             logger,
             logging.INFO,
             f"call {PHONE} at {EMAIL} token {TOKEN}",
@@ -55,11 +68,11 @@ def test_redaction_drops_sensitive_keys_and_masks_values(caplog: pytest.LogCaptu
             key=OBJECT_KEY,
         )
 
-    text = caplog.text
+    text = _stdout_text(capsys)
     _assert_clean(text)
     assert "Bearer secret" not in text
     assert "1 Example Street" not in text
-    payload = json.loads(text[text.index("{") : text.rindex("}") + 1])
+    payload = json.loads(text.strip())
     assert payload["tenant_id"] == "t1"
     assert payload["incident_id"] == "INC-LOG"
     assert payload["engagement_id"] == "ENG-1"
@@ -69,7 +82,7 @@ def test_redaction_drops_sensitive_keys_and_masks_values(caplog: pytest.LogCaptu
 
 
 def test_mock_router_sends_omit_recipient_and_message(
-    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(router, "USE_MOCK_WHATSAPP", True)
     monkeypatch.setattr(router, "USE_MOCK_SMS", True)
@@ -86,18 +99,19 @@ def test_mock_router_sends_omit_recipient_and_message(
         "channel_priority": ["WHATSAPP", "SMS", "EMAIL"],
     }
 
-    with caplog.at_level(logging.INFO, logger=_ROUTER):
-        router.handler(event, None)
-        router.send_sms(PHONE, BODY)
-        router.send_email(EMAIL, f"Alert for {NAME}", BODY)
+    logging.getLogger(_ROUTER).setLevel(logging.INFO)
+    router.handler(event, None)
+    router.send_sms(PHONE, BODY)
+    router.send_email(EMAIL, f"Alert for {NAME}", BODY)
 
-    _assert_clean(caplog.text)
-    assert "send_simulated" in caplog.text
-    assert "route_complete" in caplog.text
+    text = _stdout_text(capsys)
+    _assert_clean(text)
+    assert "send_simulated" in text
+    assert "route_complete" in text
 
 
 def test_real_router_send_omits_recipient_message_and_errors(
-    caplog: pytest.LogCaptureFixture, monkeypatch
+    capsys: pytest.CaptureFixture[str], monkeypatch
 ) -> None:
     monkeypatch.setattr(router, "USE_MOCK_WHATSAPP", False)
     monkeypatch.setattr(router, "WHATSAPP_PHONE_NUMBER_ID", "phone-id-1")
@@ -124,19 +138,20 @@ def test_real_router_send_omits_recipient_message_and_errors(
         "channel_priority": ["WHATSAPP"],
     }
 
-    with caplog.at_level(logging.INFO, logger=_ROUTER):
-        sent = router.handler(event, None)
-        failed = router.send_whatsapp(PHONE, BODY)
+    logging.getLogger(_ROUTER).setLevel(logging.INFO)
+    sent = router.handler(event, None)
+    failed = router.send_whatsapp(PHONE, BODY)
 
     assert sent["success"] is True
     assert failed["success"] is False
     assert PHONE in failed["error"]
-    _assert_clean(caplog.text)
-    assert "route_complete" in caplog.text
+    text = _stdout_text(capsys)
+    _assert_clean(text)
+    assert "route_complete" in text
 
 
 def test_vision_calls_omit_the_object_key_and_pii(
-    caplog: pytest.LogCaptureFixture, monkeypatch
+    capsys: pytest.CaptureFixture[str], monkeypatch
 ) -> None:
     event = {
         "bucket": "evidence-bucket",
@@ -150,48 +165,49 @@ def test_vision_calls_omit_the_object_key_and_pii(
         "task_token": TOKEN,
     }
     monkeypatch.setattr(vision, "USE_MOCK_BEDROCK", True)
-    with caplog.at_level(logging.INFO, logger="oerf.platform.evidence.vision"):
-        mock = vision.handler(event, None)
+    logging.getLogger("oerf.platform.evidence.vision").setLevel(logging.INFO)
+    mock = vision.handler(event, None)
 
-        monkeypatch.setattr(vision, "USE_MOCK_BEDROCK", False)
-        monkeypatch.setattr(vision, "INCIDENT_TABLE_NAME", "")
-        monkeypatch.setattr(vision, "GUARDRAIL_ID", "")
+    monkeypatch.setattr(vision, "USE_MOCK_BEDROCK", False)
+    monkeypatch.setattr(vision, "INCIDENT_TABLE_NAME", "")
+    monkeypatch.setattr(vision, "GUARDRAIL_ID", "")
 
-        class _Body:
-            def read(self) -> bytes:
-                return b"image-bytes"
+    class _Body:
+        def read(self) -> bytes:
+            return b"image-bytes"
 
-        class _S3:
-            def get_object(self, **kwargs: object) -> dict[str, _Body]:
-                return {"Body": _Body()}
+    class _S3:
+        def get_object(self, **kwargs: object) -> dict[str, _Body]:
+            return {"Body": _Body()}
 
-        class _Bedrock:
-            def converse(self, **kwargs: object) -> dict[str, object]:
-                return {"output": {"message": {"content": [{"text": '{"setpoint_temp_c": 4}'}]}}}
+    class _Bedrock:
+        def converse(self, **kwargs: object) -> dict[str, object]:
+            return {"output": {"message": {"content": [{"text": '{"setpoint_temp_c": 4}'}]}}}
 
-        monkeypatch.setattr(vision, "get_s3", lambda: _S3())
-        monkeypatch.setattr(vision, "get_bedrock", lambda: _Bedrock())
-        live = vision.handler(event, None)
+    monkeypatch.setattr(vision, "get_s3", lambda: _S3())
+    monkeypatch.setattr(vision, "get_bedrock", lambda: _Bedrock())
+    live = vision.handler(event, None)
 
-        class _BrokenS3:
-            def get_object(self, **kwargs: object) -> dict[str, str]:
-                raise vision.ClientError(
-                    {"Error": {"Code": "NoSuchKey", "Message": f"{OBJECT_KEY} {PHONE} {BODY}"}},
-                    "GetObject",
-                )
+    class _BrokenS3:
+        def get_object(self, **kwargs: object) -> dict[str, str]:
+            raise vision.ClientError(
+                {"Error": {"Code": "NoSuchKey", "Message": f"{OBJECT_KEY} {PHONE} {BODY}"}},
+                "GetObject",
+            )
 
-        monkeypatch.setattr(vision, "get_s3", lambda: _BrokenS3())
-        failed = vision.handler(event, None)
+    monkeypatch.setattr(vision, "get_s3", lambda: _BrokenS3())
+    failed = vision.handler(event, None)
 
     assert mock["success"] is True
     assert live["success"] is True
     assert failed["success"] is False
-    _assert_clean(caplog.text)
-    assert "evidence_analyzed" in caplog.text
+    text = _stdout_text(capsys)
+    _assert_clean(text)
+    assert "evidence_analyzed" in text
 
 
 def test_report_run_omits_the_object_key_and_pii(
-    caplog: pytest.LogCaptureFixture, monkeypatch
+    capsys: pytest.CaptureFixture[str], monkeypatch
 ) -> None:
     monkeypatch.setattr(generator, "INCIDENT_TABLE_NAME", "incidents")
     monkeypatch.setattr(generator, "REPORT_BUCKET_NAME", "")
@@ -215,38 +231,51 @@ def test_report_run_omits_the_object_key_and_pii(
             return _Table()
 
     monkeypatch.setattr(generator, "get_dynamodb", lambda: _Dynamo())
-    with caplog.at_level(logging.INFO, logger="oerf.platform.report.generator"):
-        result = generator.handler(
-            {
-                "tenant_id": "t1",
-                "incident_id": "INC-LOG",
-                "qa_email": EMAIL,
-                "task_token": TOKEN,
-                "name": NAME,
-                "phone": PHONE,
-                "message": BODY,
-            },
-            None,
-        )
+    logging.getLogger("oerf.platform.report.generator").setLevel(logging.INFO)
+    result = generator.handler(
+        {
+            "tenant_id": "t1",
+            "incident_id": "INC-LOG",
+            "qa_email": EMAIL,
+            "task_token": TOKEN,
+            "name": NAME,
+            "phone": PHONE,
+            "message": BODY,
+        },
+        None,
+    )
 
     assert result["success"] is True
-    assert result["report_key"] not in caplog.text
-    assert "s3://" not in caplog.text
-    _assert_clean(caplog.text)
-    assert "report_published" in caplog.text
+    text = _stdout_text(capsys)
+    assert result["report_key"] not in text
+    assert "s3://" not in text
+    _assert_clean(text)
+    assert "report_published" in text
 
 
-def test_mask_covers_a_stream_formatter() -> None:
-    stream = io.StringIO()
-    handler = logging.StreamHandler(stream)
-    logger = get_logger("oerf.test.redaction.stream")
-    logger.addHandler(handler)
+def test_a_failed_route_logs_channel_none(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    logging.getLogger(_ROUTER).setLevel(logging.INFO)
+    router.handler(
+        {"tenant_id": "t1", "incident_id": "INC-LOG", "channel_priority": ["WHATSAPP"]},
+        None,
+    )
+
+    lines = [json.loads(line) for line in _stdout_text(capsys).splitlines()]
+    complete = next(line for line in lines if line["msg"] == "route_complete")
+    assert complete["outcome"] == "not_sent"
+    assert complete["channel"] == "none"
+
+
+def test_stdout_line_is_raw_json(capsys: pytest.CaptureFixture[str]) -> None:
+    logger = get_logger("oerf.test.redaction.stdout")
     logger.setLevel(logging.INFO)
-    try:
-        log(logger, logging.INFO, f"to {PHONE}", phone=PHONE, message=BODY)
-    finally:
-        logger.removeHandler(handler)
+    log(logger, logging.INFO, f"to {PHONE}", phone=PHONE, message=BODY)
 
-    text = stream.getvalue()
-    assert PHONE not in text
-    assert BODY not in text
+    line = _stdout_text(capsys).strip()
+    assert line.startswith("{")
+    payload = json.loads(line)
+    assert payload["msg"] == "to [redacted-phone]"
+    assert PHONE not in line
+    assert BODY not in line

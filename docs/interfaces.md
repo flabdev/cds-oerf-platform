@@ -1,9 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.9** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.10** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.10 (2026-10-22, OERF-303) the logger writes each JSON object to stdout and does not pass the record to a logging handler. A failed route sets `channel` to `none` when no channel was selected.
 - v1.9 (2026-10-22, ADR-018) records object retention. Evidence objects expire after 90 days, and noncurrent evidence versions after 30. Report objects stay. Noncurrent report versions expire after 90 days.
 - v1.8 (2026-10-22, OERF-303) fills the logger section. A line is JSON with `ts`, `level`, `msg`, and optional `tenant_id`, `incident_id`, `engagement_id`. The placeholder keys `timestamp` and `message` are `ts` and `msg`. Sensitive keys are dropped. E.164 numbers, email addresses, and task-token values are masked.
 - v1.7 (2026-10-21, WhatsApp) documents the WABA event destination on the inbound topic. It is created only when context `whatsapp:wabaId` is set.
@@ -540,7 +541,7 @@ Synth: [infra/app.py](../infra/app.py) takes the account from `CDK_DEFAULT_ACCOU
 
 ## 10. Logger
 
-Owner: OERF-303. Module: [oerf/platform/observability/logging.py](../oerf/platform/observability/logging.py). `get_logger(name)` returns a stdlib logger with a redaction filter. `log(logger, level, msg, **fields)` writes one JSON object.
+Owner: OERF-303. Module: [oerf/platform/observability/logging.py](../oerf/platform/observability/logging.py). `get_logger(name)` returns a stdlib logger with a redaction filter. `log(logger, level, msg, **fields)` writes one JSON object to stdout with `sys.stdout.write` and a flush. The filter does not pass the record to a logging handler, so the CloudWatch log event is that object. A failed channel-router line sets `channel` to `none` when the route has no channel.
 
 `ts` is UTC `YYYY-MM-DDTHH:MM:SSZ`. `level` and `msg` are always present. `tenant_id`, `incident_id`, and `engagement_id` are omitted when the caller does not pass them. `channel`, `outcome`, and `count` are the only other fields kept.
 

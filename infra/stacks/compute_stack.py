@@ -348,7 +348,7 @@ class OerfComputeStack(Stack):
         # this table's stream ARN. See docs/security/iam-exceptions.md.
         # A failed batch is bisected, then sent here after 24 hours or the
         # retry limit. DynamoDB streams are not readable past 24 hours.
-        stream_dlq = sqs.Queue(
+        self.stream_dlq = sqs.Queue(
             self,
             "StreamBroadcasterDlq",
             encryption=sqs.QueueEncryption.SQS_MANAGED,
@@ -364,7 +364,7 @@ class OerfComputeStack(Stack):
                 bisect_batch_on_error=True,
                 max_record_age=Duration.hours(24),
                 report_batch_item_failures=True,
-                on_failure=event_sources.SqsDlq(stream_dlq),
+                on_failure=event_sources.SqsDlq(self.stream_dlq),
             )
         )
 
@@ -547,7 +547,7 @@ class OerfComputeStack(Stack):
         # (project lead, OERF-201-205) starts this state machine and no other.
         data_stack.cold_chain_state_machine.grant_start_execution(self.ingest_fn)
 
-        ingest_dlq = sqs.Queue(
+        self.ingest_dlq = sqs.Queue(
             self,
             "IngestTargetDlq",
             encryption=sqs.QueueEncryption.SQS_MANAGED,
@@ -566,7 +566,7 @@ class OerfComputeStack(Stack):
         temperature_rule.add_target(
             targets.LambdaFunction(
                 self.ingest_fn,
-                dead_letter_queue=ingest_dlq,
+                dead_letter_queue=self.ingest_dlq,
                 retry_attempts=2,
                 max_event_age=Duration.hours(1),
             )

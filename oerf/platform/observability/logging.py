@@ -1,10 +1,11 @@
 """JSON logs with correlation ids and a redaction filter (OERF-303).
 
-One object per line: ``ts``, ``level``, ``msg``, and optional ``tenant_id``,
-``incident_id``, and ``engagement_id``. Callers may also pass ``channel``,
-``outcome``, and ``count``. Every other field is dropped, including message
-text, recipients, and task tokens. Values that look like an E.164 number, an
-email address, or a task token are masked inside the fields that remain.
+One object per line, written to stdout: ``ts``, ``level``, ``msg``, and
+optional ``tenant_id``, ``incident_id``, and ``engagement_id``. Callers may
+also pass ``channel``, ``outcome``, and ``count``. Every other field is
+dropped, including message text, recipients, and task tokens. Values that
+look like an E.164 number, an email address, or a task token are masked
+inside the fields that remain.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sys
 from datetime import UTC, datetime
 
 _DROP = frozenset(
@@ -46,11 +48,15 @@ def _mask(value: str) -> str:
 
 
 class RedactionFilter(logging.Filter):
-    """Rewrite a log record as one redacted JSON line."""
+    """Write one redacted JSON object to stdout and stop the record.
+
+    A logging handler would let the Lambda runtime prefix the line, so the
+    CloudWatch event would not be the JSON object.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
         if getattr(record, _MARK, False):
-            return True
+            return False
         payload: dict[str, object] = {
             "ts": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "level": record.levelname,
@@ -63,10 +69,13 @@ class RedactionFilter(logging.Filter):
         count = record.__dict__.get("count")
         if isinstance(count, int) and not isinstance(count, bool):
             payload["count"] = count
-        record.msg = json.dumps(payload, separators=(",", ":"))
+        line = json.dumps(payload, separators=(",", ":"))
+        record.msg = line
         record.args = ()
         setattr(record, _MARK, True)
-        return True
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+        return False
 
 
 def get_logger(name: str) -> logging.Logger:

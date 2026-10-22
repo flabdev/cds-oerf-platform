@@ -308,13 +308,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     else:
         outcome = "not_sent"
     channel = result.get("delivered_channel") or result.get("channel") or ""
+    if not isinstance(channel, str) or not channel.strip():
+        channel = "none" if outcome in ("error", "not_sent") else ""
     log(
         logger,
         logging.INFO,
         "route_complete",
         tenant_id=tenant_id,
         incident_id=incident_id if isinstance(incident_id, str) else None,
-        channel=channel if isinstance(channel, str) else "",
+        channel=channel,
         outcome=outcome,
         count=len(result["attempts"]),
     )
