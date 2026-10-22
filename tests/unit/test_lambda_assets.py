@@ -77,12 +77,15 @@ def _dot_or_env_files(asset: Path) -> list[str]:
 def test_agentcore_image_context_is_only_the_handler() -> None:
     context = agentcore_runtime._IMAGE
     names = {path.name for path in context.iterdir() if path.name != "__pycache__"}
-    assert "app.py" in names
+    assert names == {"app.py", "advisory.py", "decision.py", "Dockerfile"}
     assert not (names & _FORBIDDEN)
-    assert names <= {"app.py", "Dockerfile", ".dockerignore"}
     dockerfile = (context / "Dockerfile").read_text(encoding="utf-8")
-    assert "COPY app.py ." in dockerfile
+    assert "COPY oerf/platform/agent/agentcore/app.py" in dockerfile
+    assert "COPY oerf/platform/agent/agentcore/advisory.py" in dockerfile
+    assert "COPY oerf/platform/agent/agentcore/decision.py" in dockerfile
     assert "COPY .." not in dockerfile
-    ignore = (context / ".dockerignore").read_text(encoding="utf-8").split()
-    assert "*" in ignore
-    assert "!app.py" in ignore
+    ignore = (Path(__file__).resolve().parents[2] / ".dockerignore").read_text(
+        encoding="utf-8"
+    ).split()
+    assert "__pycache__" in ignore
+    assert "*.pyc" in ignore

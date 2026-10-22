@@ -1,7 +1,10 @@
-"""AgentCore runtime for the OERF-206 placeholder.
+"""AgentCore runtime for the OERF-206 advisory.
 
-The container lives in ``oerf/platform/agent/agentcore/``. ``runtime.py`` next
-to it is the step composition root, so this image is not that module.
+The container lives in ``oerf/platform/agent/agentcore/``. The repo root is the
+build context, because the image ships the shared evidence policy, the
+sanitized trace, and the tenant config resolver alongside the runtime. The
+``runtime.py`` one level up stays the step composition root, so this image is
+not that module.
 
 ``DockerImageAsset`` publishes into the CDK asset repository. The execution
 role pulls that repository.
@@ -23,7 +26,9 @@ from aws_cdk import (
 )
 from constructs import Construct
 
-_IMAGE = Path(__file__).resolve().parents[2] / "oerf" / "platform" / "agent" / "agentcore"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_IMAGE = _REPO_ROOT / "oerf" / "platform" / "agent" / "agentcore"
+_DOCKERFILE = _IMAGE / "Dockerfile"
 IDLE_TIMEOUT = Duration.seconds(60)
 MAX_LIFETIME = Duration.minutes(5)
 _LOG_GROUP = "/aws/vendedlogs/bedrock-agentcore/oerf_agent"
@@ -49,7 +54,8 @@ class AgentCoreRuntime(Construct):
         image_asset = ecr_assets.DockerImageAsset(
             self,
             "Image",
-            directory=str(_IMAGE),
+            directory=str(_REPO_ROOT),
+            file=str(_DOCKERFILE.relative_to(_REPO_ROOT)),
             platform=ecr_assets.Platform.LINUX_ARM64,
         )
         stack = Stack.of(self)
@@ -94,7 +100,7 @@ class AgentCoreRuntime(Construct):
             self,
             "Runtime",
             runtime_name=_RUNTIME_NAME,
-            description="placeholder, behaviour owned by OERF-206",
+            description="advisory decision support; writes nothing",
             agent_runtime_artifact=agentcore.AgentRuntimeArtifact.from_image_uri(
                 image_asset.image_uri
             ),

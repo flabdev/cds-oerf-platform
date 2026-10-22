@@ -1,0 +1,42 @@
+{"id":"DR-001","text":"E17","lang":"en","expected_intent":"answer","expected_fields":{"fault_code":"E17"},"category":"clean_code","notes":"Clean code"}
+{"id":"DR-002","text":"E05","lang":"en","expected_intent":"answer","expected_fields":{"fault_code":"E05"},"category":"clean_code","notes":"Clean code"}
+{"id":"DR-003","text":"Error code is E22","lang":"en","expected_intent":"answer","expected_fields":{"fault_code":"E22"},"category":"clean_code","notes":"Clean code in a sentence"}
+{"id":"DR-004","text":"code: E09","lang":"en","expected_intent":"answer","expected_fields":{"fault_code":"E09"},"category":"clean_code","notes":"Clean code after a label"}
+{"id":"DR-005","text":"E17 and setpoint shows 5","lang":"en","expected_intent":"answer","expected_fields":{"fault_code":"E17","setpoint_temp_c":5.0},"category":"clean_code","notes":"Clean code plus a reading"}
+{"id":"DR-006","text":"compressor fault e-17","lang":"en","expected_intent":"answer","expected_fields":{"fault_code":"E17"},"category":"misspelt_code","notes":"Misspelt code"}
+{"id":"DR-007","text":"E 17","lang":"en","expected_intent":"answer","expected_fields":{"fault_code":"E17"},"category":"misspelt_code","notes":"Spaced code"}
+{"id":"DR-008","text":"E1 7","lang":"en","expected_intent":"answer","expected_fields":{"fault_code":"E17"},"category":"misspelt_code","notes":"Split code"}
+{"id":"DR-009","text":"its e05 i think","lang":"en","expected_intent":"answer","expected_fields":{"fault_code":"E05"},"category":"misspelt_code","notes":"Lowercase code"}
+{"id":"DR-010","text":"error e.22 flashing","lang":"en","expected_intent":"answer","expected_fields":{"fault_code":"E22"},"category":"misspelt_code","notes":"Punctuated code"}
+{"id":"DR-011","text":"shows e 0 9","lang":"en","expected_intent":"answer","expected_fields":{"fault_code":"E09"},"category":"misspelt_code","notes":"Fully spaced code"}
+{"id":"DR-012","text":"reefer is running hot, no code on the display","lang":"en","expected_intent":"answer","expected_fields":{},"category":"free_text","notes":"Symptom only"}
+{"id":"DR-013","text":"temperature climbing since last hour, display looks fine","lang":"en","expected_intent":"answer","expected_fields":{},"category":"free_text","notes":"Symptom only"}
+{"id":"DR-014","text":"unit restarted on its own twice","lang":"en","expected_intent":"answer","expected_fields":{},"category":"free_text","notes":"Symptom only"}
+{"id":"DR-015","text":"loud clicking from the compressor","lang":"en","expected_intent":"answer","expected_fields":{},"category":"free_text","notes":"Symptom only"}
+{"id":"DR-016","text":"door seal looks damaged, box is warming","lang":"en","expected_intent":"answer","expected_fields":{},"category":"free_text","notes":"Symptom only"}
+{"id":"DR-017","text":"no display at all, panel is dark","lang":"en","expected_intent":"answer","expected_fields":{},"category":"free_text","notes":"Symptom only"}
+{"id":"DR-018","text":"E17 hai display pe","lang":"hi-Latn","expected_intent":"answer","expected_fields":{"fault_code":"E17"},"category":"hinglish","notes":"Hinglish with a clean code"}
+{"id":"DR-019","text":"code dikha raha hai E 05","lang":"hi-Latn","expected_intent":"answer","expected_fields":{"fault_code":"E05"},"category":"hinglish","notes":"Hinglish with a spaced code"}
+{"id":"DR-020","text":"reefer garam ho raha hai, koi code nahi","lang":"hi-Latn","expected_intent":"answer","expected_fields":{},"category":"hinglish","notes":"Hinglish symptom"}
+{"id":"DR-021","text":"temperature badh rahi hai pichle ek ghante se","lang":"hi-Latn","expected_intent":"answer","expected_fields":{},"category":"hinglish","notes":"Hinglish symptom"}
+{"id":"DR-022","text":"display par e22 likha hai","lang":"hi-Latn","expected_intent":"answer","expected_fields":{"fault_code":"E22"},"category":"hinglish","notes":"Hinglish with a code"}
+{"id":"DR-023","text":"compressor band ho gaya, load kharab ho jayega","lang":"hi-Latn","expected_intent":"answer","expected_fields":{},"category":"hinglish","notes":"Hinglish symptom"}
+{"id":"DR-024","text":"is the load still safe?","lang":"en","expected_intent":"concern","expected_fields":{},"category":"concern","notes":"Concern"}
+{"id":"DR-025","text":"will the customer reject this consignment","lang":"en","expected_intent":"concern","expected_fields":{},"category":"concern","notes":"Concern"}
+{"id":"DR-026","text":"I am worried about the vaccines in the back","lang":"en","expected_intent":"concern","expected_fields":{},"category":"concern","notes":"Concern"}
+{"id":"DR-027","text":"am I liable for this","lang":"en","expected_intent":"concern","expected_fields":{},"category":"concern","notes":"Concern"}
+{"id":"DR-028","text":"how do I send the photo","lang":"en","expected_intent":"help","expected_fields":{},"category":"help","notes":"Help"}
+{"id":"DR-029","text":"the form is not opening on my phone","lang":"en","expected_intent":"help","expected_fields":{},"category":"help","notes":"Help"}
+{"id":"DR-030","text":"what does E17 mean","lang":"en","expected_intent":"help","expected_fields":{"fault_code":"E17"},"category":"help","notes":"Help about a code"}
+{"id":"DR-031","text":"call me now","lang":"en","expected_intent":"call-me","expected_fields":{},"category":"call_me","notes":"Call me"}
+{"id":"DR-032","text":"please ring my number","lang":"en","expected_intent":"call-me","expected_fields":{},"category":"call_me","notes":"Call me"}
+{"id":"DR-033","text":"can someone phone me about the reroute","lang":"en","expected_intent":"call-me","expected_fields":{},"category":"call_me","notes":"Call me"}
+{"id":"DR-034","text":"what is the weather in Pune","lang":"en","expected_intent":"unrelated","expected_fields":{},"category":"unrelated","notes":"Unrelated"}
+{"id":"DR-035","text":"did you watch the match last night","lang":"en","expected_intent":"unrelated","expected_fields":{},"category":"unrelated","notes":"Unrelated"}
+{"id":"DR-036","text":"good morning","lang":"en","expected_intent":"unrelated","expected_fields":{},"category":"unrelated","notes":"Unrelated"}
+{"id":"DR-037","text":"no, I will not go to the other facility","lang":"en","expected_intent":"decline","expected_fields":{},"category":"decline","notes":"Decline the reroute"}
+{"id":"DR-038","text":"the road is closed, I cannot divert","lang":"en","expected_intent":"decline","expected_fields":{},"category":"decline","notes":"Decline the reroute"}
+{"id":"DR-039","text":"I am driving, cannot type right now","lang":"en","expected_intent":"help","expected_fields":{},"category":"driving_safety","notes":"Driving safety"}
+{"id":"DR-040","text":"holding the wheel, will reply at the next stop","lang":"en","expected_intent":"help","expected_fields":{},"category":"driving_safety","notes":"Driving safety"}
+{"id":"DR-041","text":"cannot take a photo while moving","lang":"en","expected_intent":"help","expected_fields":{},"category":"driving_safety","notes":"Driving safety"}
+{"id":"DR-042","text":"batao jaldi, main gaadi chala raha hoon","lang":"hi-Latn","expected_intent":"help","expected_fields":{},"category":"driving_safety","notes":"Driving safety in Hinglish"}

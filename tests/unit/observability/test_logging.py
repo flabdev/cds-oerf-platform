@@ -182,7 +182,22 @@ def test_vision_calls_omit_the_object_key_and_pii(
 
     class _Bedrock:
         def converse(self, **kwargs: object) -> dict[str, object]:
-            return {"output": {"message": {"content": [{"text": '{"setpoint_temp_c": 4}'}]}}}
+            return {
+                "output": {
+                    "message": {
+                        "content": [
+                            {
+                                "text": (
+                                    '{"setpoint_temp_c": 4.0, "ambient_temp_c": 12.8, '
+                                    '"fault_codes": ["AL02"], "alarm_status": "ACTIVE", '
+                                    '"door_alarm_status": "CLOSED", "power_status": "RUNNING", '
+                                    '"confidence_score": 0.95, "display_readout_summary": "ok"}'
+                                )
+                            }
+                        ]
+                    }
+                }
+            }
 
     monkeypatch.setattr(vision, "get_s3", lambda: _S3())
     monkeypatch.setattr(vision, "get_bedrock", lambda: _Bedrock())
