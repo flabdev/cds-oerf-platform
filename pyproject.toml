@@ -20,6 +20,12 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
 ]
+# OERF-206: the AgentCore runtime image installs this extra. It is not a
+# dependency of the Lambdas or of the unit suite, which runs without the SDK and
+# falls back to the rules-only advisory.
+runtime-agent = [
+    "strands-agents>=1.0",
+]
 
 [tool.setuptools.packages.find]
 include = ["infra*", "domains*", "sim*", "oerf*"]
