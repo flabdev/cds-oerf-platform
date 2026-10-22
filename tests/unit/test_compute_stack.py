@@ -244,6 +244,17 @@ def test_every_function_has_active_tracing_and_thirty_day_logs(template: Templat
     assert referenced == set(log_groups)
 
 
+def test_no_role_is_granted_kms(template: Template) -> None:
+    """Bucket and table grants do not add kms:Decrypt for aws/s3 or aws/dynamodb."""
+
+    found = []
+    for statement in iter_allow_statements(template):
+        action = statement.get("Action", [])
+        names = [action] if isinstance(action, str) else list(action)
+        found.extend(name for name in names if name.startswith("kms:"))
+    assert found == []
+
+
 def test_star_resources_are_listed_in_the_exceptions_file(template: Template) -> None:
     allowed = allowed_star_actions()
     assert allowed, f"{EXCEPTIONS} does not list any IAM actions"

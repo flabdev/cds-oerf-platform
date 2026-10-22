@@ -90,6 +90,7 @@ class OerfDataStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            encryption=dynamodb.TableEncryption.AWS_MANAGED,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
         )
@@ -109,6 +110,7 @@ class OerfDataStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            encryption=dynamodb.TableEncryption.AWS_MANAGED,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
         )
@@ -130,6 +132,7 @@ class OerfDataStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            encryption=dynamodb.TableEncryption.AWS_MANAGED,
             stream=dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
@@ -163,6 +166,7 @@ class OerfDataStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            encryption=dynamodb.TableEncryption.AWS_MANAGED,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
             time_to_live_attribute="expires_at",
@@ -176,7 +180,8 @@ class OerfDataStack(Stack):
             self,
             "EvidenceBucket",
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-            encryption=s3.BucketEncryption.S3_MANAGED,
+            encryption=s3.BucketEncryption.KMS_MANAGED,
+            bucket_key_enabled=True,
             versioned=True,
             enforce_ssl=True,
             lifecycle_rules=[
@@ -198,7 +203,8 @@ class OerfDataStack(Stack):
             self,
             "ReportBucket",
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-            encryption=s3.BucketEncryption.S3_MANAGED,
+            encryption=s3.BucketEncryption.KMS_MANAGED,
+            bucket_key_enabled=True,
             versioned=True,
             enforce_ssl=True,
             lifecycle_rules=[

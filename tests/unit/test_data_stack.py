@@ -276,13 +276,35 @@ def test_s3_buckets_have_versioning_enabled(template: Template) -> None:
         }, logical_id
 
 
-def test_s3_buckets_use_managed_encryption(template: Template) -> None:
-    for logical_id, bucket in template.find_resources("AWS::S3::Bucket").items():
-        assert bucket["Properties"]["BucketEncryption"] == {
-            "ServerSideEncryptionConfiguration": [
-                {"ServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}
-            ]
-        }, logical_id
+def test_s3_buckets_use_aws_managed_kms_and_bucket_keys(template: Template) -> None:
+    """Evidence and report use aws/s3. No customer-managed key id is set."""
+
+    buckets = template.find_resources("AWS::S3::Bucket")
+    assert len(buckets) == 2
+    for logical_id, bucket in buckets.items():
+        rule = bucket["Properties"]["BucketEncryption"]["ServerSideEncryptionConfiguration"][0]
+        default = rule["ServerSideEncryptionByDefault"]
+        assert default["SSEAlgorithm"] == "aws:kms", logical_id
+        assert "KMSMasterKeyID" not in default, logical_id
+        assert rule["BucketKeyEnabled"] is True, logical_id
+
+
+def test_tables_use_the_aws_managed_key(template: Template) -> None:
+    """SSEEnabled true with no key id is aws/dynamodb. A key id would be a CMK."""
+
+    tables = template.find_resources("AWS::DynamoDB::Table")
+    assert len(tables) == 4
+    for logical_id, table in tables.items():
+        spec = table["Properties"]["SSESpecification"]
+        assert spec["SSEEnabled"] is True, logical_id
+        assert spec.get("SSEType", "KMS") == "KMS", logical_id
+        assert "KMSMasterKeyId" not in spec, logical_id
+
+
+def test_no_role_is_granted_kms(template: Template) -> None:
+    """aws/dynamodb and aws/s3 do not need a kms grant on the caller."""
+
+    assert _allow_actions(template, "kms:") == []
 
 
 def test_user_pool_keeps_its_id_and_adds_tenant_claim_outside_schema(
@@ -405,6 +427,25 @@ _GITHUB_OIDC_SUBS = [
 _BOOTSTRAP_ROLE_ARN = (
     f"arn:aws:iam::{ACCOUNT}:role/cdk-hnb659fds-*-{ACCOUNT}-{REGION}"
 )
+
+
+def _allow_actions(template: Template, prefix: str) -> list[str]:
+    found: list[str] = []
+    documents = [
+        resource["Properties"]["PolicyDocument"]
+        for resource in template.find_resources("AWS::IAM::Policy").values()
+    ]
+    for resource in template.find_resources("AWS::IAM::Role").values():
+        for inline in resource["Properties"].get("Policies", []):
+            documents.append(inline["PolicyDocument"])
+    for document in documents:
+        for statement in document.get("Statement", []):
+            if statement.get("Effect") == "Deny":
+                continue
+            action = statement.get("Action", [])
+            names = [action] if isinstance(action, str) else list(action)
+            found.extend(name for name in names if name.startswith(prefix))
+    return found
 
 
 def _bucket(buckets: dict, prefix: str) -> dict:
