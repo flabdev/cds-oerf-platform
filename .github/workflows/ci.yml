@@ -1,0 +1,92 @@
+name: CI
+
+# Pull-request and main-branch checks for this repo. A failing job blocks the change.
+#
+# Python installs the package with the dev extra, then runs ruff, pytest with the aws
+# marker excluded, and two CDK synths: the default stacks, then dashboard:enabled=true.
+# Synth uses account 000000000000 and --lookups false, so it makes no AWS API calls.
+# Web runs npm ci and node --test in web/.
+#
+# The job token can read the repo and nothing else. It does not request OIDC or AWS
+# credentials. Manual deploy stays in deploy.yml.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CDK_DEFAULT_ACCOUNT: "000000000000"
+      CDK_DEFAULT_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # ruff and pytest are in the dev extra. A bare editable install omits them.
+      - name: Install the package
+        run: pip install -e ".[dev]"
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Pytest
+        run: pytest -q -m "not aws"
+
+      # aws-cdk-lib is the library. The cdk command is the CLI, same install as deploy.yml.
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk@2.1145.0
+
+      - name: CDK synth
+        run: cdk synth --lookups false --quiet
+
+      - name: CDK synth with dashboard
+        run: cdk synth --lookups false --quiet -c dashboard:enabled=true
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+        working-directory: web
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: node --test
