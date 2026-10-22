@@ -325,6 +325,18 @@ def test_user_pool_keeps_its_id_and_adds_tenant_claim_outside_schema(
     pre_token = properties["LambdaConfig"]["PreTokenGenerationConfig"]
     assert pre_token["LambdaVersion"] == "V2_0"
     assert "PreTokenGeneration" not in properties["LambdaConfig"]
+    policy = properties["Policies"]["PasswordPolicy"]
+    assert policy["MinimumLength"] == 12
+    assert policy["RequireUppercase"] is True
+    assert policy["RequireLowercase"] is True
+    assert policy["RequireNumbers"] is True
+    assert policy["RequireSymbols"] is True
+    assert policy["TemporaryPasswordValidityDays"] == 3
+    assert "UnusedAccountValidityDays" not in json.dumps(properties)
+    assert properties["MfaConfiguration"] == "OPTIONAL"
+    assert properties["EnabledMfas"] == ["SOFTWARE_TOKEN_MFA"]
+    assert "SmsConfiguration" not in properties
+    assert "UserPoolAddOns" not in properties
 
 
 def test_tenant_attribute_custom_resource_targets_the_existing_pool(

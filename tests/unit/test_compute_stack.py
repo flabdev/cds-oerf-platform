@@ -276,7 +276,8 @@ def test_send_task_success_is_only_on_the_inbound_role(template: Template) -> No
     inbound = role_actions(template, "oerf-inbound")
     action = role_actions(template, "oerf-action-handler")
     assert "states:SendTaskSuccess" in inbound
-    assert "states:SendTaskFailure" in inbound
+    assert "states:SendTaskFailure" not in inbound
+    assert "states:StopExecution" in inbound
     assert "states:SendTaskSuccess" not in action
     assert "states:SendTaskFailure" not in action
     assert "states:SendTaskSuccess" not in role_actions(template, "oerf-ingest")
