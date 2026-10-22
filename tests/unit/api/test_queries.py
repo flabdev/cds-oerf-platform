@@ -151,6 +151,28 @@ def test_queue_failure_returns_503_and_does_not_claim_success() -> None:
     assert services.queries.get_incident("t1", "INC-1")["state"] == "ASSESSING"
 
 
+def test_sqs_send_sets_fifo_ids_only_for_a_fifo_url() -> None:
+    body = {"tenant_id": "t1", "action_id": "act-1"}
+    fifo = _RecordingQueue()
+    standard = _RecordingQueue()
+
+    assert SqsActionQueue(fifo, "https://sqs.us-east-1.amazonaws.com/123/in.fifo").send(
+        body=body, dedup_id="act-1"
+    )
+    assert SqsActionQueue(standard, "https://sqs.us-east-1.amazonaws.com/123/in").send(
+        body=body, dedup_id="act-1"
+    )
+
+    assert fifo.messages[0]["QueueUrl"].endswith(".fifo")
+    assert fifo.messages[0]["MessageDeduplicationId"] == "act-1"
+    assert fifo.messages[0]["MessageGroupId"] == "t1"
+    assert json.loads(fifo.messages[0]["MessageBody"]) == body
+    assert standard.messages[0]["QueueUrl"].endswith("/in")
+    assert "MessageDeduplicationId" not in standard.messages[0]
+    assert "MessageGroupId" not in standard.messages[0]
+    assert json.loads(standard.messages[0]["MessageBody"]) == body
+
+
 def test_sqs_message_uses_the_idempotency_id_and_omits_the_task_token() -> None:
     client = _RecordingQueue()
     services = DashboardServices(

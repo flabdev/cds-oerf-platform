@@ -43,6 +43,13 @@ Approval still open: WhatsApp Business registration, template approval, and
 the inbound webhook. Rate limits are whatever the approved account allows.
 They are not recorded here because they are not known yet.
 
+The inbound webhook is the compute stack's standard SNS topic. It is not
+encrypted with a customer-managed KMS key, so no key policy is granted to
+End User Messaging Social. Deploy with context `whatsapp:wabaId` set to the
+`waba-...` id to allow that service to publish to the topic and to set the
+WABA event destination. Without that context value the stack does not add
+the topic statement or the destination. The id is not stored in git.
+
 RCS is not a default channel. The router tries it only when the request has
 `inbound_rcs` and the role is in `rcs_roles`. Otherwise the attempt reason is
 `rcs_unavailable` and the RCS provider is not called. An inbound RCS reply
