@@ -191,8 +191,9 @@ A normal read loads `ACTIVE`, takes the number in `version`, and then loads that
 
 | File | Role |
 | --- | --- |
-| `infra/app.py` | CDK app entry. Requires a resolved AWS account and registers the data stack. |
+| `infra/app.py` | CDK app entry. Requires a resolved AWS account and registers the data and compute stacks. |
 | `infra/stacks/data_stack.py` | Platform, tenant, incident, and routing tables; evidence and report buckets; event bus `oerf-events`; the `cold_chain_excursion_v1` state machine with its execution role and the stub Lambda every task invokes; Cognito groups `platform_admin`, `tenant_admin`, and `ops_user`. |
+| `infra/stacks/compute_stack.py` | Compute lambdas, HTTP API, WebSocket streaming API, and CloudFront + S3 dashboard hosting distribution with Origin Access Control. |
 | `cdk.json` | CDK toolkit config. |
 | `infra/__init__.py`, `infra/stacks/__init__.py` | Package markers. |
 
@@ -224,6 +225,8 @@ The incident logic does not call these AWS resources yet. The DynamoDB adapters 
 | `tests/unit/support/fake_dynamo.py` | Fake low-level DynamoDB client used by the adapter tests. |
 | `tests/unit/test_app.py` | CDK app fails clearly when no account is resolved. |
 | `tests/unit/test_data_stack.py` | Data-stack resources and outputs, plus the state machine's execution role, the stub Lambda, the placeholder-to-ARN substitution, and the retry and catch blocks on every task. |
+| `tests/unit/test_compute_stack.py` | Compute stack resources, Lambda configurations, IAM boundaries, and CloudFront/S3 dashboard hosting assertions. |
+| `tests/unit/test_api_stack.py` | Dashboard API, private hosting, and WebSocket assertions for OerfApiStack. |
 | `tests/unit/test_statemachine_definition.py` | The ASL document itself: every transition resolves, terminal states have no `Next`, the failure path records then escalates, an execution timeout guards against orphans, and the stub contract walks the happy path, a rejected approval, a declined facility, and a reopened containment to a terminal state. |
 | `tests/unit/test_workflow_stub.py` | Stub handler output shapes for the happy path, `Close`, the failure handlers, and that the incoming workflow is never mutated. |
 

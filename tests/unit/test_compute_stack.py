@@ -210,7 +210,8 @@ def iter_allow_statements(template: Template):
 def test_handlers_names_env_and_distinct_roles(template: Template) -> None:
     functions = functions_by_name(template)
     assert set(functions) == set(EXPECTED_FUNCTIONS)
-    template.resource_count_is("AWS::Lambda::Function", len(EXPECTED_FUNCTIONS))
+    # 9 application functions plus the CDK BucketDeployment custom resource handler
+    template.resource_count_is("AWS::Lambda::Function", len(EXPECTED_FUNCTIONS) + 1)
 
     role_ids = []
     for name, expected in EXPECTED_FUNCTIONS.items():
@@ -524,3 +525,26 @@ def test_synth_without_cdk_default_account(tmp_path: Path) -> None:
     for name in ("OerfDataStack.template.json", "OerfComputeStack.template.json"):
         assert message in (tmp_path / name).read_text()
     assert not (tmp_path / "OerfApiStack.template.json").exists()
+
+
+def test_dashboard_bucket_and_distribution_exist(template: Template) -> None:
+    template.has_resource_properties(
+        "AWS::S3::Bucket",
+        {
+            "PublicAccessBlockConfiguration": {
+                "BlockPublicAcls": True,
+                "BlockPublicPolicy": True,
+                "IgnorePublicAcls": True,
+                "RestrictPublicBuckets": True,
+            }
+        },
+    )
+    template.resource_count_is("AWS::CloudFront::Distribution", 1)
+    template.resource_count_is("AWS::CloudFront::OriginAccessControl", 1)
+    template.resource_count_is("Custom::CDKBucketDeployment", 1)
+
+
+def test_dashboard_outputs_exist(template: Template) -> None:
+    outputs = template.find_outputs("*")
+    names = set(outputs)
+    assert {"DashboardUrl", "DashboardBucketName", "DistributionId"} <= names

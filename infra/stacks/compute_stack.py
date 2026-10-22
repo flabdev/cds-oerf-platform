@@ -8,6 +8,7 @@ One role, one 30-day log group, and active tracing per function.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from aws_cdk import (
     CfnOutput,
@@ -17,12 +18,16 @@ from aws_cdk import (
     aws_apigatewayv2 as apigwv2,
     aws_apigatewayv2_authorizers as authorizers,
     aws_apigatewayv2_integrations as integrations,
+    aws_cloudfront as cloudfront,
+    aws_cloudfront_origins as origins,
     aws_events as events,
     aws_events_targets as targets,
     aws_iam as iam,
     aws_lambda as lambda_,
     aws_lambda_event_sources as event_sources,
     aws_logs as logs,
+    aws_s3 as s3,
+    aws_s3_deployment as s3deploy,
     aws_sns as sns,
     aws_sns_subscriptions as subscriptions,
     aws_sqs as sqs,
@@ -551,6 +556,58 @@ class OerfComputeStack(Stack):
         )
 
         # ---------------------------------------------------------
+        # 9. Dashboard Hosting: CloudFront & S3 (Section 10 Architecture)
+        # ---------------------------------------------------------
+        self.dashboard_bucket = s3.Bucket(
+            self,
+            "DashboardBucket",
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            enforce_ssl=True,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        self.distribution = cloudfront.Distribution(
+            self,
+            "DashboardDistribution",
+            default_root_object="index.html",
+            default_behavior=cloudfront.BehaviorOptions(
+                origin=origins.S3BucketOrigin.with_origin_access_control(self.dashboard_bucket),
+                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+            ),
+            error_responses=[
+                cloudfront.ErrorResponse(
+                    http_status=403,
+                    response_http_status=200,
+                    response_page_path="/index.html",
+                    ttl=Duration.seconds(0),
+                ),
+                cloudfront.ErrorResponse(
+                    http_status=404,
+                    response_http_status=200,
+                    response_page_path="/index.html",
+                    ttl=Duration.seconds(0),
+                ),
+            ],
+        )
+
+        web_dist_dir = Path(__file__).resolve().parents[2] / "web" / "dist"
+        if not web_dist_dir.exists():
+            web_dist_dir.mkdir(parents=True, exist_ok=True)
+            (web_dist_dir / "index.html").write_text(
+                "<!DOCTYPE html><html><body>Loading OERF Dashboard...</body></html>",
+                encoding="utf-8",
+            )
+        self.deployment = s3deploy.BucketDeployment(
+            self,
+            "DashboardDeployment",
+            sources=[s3deploy.Source.asset(str(web_dist_dir))],
+            destination_bucket=self.dashboard_bucket,
+            distribution=self.distribution,
+            distribution_paths=["/*"],
+        )
+
+        # ---------------------------------------------------------
         # Stack Outputs
         # ---------------------------------------------------------
         CfnOutput(self, "WebSocketApiUrl", value=self.ws_stage.url)
@@ -559,6 +616,24 @@ class OerfComputeStack(Stack):
         CfnOutput(self, "ChannelRouterArn", value=self.channel_router_fn.function_arn)
         CfnOutput(self, "EvidenceAnalyzerArn", value=self.evidence_analyzer_fn.function_arn)
         CfnOutput(self, "ReportGeneratorArn", value=self.report_generator_fn.function_arn)
+        CfnOutput(
+            self,
+            "DashboardUrl",
+            value=f"https://{self.distribution.distribution_domain_name}",
+            description="CloudFront URL for the React dashboard and admin portal",
+        )
+        CfnOutput(
+            self,
+            "DashboardBucketName",
+            value=self.dashboard_bucket.bucket_name,
+            description="S3 bucket hosting the web dashboard assets",
+        )
+        CfnOutput(
+            self,
+            "DistributionId",
+            value=self.distribution.distribution_id,
+            description="CloudFront Distribution ID for the dashboard",
+        )
 
     def _function(
         self,
