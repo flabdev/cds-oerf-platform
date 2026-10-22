@@ -52,11 +52,25 @@ class AgentCoreRuntime(Construct):
             directory=str(_IMAGE),
             platform=ecr_assets.Platform.LINUX_ARM64,
         )
+        stack = Stack.of(self)
+        # AgentCore passes both keys when it assumes this role.
+        # https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-permissions.html
         self.execution_role = iam.Role(
             self,
             "AgentRuntimeExecutionRole",
             role_name="oerf-agent-runtime",
-            assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"),
+            assumed_by=iam.ServicePrincipal(
+                "bedrock-agentcore.amazonaws.com",
+                conditions={
+                    "StringEquals": {"aws:SourceAccount": stack.account},
+                    "ArnLike": {
+                        "aws:SourceArn": stack.format_arn(
+                            service="bedrock-agentcore",
+                            resource="*",
+                        )
+                    },
+                },
+            ),
         )
         image_asset.repository.grant_pull(self.execution_role)
         incident_table.grant_read_data(self.execution_role)

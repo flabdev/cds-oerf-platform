@@ -5,6 +5,7 @@ make real AWS calls (see guide section 24).
 """
 
 import json
+from pathlib import Path
 
 import aws_cdk as cdk
 import pytest
@@ -394,6 +395,24 @@ def test_data_buckets_deny_insecure_transport_and_expire(template: Template) -> 
     for policy in policies.values():
         statements = policy["Properties"]["PolicyDocument"]["Statement"]
         assert any(_denies_insecure_transport(item) for item in statements)
+
+
+def test_cold_chain_sampling_is_an_iam_exception(template: Template) -> None:
+    path = Path(__file__).resolve().parents[2] / "docs" / "security" / "iam-exceptions.md"
+    text = path.read_text(encoding="utf-8")
+    assert "OerfColdChainStateMachineRole" in text
+    found = False
+    for policy in template.find_resources("AWS::IAM::Policy").values():
+        roles = json.dumps(policy["Properties"].get("Roles", []))
+        if "OerfColdChainStateMachineRole" not in roles:
+            continue
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            action = statement.get("Action", [])
+            names = [action] if isinstance(action, str) else list(action)
+            if "xray:GetSamplingRules" in names and "xray:GetSamplingTargets" in names:
+                assert statement["Resource"] == "*"
+                found = True
+    assert found
 
 
 def test_both_state_machines_trace_and_log_errors_without_payloads(

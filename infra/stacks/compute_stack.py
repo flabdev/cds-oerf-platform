@@ -32,6 +32,7 @@ from constructs import Construct
 from infra.constructs.agentcore_runtime import AgentCoreRuntime
 from infra.constructs.bedrock_guardrail import BedrockGuardrail
 from infra.constructs.waba_event_destination import WabaEventDestination
+from infra.iam_conditions import pin_source_account
 from infra.runtime_asset import runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
 
@@ -433,6 +434,12 @@ class OerfComputeStack(Stack):
         data_stack.evidence_bucket.grant_put(self.inbound_fn)
         # Inbound is the role that resumes a paused execution (ADR-028).
         self._grant_task_token(self.inbound_fn)
+        # ADR-019. StopExecution applies to an execution ARN, not the state
+        # machine. The handler that calls it is not implemented; the project
+        # lead owns that logic.
+        data_stack.cold_chain_state_machine.grant_execution(
+            self.inbound_fn, "states:StopExecution"
+        )
         self.inbound_fn.add_event_source(
             event_sources.SqsEventSource(
                 self.inbound_queue,
@@ -460,13 +467,6 @@ class OerfComputeStack(Stack):
         data_stack.routing_table.grant_read_write_data(self.action_handler_fn)
         data_stack.cold_chain_state_machine.grant_start_execution(self.action_handler_fn)
         self.inbound_queue.grant_send_messages(self.action_handler_fn)
-        # OERF-208: action_handler.py still calls SendTaskSuccess. The contract
-        # gives that action to the inbound role. Keep it here while
-        # compat:actionHandlerTaskToken is true (the default) so the deployed
-        # handler keeps working. Set the flag to false once OERF-208 sends the
-        # action to INBOUND_QUEUE_URL instead.
-        if _context_enabled(self, "compat:actionHandlerTaskToken", default=True):
-            self._grant_task_token(self.action_handler_fn)
 
         self.http_api = apigwv2.HttpApi(
             self,
@@ -605,6 +605,7 @@ class OerfComputeStack(Stack):
         CfnOutput(self, "ChannelRouterArn", value=self.channel_router_fn.function_arn)
         CfnOutput(self, "EvidenceAnalyzerArn", value=self.evidence_analyzer_fn.function_arn)
         CfnOutput(self, "ReportGeneratorArn", value=self.report_generator_fn.function_arn)
+        pin_source_account(self)
 
     def _function(
         self,
