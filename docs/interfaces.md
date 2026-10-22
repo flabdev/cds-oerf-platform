@@ -1,9 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.7** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.8** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.8 (2026-10-22, OERF-303) fills the logger section. A line is JSON with `ts`, `level`, `msg`, and optional `tenant_id`, `incident_id`, `engagement_id`. The placeholder keys `timestamp` and `message` are `ts` and `msg`. Sensitive keys are dropped. E.164 numbers, email addresses, and task-token values are masked.
 - v1.7 (2026-10-21, WhatsApp) documents the WABA event destination on the inbound topic. It is created only when context `whatsapp:wabaId` is set.
 - v1.6 (2026-10-21, OERF-312) documents the AgentCore placeholder: envelope, timeout, fallback, and `AGENT_RUNTIME_ARN`.
 - v1.5 (2026-10-21, OERF-310) sets `GUARDRAIL_ID` and `GUARDRAIL_VERSION` on the vision function, and documents `record_invocation`.
@@ -534,22 +535,24 @@ Synth: [infra/app.py](../infra/app.py) takes the account from `CDK_DEFAULT_ACCOU
 
 ## 10. Logger
 
-Owner: OERF-303. Module to add: `oerf/platform/observability/logging.py`. This section is the placeholder. OERF-303 fills the function signature and publishes it here. Handler owners adopt it in their own PRs.
+Owner: OERF-303. Module: [oerf/platform/observability/logging.py](../oerf/platform/observability/logging.py). `get_logger(name)` returns a stdlib logger with a redaction filter. `log(logger, level, msg, **fields)` writes one JSON object.
 
-One JSON object per line, UTC timestamp, correlation ids when the caller has them:
+`ts` is UTC `YYYY-MM-DDTHH:MM:SSZ`. `level` and `msg` are always present. `tenant_id`, `incident_id`, and `engagement_id` are omitted when the caller does not pass them. `channel`, `outcome`, and `count` are the only other fields kept.
+
+The filter drops `task_token`, `body`, `text`, `message`, `phone`, `to`, `recipient`, `e164`, `email`, `name`, `address`, and `authorization`. It masks an E.164 number, an email address, or a task-token-shaped value inside `msg` and the fields that remain. A caller that passes a prompt, an image, raw model output, or a raw DynamoDB image gets the same treatment: the key is dropped, and the value is not written.
 
 ```json
 {
-  "timestamp": "2026-10-18T12:00:00Z",
+  "ts": "2026-10-18T12:00:00Z",
   "level": "INFO",
-  "message": "incident opened",
+  "msg": "route_complete",
   "tenant_id": "t1",
   "incident_id": "INC-000123",
   "engagement_id": "ENG-03"
 }
 ```
 
-Absent ids are omitted. The logger must not accept task tokens, message bodies, phone numbers, names, prompts, images, raw model output, or raw DynamoDB images. OERF-303 defines what happens when a caller passes those keys.
+The channel router (including mock sends), the vision handler, and the report handler use this logger. They log ids, channel, outcome, and counts.
 
 ### 10.1 Model-call trace
 
@@ -584,7 +587,7 @@ No `CODEOWNERS` file is in the repo. This map is the contract until one is added
 | `oerf/platform/api/ws_handler.py`, `ws_authorizer.py` | Mudita (OERF-302) |
 | `oerf/platform/api/stream_broadcaster.py` | Ananda (OERF-308). Stays in `api/` unless OERF-302 agrees to move it. |
 | `oerf/platform/evidence/vision.py` | OERF-207 for behaviour. Ananda (OERF-310) for model, guardrail, and IAM scope. |
-| `oerf/platform/observability/ai_trace.py` | Ananda (OERF-310). `logging.py` remains OERF-303 and is not created yet. |
+| `oerf/platform/observability/ai_trace.py` | Ananda (OERF-310). `logging.py` is OERF-303. |
 | `web/**` | Mudita (OERF-302 and the dashboard tickets) |
 | `scripts/whatsapp/` | Ananda (WhatsApp channel infrastructure) |
 | `docs/interfaces.md` | Ananda (OERF-304), then OERF-306 |

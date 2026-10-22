@@ -14,7 +14,9 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
-logger = logging.getLogger(__name__)
+from oerf.platform.observability.logging import get_logger, log
+
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
@@ -72,6 +74,13 @@ _EXTRACT_INSTRUCTION = (
 )
 
 
+def _required_text(value: Any) -> str | None:
+    """Return a stripped string, or None when the value is missing or blank."""
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
 def _image_format(key: str) -> str:
     """Map an object key suffix to a Converse image format."""
     ext = key.lower().rsplit(".", 1)[-1] if "." in key else ""
@@ -105,12 +114,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         "incident_id": "INC-001"
     }
     """
-    logger.info("Analyzing evidence: %s", json.dumps(event))
-
     bucket = event.get("bucket", "")
     key = event.get("key", "")
-    tenant_id = event.get("tenant_id", "default")
+    tenant_id = _required_text(event.get("tenant_id"))
     incident_id = event.get("incident_id", "unknown")
+    if tenant_id is None:
+        logger.error("Rejected evidence analysis: tenant_required")
+        return {"success": False, "error": "tenant_required", "fallback_required": True}
 
     if USE_MOCK_BEDROCK:
         mock_result = {
@@ -126,6 +136,14 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "ambient 12.8C vs setpoint 4.0C"
             ),
         }
+        log(
+            logger,
+            logging.INFO,
+            "evidence_analyzed",
+            tenant_id=tenant_id,
+            incident_id=incident_id if isinstance(incident_id, str) else None,
+            outcome="mock",
+        )
         return {"success": True, "analysis": mock_result, "source": "mock"}
 
     try:
@@ -172,10 +190,25 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 ExpressionAttributeValues={":ea": analysis, ":k": key},
             )
 
+        log(
+            logger,
+            logging.INFO,
+            "evidence_analyzed",
+            tenant_id=tenant_id,
+            incident_id=incident_id if isinstance(incident_id, str) else None,
+            outcome="analyzed",
+        )
         return {"success": True, "analysis": analysis}
 
     except (ClientError, ValueError, KeyError, json.JSONDecodeError) as exc:
-        logger.error("Failed to analyze evidence image: %s", exc)
+        log(
+            logger,
+            logging.ERROR,
+            "evidence_analysis_failed",
+            tenant_id=tenant_id,
+            incident_id=incident_id if isinstance(incident_id, str) else None,
+            outcome="error",
+        )
         return {
             "success": False,
             "error": str(exc),
