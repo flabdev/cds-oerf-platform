@@ -21,24 +21,8 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from infra.runtime_asset import runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
-
-_LAMBDA_EXCLUDE = [
-    "cdk.out",
-    ".git",
-    ".github",
-    ".venv",
-    "venv",
-    "tests",
-    "web",
-    "sim",
-    "node_modules",
-    "**/*.pyc",
-    "**/__pycache__",
-    ".pytest_cache",
-    "*.md",
-    "cds_oerf_platform.egg-info",
-]
 
 
 class OerfApiStack(Stack):
@@ -52,7 +36,7 @@ class OerfApiStack(Stack):
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
-        code = lambda_.Code.from_asset(".", exclude=_LAMBDA_EXCLUDE)
+        code = lambda_.Code.from_asset(".", **runtime_code_args())
         self.query_fn = lambda_.Function(
             self,
             "DashboardQueryFunction",
