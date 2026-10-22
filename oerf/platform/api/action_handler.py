@@ -224,13 +224,20 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         body = {}
 
     path_params = event.get("pathParameters") or {}
-    query_params = event.get("queryStringParameters") or {}
 
     auth = extract_auth_context(event)
     normalized = path.split("?")[0].rstrip("/") or "/"
 
     if normalized.endswith("/incidents/trigger") and http_method == "POST":
-        tenant_id = _trigger_tenant(auth, body, query_params)
+        # interfaces §2: tenant comes from the token, including for platform_admin.
+        # A body or query tenant is ignored.
+        if not auth["is_authenticated"]:
+            logger.error("Rejected trigger: unauthenticated")
+            return cors_response(401, {"error": "unauthorized"})
+        tenant_id = _token_tenant(auth.get("tenant_id"))
+        if tenant_id is None:
+            logger.error("Rejected trigger: tenant_required")
+            return cors_response(403, {"error": "tenant_required"})
         return handle_trigger_incident(tenant_id, body)
 
     if not auth["is_authenticated"]:
@@ -258,15 +265,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     return cors_response(404, {"error": "Route not found", "path": path})
 
 
-def _trigger_tenant(auth: dict[str, Any], body: dict[str, Any], query: dict[str, Any]) -> str:
-    if auth["is_authenticated"] and auth["tenant_id"] and not auth["is_platform_admin"]:
-        return str(auth["tenant_id"])
-    requested = body.get("tenant_id") or query.get("tenant_id")
-    if auth["is_platform_admin"] and requested:
-        return str(requested)
-    if auth["tenant_id"]:
-        return str(auth["tenant_id"])
-    return str(requested or "T1")
+def _token_tenant(value: Any) -> str | None:
+    """Return a token tenant, or None when the claim is missing or blank."""
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 def _list_incidents(tenant_id: str) -> dict[str, Any]:
