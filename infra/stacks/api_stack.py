@@ -23,6 +23,7 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from infra.iam_conditions import pin_source_account
 from infra.runtime_asset import runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
 
@@ -196,3 +197,4 @@ class OerfApiStack(Stack):
         CfnOutput(self, "DashboardUrl", value=dashboard_origin)
         CfnOutput(self, "RestApiUrl", value=self.rest_api.url)
         CfnOutput(self, "WebSocketUrl", value=websocket_url)
+        pin_source_account(self)

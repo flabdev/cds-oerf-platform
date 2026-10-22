@@ -1,9 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.10** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.11** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.11 (2026-10-22, ADR-019) a `cancel` action is handled by the inbound handler. It stops the `oerf-cold-chain` execution, sets the incident to `CANCELLED`, and the repository releases the lock. That handler logic is not implemented. The action handler has no task-token actions.
 - v1.10 (2026-10-22, OERF-303) the logger writes each JSON object to stdout and does not pass the record to a logging handler. A failed route sets `channel` to `none` when no channel was selected.
 - v1.9 (2026-10-22, ADR-018) records object retention. Evidence objects expire after 90 days, and noncurrent evidence versions after 30. Report objects stay. Noncurrent report versions expire after 90 days.
 - v1.8 (2026-10-22, OERF-303) fills the logger section. A line is JSON with `ts`, `level`, `msg`, and optional `tenant_id`, `incident_id`, `engagement_id`. The placeholder keys `timestamp` and `message` are `ts` and `msg`. Sensitive keys are dropped. E.164 numbers, email addresses, and task-token values are masked.
@@ -159,9 +160,9 @@ Queued message (tenant and user come from the token):
 
 Dedupe key: `INMSG#{action_id}` (section 5). An action whose engagement is no longer waiting is ignored and logged, without a task-token call.
 
-Deployed deviation, Mudita (208/302) to migrate: `POST /incidents/{id}/action` accepts `APPROVE`, `REJECT`, and `OVERRIDE`, and the handler calls `SendTaskSuccess` itself.
+Deployed deviation, Mudita (208/302) to migrate: `POST /incidents/{id}/action` accepts `APPROVE`, `REJECT`, and `OVERRIDE`. The handler does not call `SendTaskSuccess`.
 
-`cancel` stops the execution, stops engagements, and deletes the shipment lock (ADR-019). It still enters through this queue so one component resumes or stops workflows.
+`cancel` enters through this queue. The inbound handler stops the `oerf-cold-chain` execution (`states:StopExecution` on that machine's executions only), sets the incident to `CANCELLED`, and the repository releases the shipment lock (ADR-019). The handler logic is not implemented. The project lead owns it.
 
 ## 4. Event envelopes
 
@@ -462,7 +463,7 @@ IAM column is the target. Current wildcards are called out and are not the targe
 | `domains.cold_chain_excursion.steps.qa` | `handler` | pending (OERF-201–207) | Step Functions | Read incident and report pointer. No SES. | not deployed |
 | `domains.cold_chain_excursion.steps.close` | `handler` | pending (OERF-201–207) | Step Functions | Write `CLOSED`, delete the lock item. No messaging. | not deployed |
 | `oerf.platform.ingest.handler` | `handler` | pending (OERF-201–207) | EventBridge `sim.reefer` / `TemperatureReading` | Read routing device item and tenant config. Transact incident META plus lock. `states:StartExecution` on `STATE_MACHINE_ARN` only. | not deployed |
-| `oerf.platform.inbound.handler` | `handler` | pending (OERF-201–207) | SQS inbound queue | Read/write routing and incident. Write evidence objects. `states:SendTaskSuccess` only; section 5 keeps reply classification in Interpret, so this role sends no `states:SendTaskFailure`. No channel-send APIs. | not deployed |
+| `oerf.platform.inbound.handler` | `handler` | pending (OERF-201–207) | SQS inbound queue | Read/write routing and incident. Write evidence objects. `states:SendTaskSuccess` only; section 5 keeps reply classification in Interpret, so this role sends no `states:SendTaskFailure`. `states:StopExecution` on executions of `oerf-cold-chain` only. No channel-send APIs. | not deployed |
 | `oerf.platform.channels.router` | `handler` | Mudita | Step Functions / direct invoke | Read/write routing (`OUTMSG#`, `ADDR#`). The only role with WhatsApp, SMS, and SES send. | deployed `oerf-channel-router` |
 | `oerf.platform.report.generator` | `handler` | Mudita (OERF-117) | Step Functions | Read incident. Write `REPORT_BUCKET_NAME`. SES send is not the target (ADR-008). | deployed `oerf-report-generator` |
 | `oerf.platform.api.stream_broadcaster` | `handler` | Ananda (OERF-308) | Incident table stream | Read incident stream. Read routing subscriptions. Delete gone connections. `execute-api:ManageConnections` on this API. No Step Functions, no incident writes. | deployed `oerf-stream-broadcaster` |
@@ -477,7 +478,7 @@ Current IAM that the target replaces:
 - Channel router: `ses:SendEmail`, `sns:Publish`, `socialmessaging:*` on `*`.
 - Evidence analyzer: `bedrock:InvokeModel` on the approved foundation-model ARN. `bedrock:ApplyGuardrail` on the guardrail ARN and on `us.guardrail.v1:0` in us-east-1, us-east-2, and us-west-2.
 - Report generator: `ses:SendEmail` on `*`.
-- Action handler: `states:SendTaskSuccess` and `states:SendTaskFailure` on `*`. Removal of `SendTaskSuccess` from this role is Ananda (OERF-301). The inbound role is the one that receives it (ADR-028). `SendTaskFailure` is not the inbound role's either: a decline or an unusable reply travels through the engagement decision branch (section 5), so no role sends it.
+- Action handler: no `states:SendTaskSuccess` or `states:SendTaskFailure`. The inbound role holds `states:SendTaskSuccess` (ADR-028). A decline or an unusable reply travels through the engagement decision branch (section 5).
 
 `states:SendTaskSuccess` is not resource-scopable. The wildcard resource stays, limited to the inbound role, and is recorded in `docs/security/iam-exceptions.md` when that file exists. `states:SendTaskFailure` is not granted to the inbound role.
 

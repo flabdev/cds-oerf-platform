@@ -36,6 +36,16 @@ def template(templates: tuple[Template, Template]) -> Template:
     return templates[0]
 
 
+def test_api_permissions_require_this_account(template: Template) -> None:
+    permissions = template.find_resources("AWS::Lambda::Permission")
+    assert permissions
+    for logical_id, resource in permissions.items():
+        props = resource["Properties"]
+        assert props["Principal"] == "apigateway.amazonaws.com"
+        assert props["SourceAccount"] == ACCOUNT, logical_id
+        assert "SourceArn" in props
+
+
 def test_rest_routes_require_the_cognito_authorizer(template: Template) -> None:
     template.resource_count_is("AWS::ApiGateway::RestApi", 1)
     template.has_resource_properties(

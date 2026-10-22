@@ -272,30 +272,55 @@ def test_star_resources_are_listed_in_the_exceptions_file(template: Template) ->
     )
 
 
-def test_send_task_success_is_on_inbound_and_the_compat_action_role(template: Template) -> None:
+def test_send_task_success_is_only_on_the_inbound_role(template: Template) -> None:
     inbound = role_actions(template, "oerf-inbound")
     action = role_actions(template, "oerf-action-handler")
     assert "states:SendTaskSuccess" in inbound
     assert "states:SendTaskFailure" in inbound
-    assert "states:SendTaskSuccess" in action
-    assert "states:SendTaskFailure" in action
+    assert "states:SendTaskSuccess" not in action
+    assert "states:SendTaskFailure" not in action
     assert "states:SendTaskSuccess" not in role_actions(template, "oerf-ingest")
     assert "sqs:SendMessage" in action
 
 
-def test_action_role_loses_task_token_when_compat_flag_is_false() -> None:
-    saved = _without_synth_env()
-    try:
-        _stack, flagged = synthesize(context={"compat:actionHandlerTaskToken": "false"})
-    finally:
-        _restore_env(saved)
+def test_inbound_can_stop_only_cold_chain_executions(template: Template) -> None:
+    inbound = functions_by_name(template)["oerf-inbound"]
+    stops = [
+        statement
+        for statement in statements_for_role(template, role_logical_id(inbound))
+        if "states:StopExecution" in _action_list(statement)
+    ]
+    assert len(stops) == 1
+    rendered = json.dumps(stops[0]["Resource"])
+    assert ":execution:" in rendered
+    assert "OerfColdChainStateMachine" in rendered
+    assert "EngageParty" not in rendered
+    assert ":stateMachine:" not in rendered
+    for name in functions_by_name(template):
+        if name == "oerf-inbound":
+            continue
+        assert "states:StopExecution" not in role_actions(template, name)
 
-    action = role_actions(flagged, "oerf-action-handler")
-    inbound = role_actions(flagged, "oerf-inbound")
-    assert "states:SendTaskSuccess" not in action
-    assert "states:SendTaskFailure" not in action
-    assert "states:SendTaskSuccess" in inbound
-    assert "sqs:SendMessage" in action
+
+def test_invokers_and_queue_allows_require_this_account(template: Template) -> None:
+    permissions = template.find_resources("AWS::Lambda::Permission")
+    assert permissions
+    for logical_id, resource in permissions.items():
+        props = resource["Properties"]
+        assert props["Principal"] in {"apigateway.amazonaws.com", "events.amazonaws.com"}
+        assert props["SourceAccount"] == ACCOUNT, logical_id
+        assert "SourceArn" in props
+
+    allows = []
+    for policy in template.find_resources("AWS::SQS::QueuePolicy").values():
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            condition = statement.get("Condition", {})
+            if "aws:SourceArn" not in condition.get("ArnEquals", {}):
+                continue
+            allows.append(statement)
+    assert len(allows) == 2
+    for statement in allows:
+        assert statement["Condition"]["StringEquals"]["aws:SourceAccount"] == ACCOUNT
 
 
 def test_inbound_topic_is_standard_and_queue_redrives_after_three(
@@ -789,6 +814,24 @@ def test_agentcore_flag_scopes_the_runtime_and_the_caller() -> None:
     assert invoke_runtime[0]["Resource"]["Fn::GetAtt"][1] == "AgentRuntimeArn"
     output = enabled.to_json()["Outputs"]["AgentRuntimeArn"]
     assert output["Export"]["Name"] == "AGENT-RUNTIME-ARN"
+
+    trust = enabled.find_resources("AWS::IAM::Role")[execution]["Properties"][
+        "AssumeRolePolicyDocument"
+    ]
+    condition = trust["Statement"][0]["Condition"]
+    assert condition["StringEquals"]["aws:SourceAccount"] == ACCOUNT
+    source_arn = json.dumps(condition["ArnLike"]["aws:SourceArn"])
+    assert "bedrock-agentcore" in source_arn
+    assert ACCOUNT in source_arn
+
+    exceptions = EXCEPTIONS.read_text(encoding="utf-8")
+    assert "OerfColdChainStateMachineRole" in exceptions
+    for fragment in (
+        "log-group:*",
+        "log-group:/aws/bedrock-agentcore/runtimes/*",
+        "runtimes/*:log-stream:*",
+    ):
+        assert fragment in exceptions
 
     allowed = allowed_star_actions()
     offenders = []
