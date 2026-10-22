@@ -417,9 +417,55 @@ def test_inbound_event_source_reports_batch_item_failures(template: Template) ->
         mapping["Properties"]
         for mapping in mappings.values()
         if "ReportBatchItemFailures" in mapping["Properties"].get("FunctionResponseTypes", [])
+        and "StartingPosition" not in mapping["Properties"]
     ]
     assert len(partial) == 1
-    assert "dynamodb" not in json.dumps(partial[0]).lower()
+    source = partial[0]["EventSourceArn"]
+    assert source["Fn::GetAtt"][0].startswith("InboundQueue")
+
+
+def test_queues_and_inbound_topic_deny_insecure_transport(template: Template) -> None:
+    queues = template.find_resources("AWS::SQS::Queue")
+    assert len(queues) == 4
+    for logical_id, queue in queues.items():
+        assert queue["Properties"]["SqsManagedSseEnabled"] is True, logical_id
+    policies = list(template.find_resources("AWS::SQS::QueuePolicy").values())
+    covered: set[str] = set()
+    for policy in policies:
+        props = policy["Properties"]
+        statements = props["PolicyDocument"]["Statement"]
+        assert any(_denies_insecure_transport(item) for item in statements)
+        for queue in props["Queues"]:
+            covered.add(queue["Ref"])
+    assert covered == set(queues)
+
+    topics = template.find_resources("AWS::SNS::TopicPolicy")
+    assert len(topics) == 1
+    statements = next(iter(topics.values()))["Properties"]["PolicyDocument"]["Statement"]
+    assert any(_denies_insecure_transport(item) for item in statements)
+
+
+def test_stream_broadcaster_bisects_and_fails_to_a_queue(template: Template) -> None:
+    mappings = template.find_resources("AWS::Lambda::EventSourceMapping")
+    stream = [
+        mapping["Properties"]
+        for mapping in mappings.values()
+        if mapping["Properties"].get("StartingPosition") == "LATEST"
+    ]
+    assert len(stream) == 1
+    props = stream[0]
+    assert props["BisectBatchOnFunctionError"] is True
+    assert props["MaximumRecordAgeInSeconds"] == 24 * 60 * 60
+    assert props["MaximumRetryAttempts"] == 3
+    assert "ReportBatchItemFailures" in props["FunctionResponseTypes"]
+    assert "Destination" in props["DestinationConfig"]["OnFailure"]
+
+
+def _denies_insecure_transport(statement: dict) -> bool:
+    if statement.get("Effect") != "Deny":
+        return False
+    flag = statement.get("Condition", {}).get("Bool", {}).get("aws:SecureTransport")
+    return flag in ("false", False)
 
 
 def test_temperature_rule_retries_to_a_dlq_and_limits_ingest_concurrency(

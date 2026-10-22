@@ -101,6 +101,22 @@ def test_dashboard_bucket_is_private_behind_cloudfront(template: Template) -> No
     template.resource_count_is("AWS::CloudFront::OriginAccessControl", 1)
 
 
+def test_dashboard_functions_trace_and_keep_logs_for_thirty_days(template: Template) -> None:
+    functions = template.find_resources("AWS::Lambda::Function")
+    assert len(functions) == 2
+    log_groups = template.find_resources("AWS::Logs::LogGroup")
+    assert len(log_groups) == 2
+    referenced = set()
+    for props in functions.values():
+        assert props["Properties"]["TracingConfig"] == {"Mode": "Active"}
+        log_group = props["Properties"]["LoggingConfig"]["LogGroup"]
+        assert "Ref" in log_group
+        referenced.add(log_group["Ref"])
+    assert referenced == set(log_groups)
+    for group in log_groups.values():
+        assert group["Properties"]["RetentionInDays"] == 30
+
+
 def test_websocket_is_the_compute_endpoint_and_cors_is_cloudfront(
     template: Template,
 ) -> None:

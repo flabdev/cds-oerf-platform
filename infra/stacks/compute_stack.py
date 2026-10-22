@@ -346,12 +346,25 @@ class OerfComputeStack(Stack):
         # DynamoEventSource adds dynamodb:ListStreams on Resource *.
         # ListStreams has no resource type. The stream read actions stay on
         # this table's stream ARN. See docs/security/iam-exceptions.md.
+        # A failed batch is bisected, then sent here after 24 hours or the
+        # retry limit. DynamoDB streams are not readable past 24 hours.
+        stream_dlq = sqs.Queue(
+            self,
+            "StreamBroadcasterDlq",
+            encryption=sqs.QueueEncryption.SQS_MANAGED,
+            enforce_ssl=True,
+            retention_period=Duration.days(14),
+        )
         self.stream_broadcaster_fn.add_event_source(
             event_sources.DynamoEventSource(
                 data_stack.incident_table,
                 starting_position=lambda_.StartingPosition.LATEST,
                 batch_size=10,
                 retry_attempts=3,
+                bisect_batch_on_error=True,
+                max_record_age=Duration.hours(24),
+                report_batch_item_failures=True,
+                on_failure=event_sources.SqsDlq(stream_dlq),
             )
         )
 
@@ -366,17 +379,20 @@ class OerfComputeStack(Stack):
             "InboundTopic",
             display_name="oerf-inbound",
             fifo=False,
+            enforce_ssl=True,
         )
         self.inbound_dlq = sqs.Queue(
             self,
             "InboundDlq",
             encryption=sqs.QueueEncryption.SQS_MANAGED,
+            enforce_ssl=True,
             retention_period=Duration.days(14),
         )
         self.inbound_queue = sqs.Queue(
             self,
             "InboundQueue",
             encryption=sqs.QueueEncryption.SQS_MANAGED,
+            enforce_ssl=True,
             visibility_timeout=Duration.seconds(
                 _INBOUND_TIMEOUT.to_seconds() * _VISIBILITY_MULTIPLE
             ),
@@ -535,6 +551,7 @@ class OerfComputeStack(Stack):
             self,
             "IngestTargetDlq",
             encryption=sqs.QueueEncryption.SQS_MANAGED,
+            enforce_ssl=True,
             retention_period=Duration.days(14),
         )
         temperature_rule = events.Rule(

@@ -9,6 +9,7 @@ from __future__ import annotations
 from aws_cdk import (
     CfnOutput,
     Duration,
+    RemovalPolicy,
     Stack,
     aws_apigateway as apigw,
     aws_cloudfront as cloudfront,
@@ -16,6 +17,7 @@ from aws_cdk import (
     aws_cognito as cognito,
     aws_iam as iam,
     aws_lambda as lambda_,
+    aws_logs as logs,
     aws_s3 as s3,
     aws_sqs as sqs,
 )
@@ -23,6 +25,33 @@ from constructs import Construct
 
 from infra.runtime_asset import runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
+
+
+def _dashboard_function(stack: Stack, construct_id: str, **kwargs: object) -> lambda_.Function:
+    """One role, a 30-day log group, and active X-Ray tracing."""
+
+    log_group = logs.LogGroup(
+        stack,
+        f"{construct_id}LogGroup",
+        retention=logs.RetentionDays.ONE_MONTH,
+        removal_policy=RemovalPolicy.DESTROY,
+    )
+    role = iam.Role(
+        stack,
+        f"{construct_id}Role",
+        assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+    )
+    log_group.grant_write(role)
+    return lambda_.Function(
+        stack,
+        construct_id,
+        role=role,
+        log_group=log_group,
+        # tracing ACTIVE adds xray:PutTraceSegments and xray:PutTelemetryRecords
+        # on Resource *. X-Ray rejects a resource ARN. See iam-exceptions.md.
+        tracing=lambda_.Tracing.ACTIVE,
+        **kwargs,
+    )
 
 
 class OerfApiStack(Stack):
@@ -37,7 +66,7 @@ class OerfApiStack(Stack):
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
         code = lambda_.Code.from_asset(".", **runtime_code_args())
-        self.query_fn = lambda_.Function(
+        self.query_fn = _dashboard_function(
             self,
             "DashboardQueryFunction",
             runtime=lambda_.Runtime.PYTHON_3_11,
@@ -51,7 +80,7 @@ class OerfApiStack(Stack):
         )
         data_stack.incident_table.grant_read_data(self.query_fn)
         data_stack.tenant_table.grant_read_write_data(self.query_fn)
-        self.action_fn = lambda_.Function(
+        self.action_fn = _dashboard_function(
             self,
             "DashboardActionFunction",
             runtime=lambda_.Runtime.PYTHON_3_11,
