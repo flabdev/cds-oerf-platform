@@ -43,9 +43,10 @@ from oerf.platform.agent.dynamo_step_results import DynamoStepResultStore
 from oerf.platform.agent.envelope import parse_envelope
 from oerf.platform.agent.handlers import HANDLERS
 from oerf.platform.incidents.dynamo import DynamoIncidentStore
+from oerf.platform.observability.logging import get_logger, log
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 __all__ = [
@@ -205,18 +206,31 @@ def run_step(
         if dependencies is not None
         else build_dependencies(settings=settings, client=client, clock=clock)
     )
-    logger.info(
-        "step %s for incident %s (tenant %s, request %s)",
-        step,
-        envelope.incident_id,
-        envelope.tenant_id,
-        getattr(context, "aws_request_id", "-"),
+    request_id = getattr(context, "aws_request_id", "-")
+    log(
+        logger,
+        logging.INFO,
+        (
+            f"step {step} for incident {envelope.incident_id} "
+            f"(tenant {envelope.tenant_id}, request {request_id})"
+        ),
+        tenant_id=envelope.tenant_id,
+        incident_id=envelope.incident_id,
+        outcome="started",
     )
     try:
         result = HANDLERS[step](envelope, ports)
     except Exception:
         # Step Functions routes the failure to RecordFailure; the log line names
         # the step so a retry is matched to the invocation that produced it.
-        logger.exception("step %s failed for incident %s", step, envelope.incident_id)
+        log(
+            logger,
+            logging.ERROR,
+            f"step {step} failed for incident {envelope.incident_id}",
+            tenant_id=envelope.tenant_id,
+            incident_id=envelope.incident_id,
+            outcome="error",
+            count=1,
+        )
         raise
     return result.to_event()

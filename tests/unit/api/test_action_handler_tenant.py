@@ -1,7 +1,6 @@
 """Trigger uses the token tenant and does not write when that claim is missing."""
 
 import json
-import logging
 
 from oerf.platform.api import action_handler
 
@@ -38,12 +37,11 @@ def _forbid(name: str):
     return _call
 
 
-def test_trigger_without_a_token_tenant_does_not_write(monkeypatch, caplog) -> None:
+def test_trigger_without_a_token_tenant_does_not_write(monkeypatch, capsys) -> None:
     monkeypatch.setattr(action_handler, "INCIDENT_TABLE_NAME", "incidents")
     monkeypatch.setattr(action_handler, "STATE_MACHINE_ARN", "arn:aws:states:::stateMachine:demo")
     monkeypatch.setattr(action_handler, "get_dynamodb", _forbid("dynamodb"))
     monkeypatch.setattr(action_handler, "get_sfn", _forbid("stepfunctions"))
-    caplog.set_level(logging.ERROR)
 
     response = action_handler.handler(
         {
@@ -59,12 +57,14 @@ def test_trigger_without_a_token_tenant_does_not_write(monkeypatch, caplog) -> N
         },
         None,
     )
+    text = capsys.readouterr().out
 
     assert response["statusCode"] == 403
     assert json.loads(response["body"]) == {"error": "tenant_required"}
-    assert "from-body" not in caplog.text
-    assert "from-query" not in caplog.text
-    assert "PH-9" not in caplog.text
+    assert "Rejected trigger: tenant_required" in text
+    assert "from-body" not in text
+    assert "from-query" not in text
+    assert "PH-9" not in text
 
 
 def test_unauthenticated_trigger_does_not_write(monkeypatch) -> None:

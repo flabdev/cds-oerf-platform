@@ -26,8 +26,9 @@ from oerf.platform.api.claims import (
     parse_cognito_groups,
     resolve_role,
 )
+from oerf.platform.observability.logging import get_logger, log
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 INCIDENT_TABLE_NAME = os.environ.get("INCIDENT_TABLE_NAME", "")
@@ -155,8 +156,16 @@ def handle_trigger_incident(tenant_id: str, body: dict[str, Any]) -> dict[str, A
                 ),
             )
             execution_arn = resp.get("executionArn", "")
-        except Exception as exc:
-            logger.error("Failed to start Step Functions execution: %s", exc)
+        except Exception:
+            log(
+                logger,
+                logging.ERROR,
+                "Failed to start Step Functions execution",
+                tenant_id=tenant_id,
+                incident_id=incident_id,
+                outcome="error",
+                count=1,
+            )
 
     return cors_response(
         201,
@@ -202,8 +211,16 @@ def handle_dashboard_action(
             params["MessageDeduplicationId"] = parsed["action_id"]
             params["MessageGroupId"] = tenant_id
         get_sqs().send_message(**params)
-    except Exception as exc:
-        logger.error("Failed to queue action %s: %s", parsed["action_id"], exc)
+    except Exception:
+        log(
+            logger,
+            logging.ERROR,
+            f"Failed to queue action {parsed['action_id']}",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+            outcome="error",
+            count=1,
+        )
         return cors_response(503, {"error": "queue_unavailable"})
     return cors_response(202, {"action_id": parsed["action_id"], "status": "queued"})
 
@@ -213,7 +230,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     http_context = event.get("requestContext", {}).get("http", {})
     http_method = event.get("httpMethod") or http_context.get("method", "GET")
     path = event.get("path") or event.get("rawPath", "")
-    logger.info("%s %s", http_method, path)
+    log(logger, logging.INFO, f"{http_method} {path}", outcome="received")
 
     if http_method == "OPTIONS":
         return cors_response(200, {})
@@ -232,11 +249,23 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         # interfaces §2: tenant comes from the token, including for platform_admin.
         # A body or query tenant is ignored.
         if not auth["is_authenticated"]:
-            logger.error("Rejected trigger: unauthenticated")
+            log(
+                logger,
+                logging.ERROR,
+                "Rejected trigger: unauthenticated",
+                outcome="denied",
+                count=1,
+            )
             return cors_response(401, {"error": "unauthorized"})
         tenant_id = _token_tenant(auth.get("tenant_id"))
         if tenant_id is None:
-            logger.error("Rejected trigger: tenant_required")
+            log(
+                logger,
+                logging.ERROR,
+                "Rejected trigger: tenant_required",
+                outcome="denied",
+                count=1,
+            )
             return cors_response(403, {"error": "tenant_required"})
         return handle_trigger_incident(tenant_id, body)
 
@@ -281,8 +310,15 @@ def _list_incidents(tenant_id: str) -> dict[str, Any]:
         page = DynamoIncidentQuery(boto3.client("dynamodb"), INCIDENT_TABLE_NAME).list_incidents(
             tenant_id
         )
-    except Exception as exc:
-        logger.error("Incident list failed: %s", exc)
+    except Exception:
+        log(
+            logger,
+            logging.ERROR,
+            "Incident list failed",
+            tenant_id=tenant_id,
+            outcome="error",
+            count=1,
+        )
         return cors_response(503, {"error": "gsi_unavailable"})
     return cors_response(200, page)
 
@@ -296,8 +332,16 @@ def _get_incident(tenant_id: str, incident_id: str) -> dict[str, Any]:
         item = DynamoIncidentQuery(boto3.client("dynamodb"), INCIDENT_TABLE_NAME).get_incident(
             tenant_id, incident_id
         )
-    except Exception as exc:
-        logger.error("Incident read failed: %s", exc)
+    except Exception:
+        log(
+            logger,
+            logging.ERROR,
+            "Incident read failed",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+            outcome="error",
+            count=1,
+        )
         return cors_response(404, {"error": "not_found"})
     if item is None:
         return cors_response(404, {"error": "not_found"})

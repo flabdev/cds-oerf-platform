@@ -7,7 +7,6 @@ must never reach the logs.
 """
 
 import json
-import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -45,7 +44,7 @@ def _run(event: dict[str, Any], dependencies: InboundDependencies):
         configure_dependencies(None)
 
 
-def test_unparseable_record_is_retried_and_logged_by_count_only(caplog) -> None:
+def test_unparseable_record_is_retried_and_logged_by_count_only(capsys) -> None:
     event = {
         "Records": [
             {
@@ -55,34 +54,32 @@ def test_unparseable_record_is_retried_and_logged_by_count_only(caplog) -> None:
         ]
     }
 
-    with caplog.at_level(logging.INFO, logger="oerf.platform.inbound.handler"):
-        result = _run(event, _dependencies())
+    result = _run(event, _dependencies())
+    text = capsys.readouterr().out
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "msg-do-not-log"}]}
-    assert "Processed inbound records=1 failures=1" in caplog.text
-    assert "msg-do-not-log" not in caplog.text
-    assert "PH-2841" not in caplog.text
-    assert "secret-body" not in caplog.text
-    assert "t1" not in caplog.text
+    assert "Processed inbound records=1 failures=1" in text
+    assert "msg-do-not-log" not in text
+    assert "PH-2841" not in text
+    assert "secret-body" not in text
+    assert "t1" not in text
 
 
-def test_a_malformed_record_entry_is_counted_without_crashing(caplog) -> None:
-    with caplog.at_level(logging.INFO, logger="oerf.platform.inbound.handler"):
-        result = _run({"Records": ["not-an-object"]}, _dependencies())
-
-    assert result == {"batchItemFailures": []}
-    assert "Processed inbound records=1 failures=0" in caplog.text
-
-
-def test_a_non_list_records_field_is_acknowledged_without_failures(caplog) -> None:
-    with caplog.at_level(logging.INFO, logger="oerf.platform.inbound.handler"):
-        result = _run({"Records": "unexpected"}, _dependencies())
+def test_a_malformed_record_entry_is_counted_without_crashing(capsys) -> None:
+    result = _run({"Records": ["not-an-object"]}, _dependencies())
 
     assert result == {"batchItemFailures": []}
-    assert "Processed inbound records=0 failures=0" in caplog.text
+    assert "Processed inbound records=1 failures=0" in capsys.readouterr().out
 
 
-def test_a_recognized_record_is_not_returned_for_retry(caplog) -> None:
+def test_a_non_list_records_field_is_acknowledged_without_failures(capsys) -> None:
+    result = _run({"Records": "unexpected"}, _dependencies())
+
+    assert result == {"batchItemFailures": []}
+    assert "Processed inbound records=0 failures=0" in capsys.readouterr().out
+
+
+def test_a_recognized_record_is_not_returned_for_retry(capsys) -> None:
     event = {
         "Records": [
             {
@@ -100,9 +97,9 @@ def test_a_recognized_record_is_not_returned_for_retry(caplog) -> None:
         ]
     }
 
-    with caplog.at_level(logging.INFO, logger="oerf.platform.inbound.handler"):
-        result = _run(event, _dependencies())
+    result = _run(event, _dependencies())
+    text = capsys.readouterr().out
 
     assert result == {"batchItemFailures": []}
-    assert "Processed inbound records=1 failures=0" in caplog.text
-    assert "acknowledged" not in caplog.text
+    assert "Processed inbound records=1 failures=0" in text
+    assert "acknowledged" not in text
