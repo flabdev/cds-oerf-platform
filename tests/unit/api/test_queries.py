@@ -216,6 +216,7 @@ def test_sqs_message_uses_the_idempotency_id_and_omits_the_task_token() -> None:
     assert body["channel"] == "dashboard"
     assert body["engagement_id"] == "ENG-03"
     assert body["user_id"] == "user-1"
+    assert body["role"] == "ops_user"
     assert body["text"] is None
     assert "task_token" not in body
 

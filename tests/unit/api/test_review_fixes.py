@@ -207,11 +207,6 @@ def test_dashboard_action_is_queued_and_does_not_resume_the_workflow(monkeypatch
 
     monkeypatch.setattr(action_handler, "INBOUND_QUEUE_URL", "https://example/inbound")
     monkeypatch.setattr(action_handler, "get_sqs", lambda: Queue())
-    monkeypatch.setattr(
-        action_handler,
-        "get_sfn",
-        lambda: (_ for _ in ()).throw(AssertionError("step functions")),
-    )
 
     response = action_handler.handler(_action_event(), None)
     body = json.loads(sent[0]["MessageBody"])
@@ -221,6 +216,7 @@ def test_dashboard_action_is_queued_and_does_not_resume_the_workflow(monkeypatch
     assert body["action"] == "confirm_transfer"
     assert body["tenant_id"] == "t1"
     assert body["user_id"] == "user-1"
+    assert body["role"] == "ops_user"
     assert body["text"] is None
     assert "task_token" not in body
 

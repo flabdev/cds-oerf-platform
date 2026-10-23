@@ -2,7 +2,7 @@
 
 POST /incidents/{id}/action queues the inbound message from the interface
 contract. GET reads use TENANT#{tid}#INC#{iid}. This handler does not call
-states:SendTaskSuccess.
+states:SendTaskSuccess or states:StartExecution. Ingest starts executions.
 """
 
 from __future__ import annotations
@@ -11,8 +11,6 @@ import json
 import logging
 import os
 import re
-import time
-import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -32,7 +30,6 @@ logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 INCIDENT_TABLE_NAME = os.environ.get("INCIDENT_TABLE_NAME", "")
-STATE_MACHINE_ARN = os.environ.get("STATE_MACHINE_ARN", "")
 INBOUND_QUEUE_URL = os.environ.get("INBOUND_QUEUE_URL") or os.environ.get("ACTION_QUEUE_URL", "")
 
 _ACTIONS = frozenset({"confirm_transfer", "pick_option", "cancel"})
@@ -40,23 +37,7 @@ _ACTION_FIELDS = frozenset({"action", "action_id", "engagement_id", "option_id",
 _ACTION_ROLES = frozenset({"platform_admin", "tenant_admin", "ops_user"})
 _NEEDS_ENGAGEMENT = frozenset({"confirm_transfer", "pick_option"})
 
-_dynamodb = None
-_sfn = None
 _sqs = None
-
-
-def get_dynamodb():
-    global _dynamodb
-    if _dynamodb is None:
-        _dynamodb = boto3.resource("dynamodb")
-    return _dynamodb
-
-
-def get_sfn():
-    global _sfn
-    if _sfn is None:
-        _sfn = boto3.client("stepfunctions")
-    return _sfn
 
 
 def get_sqs():
@@ -111,75 +92,14 @@ def extract_auth_context(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def handle_trigger_incident(tenant_id: str, body: dict[str, Any]) -> dict[str, Any]:
-    """Ingest new sensor alarm and trigger Step Functions execution."""
-    incident_id = body.get("incident_id") or f"INC-{uuid.uuid4().hex[:8].upper()}"
-    shipment_id = body.get("shipment_id", "SHP-001")
-    sensor_reading = body.get("sensor_reading", {"temp_c": 12.5, "alarm": "HIGH_TEMP"})
-
-    now = int(time.time())
-    item = {
-        "pk": f"TENANT#{tenant_id}",
-        "sk": f"INCIDENT#{incident_id}",
-        "tenant_id": tenant_id,
-        "incident_id": incident_id,
-        "shipment_id": shipment_id,
-        "status": "OPEN",
-        "created_at": now,
-        "updated_at": now,
-        "sensor_reading": sensor_reading,
-        "timeline": [
-            {
-                "time": now,
-                "event": "INCIDENT_CREATED",
-                "details": f"Temperature alarm triggered: {sensor_reading}",
-            }
-        ],
-    }
-
-    if INCIDENT_TABLE_NAME:
-        get_dynamodb().Table(INCIDENT_TABLE_NAME).put_item(Item=item)
-
-    execution_arn = ""
-    if STATE_MACHINE_ARN:
-        try:
-            sfn = get_sfn()
-            resp = sfn.start_execution(
-                stateMachineArn=STATE_MACHINE_ARN,
-                name=f"{tenant_id}_{incident_id}_{now}",
-                input=json.dumps(
-                    {
-                        "tenant_id": tenant_id,
-                        "incident_id": incident_id,
-                        "shipment_id": shipment_id,
-                    }
-                ),
-            )
-            execution_arn = resp.get("executionArn", "")
-        except Exception:
-            log(
-                logger,
-                logging.ERROR,
-                "Failed to start Step Functions execution",
-                tenant_id=tenant_id,
-                incident_id=incident_id,
-                outcome="error",
-                count=1,
-            )
-
-    return cors_response(
-        201,
-        {"incident_id": incident_id, "status": "OPEN", "execution_arn": execution_arn},
-    )
-
-
 def handle_dashboard_action(
     tenant_id: str,
     incident_id: str,
     body: dict[str, Any],
     user_id: str | None,
+    role: str,
 ) -> dict[str, Any]:
-    """Queue one dashboard action. The inbound handler resumes the workflow."""
+    """Queue one dashboard action. Cancel is finished by the inbound handler."""
 
     parsed = _action_body(body)
     if parsed is None:
@@ -197,6 +117,7 @@ def handle_dashboard_action(
         "action": parsed["action"],
         "option_id": parsed["option_id"],
         "user_id": user_id,
+        "role": role,
         "type": "text",
         "text": None,
         "media_ref": None,
@@ -245,30 +166,6 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     auth = extract_auth_context(event)
     normalized = path.split("?")[0].rstrip("/") or "/"
 
-    if normalized.endswith("/incidents/trigger") and http_method == "POST":
-        # interfaces §2: tenant comes from the token, including for platform_admin.
-        # A body or query tenant is ignored.
-        if not auth["is_authenticated"]:
-            log(
-                logger,
-                logging.ERROR,
-                "Rejected trigger: unauthenticated",
-                outcome="denied",
-                count=1,
-            )
-            return cors_response(401, {"error": "unauthorized"})
-        tenant_id = _token_tenant(auth.get("tenant_id"))
-        if tenant_id is None:
-            log(
-                logger,
-                logging.ERROR,
-                "Rejected trigger: tenant_required",
-                outcome="denied",
-                count=1,
-            )
-            return cors_response(403, {"error": "tenant_required"})
-        return handle_trigger_incident(tenant_id, body)
-
     if not auth["is_authenticated"]:
         return cors_response(401, {"error": "unauthorized"})
     if not auth["tenant_id"]:
@@ -280,7 +177,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if auth["role"] not in _ACTION_ROLES:
             return cors_response(403, {"error": "forbidden"})
         return handle_dashboard_action(
-            tenant_id, action_match.group(1), body, auth.get("sub")
+            tenant_id, action_match.group(1), body, auth.get("sub"), str(auth["role"])
         )
 
     if http_method == "GET" and (
@@ -292,13 +189,6 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _get_incident(tenant_id, str(path_params["id"]))
 
     return cors_response(404, {"error": "Route not found", "path": path})
-
-
-def _token_tenant(value: Any) -> str | None:
-    """Return a token tenant, or None when the claim is missing or blank."""
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return None
 
 
 def _list_incidents(tenant_id: str) -> dict[str, Any]:
