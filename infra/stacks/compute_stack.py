@@ -11,6 +11,7 @@ import os
 
 from aws_cdk import (
     CfnOutput,
+    CustomResource,
     Duration,
     RemovalPolicy,
     Stack,
@@ -26,6 +27,7 @@ from aws_cdk import (
     aws_sns as sns,
     aws_sns_subscriptions as subscriptions,
     aws_sqs as sqs,
+    custom_resources as cr,
 )
 from constructs import Construct
 
@@ -83,8 +85,35 @@ class OerfComputeStack(Stack):
 
         # Shared asset. Packaged from the repo root so imports stay ``oerf.*``
         # and do not shadow the stdlib ``platform`` module. The allow-list is
-        # ``oerf``, ``domains``, and ``sim``.
+        # ``oerf``, ``domains``, and ``sim``, which keeps the demo shipment
+        # seed data available to ``seed_demo_devices``.
         lambda_code = lambda_.Code.from_asset(".", **runtime_code_args())
+
+        # ---------------------------------------------------------
+        # Seed the deterministic device registry once per deployment. The
+        # custom resource is idempotent (PutItem on DEVICE#{id}/META).
+        # Rows come only from sim/seed (t1, t2, sbx).
+        # ---------------------------------------------------------
+        self.device_seed_fn = self._function(
+            "DeviceSeedFunction",
+            function_name="oerf-device-seed",
+            handler="oerf.platform.channels.devices.seed_handler",
+            code=lambda_code,
+            timeout=Duration.seconds(30),
+            environment={"ROUTING_TABLE_NAME": data_stack.routing_table.table_name},
+        )
+        data_stack.routing_table.grant_write_data(self.device_seed_fn)
+        seed_provider = cr.Provider(
+            self,
+            "DeviceSeedProvider",
+            on_event_handler=self.device_seed_fn,
+        )
+        CustomResource(
+            self,
+            "DemoDeviceSeed",
+            service_token=seed_provider.service_token,
+            properties={"SeedVersion": "1"},
+        )
 
         # ---------------------------------------------------------
         # 1. Channel Router Lambda (ADR-008)
@@ -449,7 +478,22 @@ class OerfComputeStack(Stack):
         data_stack.incident_table.grant_read_write_data(self.inbound_fn)
         data_stack.tenant_table.grant_read_data(self.inbound_fn)
         data_stack.platform_table.grant_read_data(self.inbound_fn)
-        data_stack.evidence_bucket.grant_put(self.inbound_fn)
+        self.inbound_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["s3:PutObject"],
+                resources=[
+                    data_stack.evidence_bucket.arn_for_objects("tenants/*/inbound/*")
+                ],
+            )
+        )
+        self.inbound_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["secretsmanager:GetSecretValue"],
+                resources=[
+                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:oerf/whatsapp/access_token-*"
+                ],
+            )
+        )
         # Inbound is the role that resumes a paused execution (ADR-028).
         self._grant_task_token(self.inbound_fn)
         # ADR-019. StopExecution applies to an execution ARN, not the state
@@ -516,7 +560,7 @@ class OerfComputeStack(Stack):
             authorizer=http_authorizer,
         )
         self.http_api.add_routes(
-            path="/incidents/{id}/action",
+            path="/incidents/{id}/actions",
             methods=[apigwv2.HttpMethod.POST],
             integration=action_integration,
             authorizer=http_authorizer,

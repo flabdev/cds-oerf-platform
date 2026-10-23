@@ -139,6 +139,28 @@ def test_address_row_tracks_a_waiting_engagement_and_is_removed_on_stop(store) -
     assert engagements.for_address("sms", "+910000000101") == []
 
 
+def test_stop_retires_the_address_row_without_scanning_the_routing_table() -> None:
+    client = FakeDynamoClient()
+
+    def reject_scan(**_kwargs: object) -> None:
+        raise AssertionError("routing status updates must query the engagement pointer")
+
+    client.scan = reject_scan
+    engagements = DynamoEngagementStore(client, "incident", "routing")
+    opened = _open(engagements)
+    engagements.register_address("sms", "+910000000101", opened)
+    engagements.register_outbound("wamid-1", opened)
+
+    engagements.stop("t1", "INC-000001", "eng-1")
+
+    assert engagements.for_address("sms", "+910000000101") == []
+    loaded = client.get_item(
+        TableName="routing",
+        Key={"pk": {"S": "ADDR#sms#+910000000101"}, "sk": {"S": "ENG#t1#INC-000001#eng-1"}},
+    )
+    assert "Item" not in loaded
+
+
 def _open(engagements):
     return engagements.open_engagement(
         "t1",

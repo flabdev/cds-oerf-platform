@@ -413,6 +413,7 @@ class DynamoEngagementStore:
         existing = self._correlation(message_id)
         if existing is not None:
             if _same_engagement(existing, current):
+                self._note_routing_row(current, outmsg_pk(message_id), _engagement_sk(current))
                 return
             raise ValueError(f"provider message {message_id!r} is already correlated")
         expires = self._clock() + CORRELATION_TTL
@@ -437,8 +438,10 @@ class DynamoEngagementStore:
                 raise
             found = self._correlation(message_id)
             if found is not None and _same_engagement(found, current):
+                self._note_routing_row(current, outmsg_pk(message_id), _engagement_sk(current))
                 return
             raise ValueError(f"provider message {message_id!r} is already correlated") from exc
+        self._note_routing_row(current, outmsg_pk(message_id), _engagement_sk(current))
 
     def register_address(self, channel: str, address: str, engagement: Engagement) -> None:
         current = _waiting(self, engagement)
@@ -458,6 +461,11 @@ class DynamoEngagementStore:
                 "channel": s(normalized_channel),
                 "address": s(normalized_address),
             },
+        )
+        self._note_routing_row(
+            current,
+            addr_pk(normalized_channel, normalized_address),
+            f"ENG#{current.tenant_id}#{current.incident_id}#{current.engagement_id}",
         )
 
     def for_address(self, channel: str, address: str) -> list[Engagement]:
@@ -584,24 +592,46 @@ class DynamoEngagementStore:
         self._sync_outbound_status(updated)
         return updated
 
+    def _note_routing_row(self, engagement: Engagement, target_pk: str, target_sk: str) -> None:
+        """Remember one routing key under this engagement so status updates stay a query."""
+
+        self._client.put_item(
+            TableName=self._routing,
+            Item={
+                **key(_routing_ref_pk(engagement), target_pk),
+                "target_pk": s(target_pk),
+                "target_sk": s(target_sk),
+            },
+        )
+
     def _sync_outbound_status(self, engagement: Engagement) -> None:
-        response = self._client.scan(TableName=self._routing)
-        prefix = f"ENG#{engagement.tenant_id}#{engagement.incident_id}#{engagement.engagement_id}"
+        response = self._client.query(
+            TableName=self._routing,
+            KeyConditionExpression="#pk = :pk AND begins_with(#sk, :prefix)",
+            ExpressionAttributeNames={"#pk": "pk", "#sk": "sk"},
+            ExpressionAttributeValues={
+                ":pk": s(_routing_ref_pk(engagement)),
+                ":prefix": s(""),
+            },
+        )
         for item in response.get("Items", []):
-            pk = text(item["pk"])
-            if text(item["sk"]) != prefix:
-                continue
-            if pk.startswith("ADDR#") and engagement.status != "WAITING":
+            target_pk = text(item["target_pk"])
+            target_sk = text(item["target_sk"])
+            if target_pk.startswith("ADDR#") and engagement.status != "WAITING":
+                self._client.delete_item(
+                    TableName=self._routing,
+                    Key=key(target_pk, target_sk),
+                )
                 self._client.delete_item(
                     TableName=self._routing,
                     Key={"pk": item["pk"], "sk": item["sk"]},
                 )
                 continue
-            if not pk.startswith("OUTMSG#"):
+            if not target_pk.startswith("OUTMSG#"):
                 continue
             self._client.update_item(
                 TableName=self._routing,
-                Key={"pk": item["pk"], "sk": item["sk"]},
+                Key=key(target_pk, target_sk),
                 UpdateExpression="SET #status = :status, #document = :document",
                 ExpressionAttributeNames={"#status": "status", "#document": "document"},
                 ExpressionAttributeValues={
@@ -631,6 +661,16 @@ def _waiting(store: EngagementStore, engagement: Engagement) -> Engagement:
     if current is None or current.status != "WAITING":
         raise ValueError("address correlation requires a WAITING engagement")
     return current
+
+
+def _engagement_sk(engagement: Engagement) -> str:
+    return f"ENG#{engagement.tenant_id}#{engagement.incident_id}#{engagement.engagement_id}"
+
+
+def _routing_ref_pk(engagement: Engagement) -> str:
+    return (
+        f"ENGREF#{engagement.tenant_id}#{engagement.incident_id}#{engagement.engagement_id}"
+    )
 
 
 def _address_key(channel: str, address: str) -> tuple[str, str]:

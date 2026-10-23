@@ -154,7 +154,8 @@ def test_waba_app_gives_each_lambda_one_errors_alarm(tmp_path):
         for logical_id in templates["OerfObservabilityStack"]["Resources"]
         if "frameworkonEventErrors" in logical_id
     ]
-    assert len(framework) == 2
+    # Tenant-attribute, device-seed, and WABA providers each get one alarm.
+    assert len(framework) == 3
 
 
 def test_dashboard_flag_synthesizes_the_api_stack(tmp_path):

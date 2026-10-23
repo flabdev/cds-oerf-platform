@@ -1,8 +1,9 @@
 """HTTP API for dashboard actions and incident reads.
 
-POST /incidents/{id}/action queues the inbound message from the interface
-contract. GET reads use TENANT#{tid}#INC#{iid}. This handler does not call
-states:SendTaskSuccess or states:StartExecution. Ingest starts executions.
+POST /incidents/{id}/actions queues the inbound message from the interface
+contract. The singular /action path is not accepted. GET reads use
+TENANT#{tid}#INC#{iid}. This handler does not call states:SendTaskSuccess
+or states:StartExecution. Ingest starts executions.
 """
 
 from __future__ import annotations
@@ -172,7 +173,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return cors_response(403, {"error": "tenant_required"})
     tenant_id = str(auth["tenant_id"])
 
-    action_match = re.fullmatch(r"(?:/[^/]+)?/incidents/([^/]+)/actions?", normalized)
+    action_match = re.fullmatch(r"(?:/[^/]+)?/incidents/([^/]+)/actions", normalized)
     if http_method == "POST" and action_match:
         if auth["role"] not in _ACTION_ROLES:
             return cors_response(403, {"error": "forbidden"})

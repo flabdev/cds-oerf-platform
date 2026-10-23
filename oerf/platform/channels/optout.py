@@ -65,7 +65,7 @@ def apply_opt_out(
 
 def handle_reply(
     text: str | None,
-    provider_msg_id: str,
+    provider_msg_id: str | None,
     sender: str,
     *,
     engagements: EngagementStore,
@@ -77,7 +77,7 @@ def handle_reply(
     if is_opt_out(text, extra=extra_keywords):
         result = apply_opt_out(registry, engagements, sender)
         return ReplyResult(kind="opt_out", engagement=None, stopped_ids=result.stopped_ids)
-    found = engagements.correlate(provider_msg_id)
+    found = engagements.correlate(provider_msg_id) if provider_msg_id else None
     if found is None:
         return ReplyResult(kind="ignored", engagement=None, stopped_ids=[])
     return ReplyResult(kind="correlated", engagement=found, stopped_ids=[])

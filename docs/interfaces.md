@@ -1,9 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.14** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.15** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.15 (2026-10-23) Combined with origin/main (PRs #28 and #29). An unquoted provider reply resumes only when exactly one waiting engagement is stored for that sender; zero or several are ignored. WhatsApp media is downloaded with the Meta Graph API (`https://graph.facebook.com/v21.0/{media_id}`, secret `oerf/whatsapp/access_token`) and stored at `tenants/{tenant_id}/inbound/{sha256}/{uuid}`. Vision writes `evidence_analysis` and `evidence_verification` on incident META. `DemoDeviceSeed` is the only device-seed custom resource and runs on every `OerfComputeStack` deploy. WebSocket `event_type` values stay `INCIDENT_SUMMARY` and `INCIDENT_UPDATE`. `POST /incidents/trigger` stays retired.
 - v1.14 (2026-10-23) `POST /incidents/trigger` is retired. The action handler does not call `states:StartExecution`. Ingest (`sim.reefer` on EventBridge) is the only start of an incident and its execution.
 - v1.13 (2026-10-23, ADR-019) `cancel` is implemented in the inbound handler. It stops the execution ingest started, sets the incident to `CANCELLED` through the repository, and does not resume a task token. A duplicate action or a `CLOSED` or `CANCELLED` incident does not call `StopExecution` again. `ExecutionDoesNotExist` is already finished and is not an error. Authorised roles are `platform_admin`, `tenant_admin`, and `ops_user`. The queued message carries that token `role`.
 - v1.12 (2026-10-23, OERF-308) the broadcaster envelope is `event_type`, `tenant_id`, `incident_id`, `version`, `emitted_at`, and `data`. Incident `data` is `state`, `stage`, `opened_at`, `updated_at`, `recommended_option`, and `option_ids`. Tenant-list `data` is `incident_id`, `state`, `stage`, and `version`. `timeline` and `evidence_analysis` are not sent. A subscription row with no `scope` receives nothing. `REMOVE` is not an event.
@@ -267,21 +268,21 @@ Pre-correlation WhatsApp normalization is `NormalizedMessage` in [oerf/platform/
 
 ## 5. Inbound, JOIN, and correlation
 
-Owner: inbound handler (name pending, OERF-201–207). Library pieces that already exist: `oerf.platform.inbound.normalize`, `dedupe`, `dynamo`, and `oerf.platform.inbound.handler`. No inbound Lambda is deployed.
+Owner: inbound handler (`oerf-inbound`). Library pieces that already exist: `oerf.platform.inbound.normalize`, `dedupe`, `dynamo`, and `oerf.platform.inbound.handler`.
 
 Order for a provider message:
 
 1. Dedupe. Duplicate `INMSG#` rows are dropped.
 2. Opt-out keywords (`STOP`, `UNSUBSCRIBE`, and the tenant's local equivalents) before correlation. Set opt-in false and stop that contact's engagements.
 3. `JOIN` (exact text, case-insensitive) when `PHONE#{e164}` has no item whose sort key is a non-sandbox tenant. A number registered to any non-sandbox tenant is not joined. A repeat `JOIN` returns that judge's existing sandbox shipment. The daily counter is `PK=SANDBOX#JOINS#{date}`, `SK=META`, conditional increment while `count` is below `sandbox.max_joins_per_day` (platform setting, default 20). Over the cap, the reply logical name is `sandbox_full`. Under the cap, the sandbox tenant gains a contact (opted in) and a shipment, and the logical reply is `judge_welcome`. Both replies go out through the channel router.
-4. Correlation. `context_msg_id` loads `OUTMSG#{id}`. With no context id, `ADDR#{channel}#{address}` loads open engagements: one match is used, several tenants get `disambiguation`, none gets the out-of-context reply. The channel router writes that address row, SK `ENG#{tid}#{iid}#{eid}`, when it registers an outbound message, and deletes it when the engagement leaves `WAITING`. The address is the phone or email that was sent; it is not taken from the inbound body.
-5. Media is stored as evidence. The handler then calls `states:SendTaskSuccess` on the current rung token. Classification happens in the engagement Interpret step (ADR-017), not here.
+4. Correlation. `context_msg_id` loads `OUTMSG#{id}`. With no context id, `ADDR#{channel}#{address}` loads open engagements. Exactly one match is used. Zero or several are ignored; the handler does not send a disambiguation reply. The channel router writes that address row, SK `ENG#{tid}#{iid}#{eid}`, when it registers an outbound message, and deletes it when the engagement leaves `WAITING`. The address is the phone or email that was sent; it is not taken from the inbound body.
+5. WhatsApp media is downloaded with the Meta Graph API and secret `oerf/whatsapp/access_token`, then stored at `tenants/{tenant_id}/inbound/{sha256(message_id)}/{uuid}{ext}` with SSE-S3. The handler then calls `states:SendTaskSuccess` on the current rung token. Classification happens in the engagement Interpret step (ADR-017), not here. Vision later writes `evidence_analysis` and `evidence_verification` on incident META.
 
 Dashboard messages skip steps 2–4 and correlate on `engagement_id`.
 
 The handler resumes only when the resolved sender's `tenant_id` and `contact_id` both match the correlated engagement: a quoted message id cannot cross a tenant boundary, and a shared number stays bound to the party that was contacted. Every duplicate, unknown, late, invalid, or mismatched record is acknowledged and logged without a callback.
 
-`oerf.platform.inbound.handler` covers steps 1 and 2, the `OUTMSG#` half of step 4, and the resume in step 5. The `ADDR#` fallback with its `disambiguation` and out-of-context replies, `JOIN` in step 3, and evidence storage in step 5 are not in that module yet and remain open.
+`oerf.platform.inbound.handler` covers steps 1 and 2, both halves of step 4, media storage in step 5, and the resume. `JOIN` in step 3 is not in that module yet and remains open.
 
 Dedupe item, agreed by the spec and [oerf/platform/inbound/dedupe.py](../oerf/platform/inbound/dedupe.py):
 
