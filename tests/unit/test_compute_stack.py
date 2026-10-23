@@ -81,6 +81,9 @@ EXPECTED_FUNCTIONS = {
             "PLATFORM_TABLE_NAME",
             "EVIDENCE_BUCKET_NAME",
             "STATE_MACHINE_ARN",
+            "WA_PHONE_NUMBER_ID_PARAM",
+            "WHATSAPP_PHONE_NUMBER_ID",
+            "INBOUND_MEDIA_MAX_BYTES",
             "LOG_LEVEL",
         },
     },
@@ -303,20 +306,28 @@ def test_star_resources_are_listed_in_the_exceptions_file(
 
 
 @pytest.mark.security
-def test_inbound_media_permissions_are_limited_to_bucket_and_token_secret(
+def test_inbound_media_permissions_use_end_user_messaging_not_a_token_secret(
     template: Template,
 ) -> None:
     inbound = functions_by_name(template)["oerf-inbound"]
+    variables = inbound["Environment"]["Variables"]
+    assert variables["WA_PHONE_NUMBER_ID_PARAM"] == "/oerf/whatsapp/phone-number-id"
+    assert variables["WHATSAPP_PHONE_NUMBER_ID"] == ""
+    assert variables["INBOUND_MEDIA_MAX_BYTES"] == str(10 * 1024 * 1024)
     statements = statements_for_role(template, role_logical_id(inbound))
-    secret_reads = _statements_with_action(statements, "secretsmanager:GetSecretValue")
-    assert len(secret_reads) == 1
-    assert _resource_list(secret_reads[0]["Resource"]) == [
-        f"arn:aws:secretsmanager:{REGION}:{ACCOUNT}:secret:oerf/whatsapp/access_token-*"
-    ]
+    assert _statements_with_action(statements, "secretsmanager:GetSecretValue") == []
     puts = _statements_with_action(statements, "s3:PutObject")
     assert len(puts) == 1
     resource = _resource_list(puts[0]["Resource"])[0]
     assert resource["Fn::Join"][1][-1].endswith("/tenants/*/inbound/*")
+    media = _statements_with_action(statements, "social-messaging:GetWhatsAppMessageMedia")
+    assert len(media) == 1
+    assert media[0]["Resource"] == "*"
+    parameter = _statements_with_action(statements, "ssm:GetParameter")
+    assert len(parameter) == 1
+    assert _resource_list(parameter[0]["Resource"]) == [
+        f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/oerf/whatsapp/phone-number-id"
+    ]
 
 
 @pytest.mark.security
@@ -728,6 +739,19 @@ def test_channels_live_disables_mocks_and_scopes_whatsapp_to_the_phone_number() 
         f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:phone-number-id/{phone_id}"
     ]
     assert "socialmessaging:*" not in role_actions(live, "oerf-channel-router")
+    inbound_statements = statements_for_role(
+        live, role_logical_id(functions_by_name(live)["oerf-inbound"])
+    )
+    fetch = _statements_with_action(
+        inbound_statements, "social-messaging:GetWhatsAppMessageMedia"
+    )
+    assert len(fetch) == 1
+    assert _resource_list(fetch[0]["Resource"]) == [
+        f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:phone-number-id/{phone_id}"
+    ]
+    assert functions_by_name(live)["oerf-inbound"]["Environment"]["Variables"][
+        "WHATSAPP_PHONE_NUMBER_ID"
+    ] == phone_id
     vision = functions_by_name(live)["oerf-evidence-analyzer"]["Environment"]["Variables"]
     assert vision["USE_MOCK_BEDROCK"] == "false"
     assert vision["BEDROCK_MODEL_ID"] == "amazon.nova-lite-v1:0"

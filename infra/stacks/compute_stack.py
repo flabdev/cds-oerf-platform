@@ -471,6 +471,9 @@ class OerfComputeStack(Stack):
                 "PLATFORM_TABLE_NAME": data_stack.platform_table.table_name,
                 "EVIDENCE_BUCKET_NAME": data_stack.evidence_bucket.bucket_name,
                 "STATE_MACHINE_ARN": data_stack.cold_chain_state_machine.state_machine_arn,
+                "WA_PHONE_NUMBER_ID_PARAM": _WA_PHONE_NUMBER_ID_PARAM,
+                "WHATSAPP_PHONE_NUMBER_ID": whatsapp_phone_number_id,
+                "INBOUND_MEDIA_MAX_BYTES": str(10 * 1024 * 1024),
                 "LOG_LEVEL": "INFO",
             },
         )
@@ -481,16 +484,25 @@ class OerfComputeStack(Stack):
         self.inbound_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["s3:PutObject"],
-                resources=[
-                    data_stack.evidence_bucket.arn_for_objects("tenants/*/inbound/*")
-                ],
+                resources=[data_stack.evidence_bucket.arn_for_objects("tenants/*/inbound/*")],
+            )
+        )
+        # Same phone-number-id ARN as SendWhatsAppMessage. Unset context keeps
+        # Resource * and is recorded in iam-exceptions.md.
+        self.inbound_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["social-messaging:GetWhatsAppMessageMedia"],
+                resources=whatsapp_resources,
             )
         )
         self.inbound_fn.add_to_role_policy(
             iam.PolicyStatement(
-                actions=["secretsmanager:GetSecretValue"],
+                actions=["ssm:GetParameter"],
                 resources=[
-                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:oerf/whatsapp/access_token-*"
+                    (
+                        f"arn:aws:ssm:{self.region}:{self.account}:parameter"
+                        "/oerf/whatsapp/phone-number-id"
+                    )
                 ],
             )
         )

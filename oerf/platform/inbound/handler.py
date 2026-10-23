@@ -35,11 +35,15 @@ Boundaries this module keeps:
   the execution because a reply was unusable would let whoever holds a contacted
   number stop a workflow, so an unusable reply leaves the rung waiting instead.
 
-The inbound Lambda uses the deployed evidence bucket and accesses only the
-``oerf/whatsapp/access_token`` secret for Meta media download. A missing or
-ambiguous address match is acknowledged without resuming; a storage or provider
-failure releases the dedupe id for retry. The ``JOIN`` sandbox path remains
-separate from this provider reply handler.
+The inbound Lambda asks End User Messaging Social to store WhatsApp media.
+``GetWhatsAppMessageMedia`` with ``metadataOnly`` checks the type and size.
+A second call writes the object through a presigned PUT the inbound role
+signs. The handler does not download the bytes and does not read a Meta
+token. A missing phone id fails closed. Throttling and a 5xx are retried.
+A disallowed type, an oversize file, or an invalid media id is acknowledged
+without a callback for that media item. A missing or ambiguous address match
+is acknowledged without resuming. The ``JOIN`` sandbox path remains separate
+from this provider reply handler.
 """
 
 from __future__ import annotations
@@ -48,15 +52,14 @@ import hashlib
 import json
 import logging
 import os
-import urllib.parse
-import urllib.request
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, NoReturn, Protocol
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from oerf.platform.channels.engagement import DynamoEngagementStore, Engagement, EngagementStore
@@ -87,110 +90,202 @@ MAX_REPLY_TEXT = 4000
 MAX_MEDIA_ITEMS = 10
 MAX_MEDIA_FIELD = 256
 MAX_CALLBACK_BYTES = 8192
-MAX_MEDIA_BYTES = 15 * 1024 * 1024
-WHATSAPP_ACCESS_TOKEN_SECRET = "oerf/whatsapp/access_token"
-WHATSAPP_GRAPH_API_VERSION = "v21.0"
-META_MEDIA_HOSTS = frozenset({"lookaside.fbsbx.com"})
+_DEFAULT_MEDIA_MAX_BYTES = 10 * 1024 * 1024
+_MEDIA_URL_TTL_SECONDS = 300
+_MEDIA_REGION = "us-east-1"
+_PHONE_UNSET = object()
+_cached_phone_number_id: object = _PHONE_UNSET
+WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
+WA_PHONE_NUMBER_ID_PARAM = os.environ.get("WA_PHONE_NUMBER_ID_PARAM", "").strip()
+_MEDIA_EXTENSIONS = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "application/pdf": ".pdf",
+}
+_THROTTLE_CODES = frozenset(
+    {
+        "Throttling",
+        "ThrottlingException",
+        "TooManyRequestsException",
+        "RequestThrottled",
+        "ProvisionedThroughputExceededException",
+        "SlowDown",
+    }
+)
 DASHBOARD_ACTIONS = frozenset({"confirm_transfer", "pick_option", "cancel"})
 CANCEL_ROLES = frozenset({"platform_admin", "tenant_admin", "ops_user"})
 _FINISHED_EXECUTION = frozenset({"ExecutionDoesNotExist"})
 _STATE_MACHINE = ":stateMachine:"
 
 
-class _MetaMediaRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Permit redirects only to the expected HTTPS Meta media host."""
+class MediaRejected(Exception):
+    """The media item is not stored. The record is acknowledged and not retried."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        parsed = urllib.parse.urlparse(newurl)
-        if parsed.scheme != "https" or parsed.hostname not in META_MEDIA_HOSTS:
-            raise ValueError("WhatsApp media redirect is not an approved Meta host")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+class MediaConfigError(Exception):
+    """Media cannot be requested. The record fails closed and SQS retries it."""
 
 
 class MediaEvidenceStore(Protocol):
     def store(
         self, tenant_id: str, message_id: str, media_id: str, mime_type: str | None
     ) -> str | None:
-        """Download one provider media item and return its tenant-scoped S3 key."""
+        """Store one provider media item and return its tenant-scoped S3 key."""
 
 
 class WhatsAppMediaEvidenceStore:
-    """Fetch Meta media using its ID API, then persist bytes in the evidence bucket."""
+    """Ask End User Messaging to write one WhatsApp media object into S3."""
 
-    def __init__(self, bucket_name: str) -> None:
+    def __init__(self, bucket_name: str, *, social: Any = None, s3: Any = None) -> None:
         self._bucket = bucket_name
-        self._s3 = boto3.client("s3")
-        self._secrets = boto3.client("secretsmanager")
-        self._token: str | None = None
+        self._social = social
+        self._s3 = s3
 
-    def _access_token(self) -> str:
-        if self._token is None:
-            secret = self._secrets.get_secret_value(SecretId=WHATSAPP_ACCESS_TOKEN_SECRET)
-            value = secret.get("SecretString", "")
-            try:
-                parsed = json.loads(value)
-            except (TypeError, json.JSONDecodeError):
-                parsed = value
-            if isinstance(parsed, dict):
-                value = parsed.get("access_token", "")
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError("WhatsApp media access token is unavailable")
-            self._token = value.strip()
-        return self._token
+    def _social_client(self) -> Any:
+        if self._social is None:
+            self._social = boto3.client("socialmessaging", region_name=_MEDIA_REGION)
+        return self._social
+
+    def _s3_client(self) -> Any:
+        if self._s3 is None:
+            self._s3 = boto3.client(
+                "s3",
+                region_name=_MEDIA_REGION,
+                config=Config(signature_version="s3v4"),
+            )
+        return self._s3
 
     def store(self, tenant_id: str, message_id: str, media_id: str, mime_type: str | None) -> str:
-        token = self._access_token()
-        metadata_url = (
-            f"https://graph.facebook.com/{WHATSAPP_GRAPH_API_VERSION}/"
-            f"{urllib.parse.quote(media_id, safe='')}"
+        del mime_type
+        phone_id = _whatsapp_phone_number_id()
+        if not phone_id:
+            log(logger, logging.ERROR, "wa_phone_id_missing", outcome="error", count=1)
+            raise MediaConfigError("whatsapp phone number id is required")
+        metadata = self._read_media(
+            tenant_id,
+            mediaId=media_id,
+            originationPhoneNumberId=phone_id,
+            metadataOnly=True,
         )
-        opener = urllib.request.build_opener(_MetaMediaRedirectHandler())
-        metadata_request = urllib.request.Request(
-            metadata_url,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        try:
-            with opener.open(metadata_request, timeout=10) as response:
-                metadata = json.loads(response.read(64 * 1024))
-        except Exception:
-            raise ValueError("WhatsApp media metadata request failed") from None
-        download_url = metadata.get("url") if isinstance(metadata, dict) else None
-        if not isinstance(download_url, str):
-            raise ValueError("WhatsApp media response did not include a download URL")
-        parsed_url = urllib.parse.urlparse(download_url)
-        if parsed_url.scheme != "https" or parsed_url.hostname not in META_MEDIA_HOSTS:
-            raise ValueError("WhatsApp media download URL is not an approved Meta host")
-        download_request = urllib.request.Request(
-            download_url,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        try:
-            with opener.open(download_request, timeout=20) as response:
-                content = response.read(MAX_MEDIA_BYTES + 1)
-        except Exception:
-            raise ValueError("WhatsApp media download failed") from None
-        if len(content) > MAX_MEDIA_BYTES:
-            raise ValueError("WhatsApp media exceeds the maximum evidence size")
-        content_type = mime_type or str(metadata.get("mime_type") or "application/octet-stream")
-        extension = {
-            "image/jpeg": ".jpg",
-            "image/png": ".png",
-            "image/webp": ".webp",
-            "audio/ogg": ".ogg",
-            "application/pdf": ".pdf",
-        }.get(content_type.split(";", 1)[0].lower(), ".bin")
+        extension = _media_extension(metadata.get("mimeType"))
+        if extension is None:
+            _reject_media(tenant_id)
+        size = _file_size(metadata.get("fileSize"))
+        if size is None or size > _media_max_bytes():
+            _reject_media(tenant_id)
         message_ref = hashlib.sha256(message_id.encode("utf-8")).hexdigest()
-        evidence_key = (
-            f"tenants/{tenant_id}/inbound/{message_ref}/{uuid.uuid4().hex}{extension}"
+        evidence_key = f"tenants/{tenant_id}/inbound/{message_ref}/{uuid.uuid4().hex}{extension}"
+        # Bucket default encryption is SSE-KMS aws/s3 (ADR-033). Signing an
+        # encryption header would override that default, so the PUT signs none.
+        url = self._s3_client().generate_presigned_url(
+            ClientMethod="put_object",
+            Params={"Bucket": self._bucket, "Key": evidence_key},
+            ExpiresIn=_MEDIA_URL_TTL_SECONDS,
+            HttpMethod="PUT",
         )
-        self._s3.put_object(
-            Bucket=self._bucket,
-            Key=evidence_key,
-            Body=content,
-            ContentType=content_type,
-            ServerSideEncryption="AES256",
+        self._read_media(
+            tenant_id,
+            mediaId=media_id,
+            originationPhoneNumberId=phone_id,
+            destinationS3PresignedUrl={"url": url, "headers": {}},
         )
         return evidence_key
+
+    def _read_media(self, tenant_id: str, **kwargs: Any) -> dict[str, Any]:
+        try:
+            response = self._social_client().get_whatsapp_message_media(**kwargs)
+        except ClientError as exc:
+            if _retryable_media_error(exc):
+                raise
+            _reject_media(tenant_id)
+        if not isinstance(response, dict):
+            _reject_media(tenant_id)
+        return response
+
+
+def _reject_media(tenant_id: str) -> NoReturn:
+    log(
+        logger,
+        logging.INFO,
+        "inbound media rejected",
+        tenant_id=tenant_id,
+        outcome="rejected",
+        count=1,
+    )
+    raise MediaRejected("rejected")
+
+
+def _whatsapp_phone_number_id() -> str:
+    """Return the live WhatsApp phone-number id, resolved once per process.
+
+    ``WA_PHONE_NUMBER_ID_PARAM`` is read from SSM. ``WHATSAPP_PHONE_NUMBER_ID``
+    is used only when that name is unset. A failed or empty parameter does not
+    fall back to the env var.
+    """
+
+    global _cached_phone_number_id
+    if _cached_phone_number_id is not _PHONE_UNSET:
+        return str(_cached_phone_number_id)
+    name = WA_PHONE_NUMBER_ID_PARAM.strip()
+    value = WHATSAPP_PHONE_NUMBER_ID.strip() if not name else _read_phone_number_id(name)
+    _cached_phone_number_id = value
+    return value
+
+
+def _ssm_client() -> Any:
+    return boto3.client("ssm", region_name=_MEDIA_REGION)
+
+
+def _read_phone_number_id(name: str) -> str:
+    try:
+        response = _ssm_client().get_parameter(Name=name, WithDecryption=True)
+    except Exception:
+        log(logger, logging.ERROR, "wa_phone_id_unreadable", outcome="error", count=1)
+        return ""
+    parameter = response.get("Parameter") if isinstance(response, dict) else None
+    raw = parameter.get("Value") if isinstance(parameter, dict) else None
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return ""
+
+
+def _media_extension(mime: Any) -> str | None:
+    if not isinstance(mime, str):
+        return None
+    return _MEDIA_EXTENSIONS.get(mime.split(";", 1)[0].strip().lower())
+
+
+def _file_size(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _media_max_bytes() -> int:
+    raw = os.environ.get("INBOUND_MEDIA_MAX_BYTES", "").strip()
+    if not raw:
+        return _DEFAULT_MEDIA_MAX_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        raise MediaConfigError("inbound media cap is invalid") from None
+    if value <= 0:
+        raise MediaConfigError("inbound media cap is invalid")
+    return value
+
+
+def _retryable_media_error(exc: ClientError) -> bool:
+    error = exc.response.get("Error", {})
+    code = str(error.get("Code", ""))
+    status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    if code in _THROTTLE_CODES or status == 429:
+        return True
+    if isinstance(status, int) and status >= 500:
+        return True
+    if isinstance(status, int) and 400 <= status < 500:
+        return False
+    return True
 
 
 def _evidence_store() -> MediaEvidenceStore | None:
@@ -206,16 +301,19 @@ def _persist_media(
     """Store provider media and project only safe metadata into the callback."""
     projected: list[dict[str, str | None]] = []
     for item in message.media[:MAX_MEDIA_ITEMS]:
-        if not item.id:
-            raise ValueError("provider media id is required for evidence storage")
         if store is None:
             raise RuntimeError("evidence bucket is required for inbound media")
-        evidence_key = store.store(
-            tenant_id,
-            message.provider_msg_id,
-            item.id,
-            item.mime_type,
-        )
+        try:
+            if not item.id:
+                _reject_media(tenant_id)
+            evidence_key = store.store(
+                tenant_id,
+                message.provider_msg_id,
+                item.id,
+                item.mime_type,
+            )
+        except MediaRejected:
+            continue
         projected.append(
             {
                 "id": item.id[:MAX_MEDIA_FIELD],
