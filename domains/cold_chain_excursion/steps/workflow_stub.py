@@ -45,7 +45,14 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         workflow["context"] = {"status": "stubbed"}
     elif step_name == "Diagnose":
         workflow["incident_state"] = "ASSESSING"
-        workflow["diagnosis"] = {"status": "stubbed"}
+        # diagnosis is not a StepEnvelope field. Keep it inside workflow so Assess
+        # can parse this state. The root stays free of unknown keys.
+        nested = workflow.get("workflow")
+        diagnosis = {"status": "stubbed"}
+        if isinstance(nested, dict):
+            nested["diagnosis"] = diagnosis
+        else:
+            workflow["workflow"] = {"diagnosis": diagnosis}
     elif step_name == "Assess":
         needs_approval = bool(workflow.get("decision", {}).get("needs_approval", False))
         workflow["decision"] = {

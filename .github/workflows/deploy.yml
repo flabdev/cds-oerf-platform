@@ -6,17 +6,29 @@ on:
       agentcore:
         description: Deploy the AgentCore runtime (builds the ARM64 image)
         type: boolean
-        default: false
+        default: true
       dashboard:
         description: Deploy the dashboard stack
         type: boolean
-        default: false
+        default: true
       channels_live:
         description: Turn on live channel and Bedrock calls
         type: boolean
         default: false
       waba_id:
-        description: WhatsApp Business Account id (waba-...). Empty leaves the inbound topic unchanged.
+        description: WhatsApp Business Account id (waba-...). Empty uses repository variable WABA_ID.
+        type: string
+        default: ""
+      seed_demo_devices:
+        description: Write demo DEVICE rows from the seed files
+        type: boolean
+        default: true
+      phone_number_id:
+        description: WhatsApp phone number id. Empty uses repository variable WA_PHONE_NUMBER_ID.
+        type: string
+        default: ""
+      alarm_email:
+        description: Alarm topic email. Empty uses repository variable ALARM_EMAIL.
         type: string
         default: ""
 
@@ -104,19 +116,48 @@ jobs:
           AGENTCORE: ${{ (inputs.agentcore == true || inputs.agentcore == 'true') && 'true' || 'false' }}
           DASHBOARD: ${{ (inputs.dashboard == true || inputs.dashboard == 'true') && 'true' || 'false' }}
           CHANNELS_LIVE: ${{ (inputs.channels_live == true || inputs.channels_live == 'true') && 'true' || 'false' }}
+          SEED_DEMO_DEVICES: ${{ (inputs.seed_demo_devices == true || inputs.seed_demo_devices == 'true') && 'true' || 'false' }}
           WABA_ID: ${{ inputs.waba_id }}
+          WABA_ID_VAR: ${{ vars.WABA_ID }}
+          PHONE_NUMBER_ID: ${{ inputs.phone_number_id }}
+          PHONE_NUMBER_ID_VAR: ${{ vars.WA_PHONE_NUMBER_ID }}
+          ALARM_EMAIL: ${{ inputs.alarm_email }}
+          ALARM_EMAIL_VAR: ${{ vars.ALARM_EMAIL }}
         run: |
           set -euo pipefail
-          if [[ "${WABA_ID}" == *$'\n'* || "${WABA_ID}" == *$'\r'* ]]; then
-            echo "::error::waba_id must be a single line."
-            exit 1
-          fi
+          resolve() {
+            local input="$1"
+            local fallback="$2"
+            if [[ -n "${input}" ]]; then
+              printf '%s' "${input}"
+            else
+              printf '%s' "${fallback}"
+            fi
+          }
+          waba_id="$(resolve "${WABA_ID}" "${WABA_ID_VAR}")"
+          phone_number_id="$(resolve "${PHONE_NUMBER_ID}" "${PHONE_NUMBER_ID_VAR}")"
+          alarm_email="$(resolve "${ALARM_EMAIL}" "${ALARM_EMAIL_VAR}")"
+          for value in "${waba_id}" "${phone_number_id}" "${alarm_email}"; do
+            if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
+              echo "::error::waba_id, phone_number_id, and alarm_email must be a single line."
+              exit 1
+            fi
+          done
           {
             printf '%s\n' "agentcore:enabled=${AGENTCORE}"
             printf '%s\n' "dashboard:enabled=${DASHBOARD}"
             printf '%s\n' "channels:live=${CHANNELS_LIVE}"
-            if [[ -n "${WABA_ID}" ]]; then
-              printf '%s\n' "whatsapp:wabaId=${WABA_ID}"
+            if [[ "${SEED_DEMO_DEVICES}" == "true" ]]; then
+              printf '%s\n' "demo:seedDevices=true"
+            fi
+            if [[ -n "${waba_id}" ]]; then
+              printf '%s\n' "whatsapp:wabaId=${waba_id}"
+            fi
+            if [[ -n "${phone_number_id}" ]]; then
+              printf '%s\n' "whatsapp:phoneNumberId=${phone_number_id}"
+            fi
+            if [[ -n "${alarm_email}" ]]; then
+              printf '%s\n' "alarms:email=${alarm_email}"
             fi
           } > "${RUNNER_TEMP}/cdk-context-args"
 

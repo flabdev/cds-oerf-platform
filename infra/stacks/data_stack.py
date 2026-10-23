@@ -18,6 +18,8 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from infra.step_functions import ASL_STEP_PLACEHOLDERS, STEP_FUNCTION_NAMES, function_arn
+
 # PITR is enabled on all four DynamoDB tables (see guide section 21).
 # The installed aws-cdk-lib deprecates the boolean ``point_in_time_recovery``
 # property in favour of ``point_in_time_recovery_specification``.
@@ -262,10 +264,17 @@ class OerfDataStack(Stack):
             assumed_by=iam.ServicePrincipal("states.amazonaws.com"),
             description="Execution role for the OERF cold-chain state machine",
         )
+        # Literal ARNs. A CDK reference would make this stack depend on compute.
+        step_arns = [
+            function_arn(self.region, self.account, name) for name in STEP_FUNCTION_NAMES.values()
+        ]
+        invoke_resources = [workflow_stub.function_arn, f"{workflow_stub.function_arn}:*"]
+        for arn in step_arns:
+            invoke_resources.extend([arn, f"{arn}:*"])
         workflow_role.add_to_policy(
             iam.PolicyStatement(
                 actions=["lambda:InvokeFunction"],
-                resources=[workflow_stub.function_arn, f"{workflow_stub.function_arn}:*"],
+                resources=invoke_resources,
             )
         )
         asl_path = (
@@ -274,9 +283,13 @@ class OerfDataStack(Stack):
             / "cold_chain_excursion"
             / "statemachine.asl.json"
         )
-        definition = asl_path.read_text(encoding="utf-8").replace(
-            "__STUB_ARN__", workflow_stub.function_arn
-        )
+        definition = asl_path.read_text(encoding="utf-8")
+        for placeholder, phase in ASL_STEP_PLACEHOLDERS.items():
+            definition = definition.replace(
+                placeholder,
+                function_arn(self.region, self.account, STEP_FUNCTION_NAMES[phase]),
+            )
+        definition = definition.replace("__STUB_ARN__", workflow_stub.function_arn)
         engagement_asl_path = (
             Path(__file__).resolve().parents[2]
             / "domains"

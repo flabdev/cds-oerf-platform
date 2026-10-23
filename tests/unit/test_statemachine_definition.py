@@ -8,6 +8,12 @@ import json
 from pathlib import Path
 
 from domains.cold_chain_excursion.steps.workflow_stub import handler
+from infra.step_functions import (
+    ASL_STEP_PLACEHOLDERS,
+    STEP_FUNCTION_NAMES,
+    WIRED_STATES,
+    function_arn,
+)
 from oerf.platform.incidents.repository import TRANSITIONS
 
 ASL_PATH = (
@@ -17,6 +23,43 @@ ASL_PATH = (
     / "statemachine.asl.json"
 )
 STUB_PLACEHOLDER = "__STUB_ARN__"
+REAL_PLACEHOLDERS = {
+    "GatherContext": "__STEP_CONTEXT_ARN__",
+    "Assess": "__STEP_ASSESS_ARN__",
+    "Act": "__STEP_ACT_ARN__",
+    "VerifyLoop": "__STEP_VERIFY_ARN__",
+    "QA": "__STEP_QA_ARN__",
+    "Close": "__STEP_CLOSE_ARN__",
+}
+STUB_COLD_CHAIN_TASKS = frozenset(
+    {
+        "OPEN",
+        "Diagnose",
+        "Approval",
+        "SecureFacility",
+        "HandleReopen",
+        "GenerateReport",
+        "RecordFailure",
+        "Escalate",
+        "NoResponse",
+        "Cancel",
+        "RecordContainment",
+        "BeginDisposition",
+    }
+)
+STUB_ENGAGEMENT_TASKS = frozenset(
+    {
+        "ComputeNextRung",
+        "SendOneWay",
+        "SendViaRouter",
+        "Interpret",
+        "HandleCallback",
+        "AdvanceRung",
+        "ResetLadder",
+        "SendFinalQuestion",
+        "ApplyExhaustAction",
+    }
+)
 
 
 def load_definition() -> dict:
@@ -40,6 +83,55 @@ def task_states() -> dict:
         for name, state in load_definition()["States"].items()
         if state["Type"] == "Task"
     }
+
+
+def test_real_and_stub_tasks_are_listed() -> None:
+    """The six wired tasks are explicit. Everything else stays on the stub."""
+
+    cold = task_states()
+    engagement = {
+        name: state
+        for name, state in json.loads(
+            (ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8")
+        )["States"].items()
+        if state["Type"] == "Task"
+    }
+    real = {name for name, state in cold.items() if name in REAL_PLACEHOLDERS}
+    stub = {
+        name
+        for name, state in cold.items()
+        if state.get("Resource", "").startswith("arn:aws:states:::lambda:")
+        and state["Parameters"]["FunctionName"] == STUB_PLACEHOLDER
+    }
+    engagement_stub = {
+        name
+        for name, state in engagement.items()
+        if state["Parameters"]["FunctionName"] == "__ENGAGEMENT_STUB_ARN__"
+    }
+
+    assert real == frozenset(REAL_PLACEHOLDERS)
+    assert stub == STUB_COLD_CHAIN_TASKS
+    assert engagement_stub == STUB_ENGAGEMENT_TASKS
+    assert "EngageDriverDiagnosis" not in real
+    assert "EngageDriverDiagnosis" not in stub
+    assert cold["EngageDriverDiagnosis"]["Resource"].endswith("startExecution.sync:2")
+
+
+def test_wired_tasks_resolve_to_their_function_arns() -> None:
+    text = ASL_PATH.read_text(encoding="utf-8")
+    for placeholder, phase in ASL_STEP_PLACEHOLDERS.items():
+        text = text.replace(
+            placeholder,
+            function_arn("us-east-1", "000000000000", STEP_FUNCTION_NAMES[phase]),
+        )
+    text = text.replace("__STUB_ARN__", "arn:aws:lambda:us-east-1:000000000000:function:stub")
+    states = json.loads(text)["States"]
+
+    for state, phase in WIRED_STATES.items():
+        expected = function_arn("us-east-1", "000000000000", STEP_FUNCTION_NAMES[phase])
+        assert states[state]["Parameters"]["FunctionName"] == expected, state
+    for name in STUB_COLD_CHAIN_TASKS:
+        assert states[name]["Parameters"]["FunctionName"].endswith(":function:stub"), name
 
 
 def test_every_transition_points_to_a_declared_state() -> None:
@@ -67,7 +159,9 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
             else "arn:aws:states:::lambda:invoke"
         )
         assert state["Resource"] == expected_resource, name
-        assert state["Parameters"]["FunctionName"] == STUB_PLACEHOLDER, name
+        assert state["Parameters"]["FunctionName"] == REAL_PLACEHOLDERS.get(
+            name, STUB_PLACEHOLDER
+        ), name
         assert state["OutputPath"] == "$.Payload", name
         assert state["Retry"][0]["MaxAttempts"] == 3, name
         assert state["TimeoutSeconds"] == (1800 if name == "Approval" else 60), name

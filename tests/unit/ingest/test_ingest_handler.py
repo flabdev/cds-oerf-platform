@@ -1,11 +1,17 @@
 """EventBridge ingest validation, debounce, and start-execution contract."""
 
+import json
 import threading
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from oerf.platform.agent.context import StepDependencies
+from oerf.platform.agent.envelope import StepEnvelope
+from oerf.platform.agent.handlers import gather_context
+from oerf.platform.agent.idempotency import MemoryStepResultStore
 from oerf.platform.incidents.debounce import MemoryDebounce
 from oerf.platform.incidents.repository import IncidentRepository
 from oerf.platform.ingest.handler import (
@@ -179,6 +185,59 @@ def test_first_breach_waits_for_configured_threshold_and_second_starts_once() ->
     assert start_input["workflow"]["trigger"]["temperature_c"] == 9
     incident = deps.incidents.get("t1", second["incident_id"])
     assert incident.config_snapshot["tenant_id"] == "t1"
+
+
+def test_ph2841_seed_profile_reaches_gather_context() -> None:
+    seed_path = (
+        Path(__file__).resolve().parents[3] / "sim" / "seed" / "t1" / "shipments.json"
+    )
+    row = next(
+        item
+        for item in json.loads(seed_path.read_text(encoding="utf-8"))
+        if item["shipment_id"] == "PH-2841"
+    )
+    assert row["product_profile"] == "PP-2-8-45"
+    assert "product_profile_id" not in row
+
+    class SeedShipments:
+        def get(self, tenant_id: str, shipment_id: str):
+            assert tenant_id == "t1"
+            assert shipment_id == "PH-2841"
+            return row
+
+    deps = _deps(
+        devices=Devices({"RF-7781": ("t1", "PH-2841")}),
+        shipments=SeedShipments(),
+    )
+    detail = {"device_id": "RF-7781", "shipment_id": "PH-2841"}
+    handler(_event("hot-1", detail=detail), None, dependencies=deps)
+    started = handler(
+        _event("hot-2", detail={**detail, "seq": 8}),
+        None,
+        dependencies=deps,
+    )
+
+    start_input = deps.executions.calls[0]["input"]
+    shipment = start_input["workflow"]["shipment"]
+    assert shipment["product_profile"] == "PP-2-8-45"
+    assert shipment["product_profile_id"] == "PP-2-8-45"
+    assert row.get("product_profile_id") is None
+    gathered = gather_context(
+        StepEnvelope(
+            step="GatherContext",
+            tenant_id=start_input["tenant_id"],
+            incident_id=started["incident_id"],
+            shipment_id="PH-2841",
+            workflow=start_input["workflow"],
+            context=start_input["context"],
+        ),
+        StepDependencies(
+            incidents=deps.incidents,
+            results=MemoryStepResultStore(clock=lambda: NOW),
+            clock=lambda: NOW,
+        ),
+    )
+    assert gathered.context["product_profile_id"] == "PP-2-8-45"
 
 
 def test_safe_reading_clears_streak_before_breach_restarts_it() -> None:
