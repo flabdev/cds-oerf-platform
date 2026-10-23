@@ -28,8 +28,9 @@ from oerf.platform.api.claims import (
     parse_cognito_groups,
     resolve_role,
 )
+from oerf.platform.observability.logging import get_logger, log
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 ROUTING_TABLE_NAME = os.environ.get("ROUTING_TABLE_NAME", "")
@@ -153,15 +154,27 @@ def verify_token(token: str) -> dict[str, Any]:
         return {}
     try:
         return get_cognito().get_user(AccessToken=token)
-    except (ClientError, BotoCoreError) as exc:
-        logger.warning("WebSocket token rejected by Cognito: %s", exc)
+    except (ClientError, BotoCoreError):
+        log(
+            logger,
+            logging.WARNING,
+            "WebSocket token rejected by Cognito",
+            outcome="denied",
+            count=1,
+        )
         return {}
 
 
 def bind_connection(connection_id: str, tenant_id: str, role: str, sub: str) -> bool:
     """Record the connection-to-tenant binding that subscriptions are scoped to."""
     if not ROUTING_TABLE_NAME:
-        logger.warning("ROUTING_TABLE_NAME not configured, connection binding skipped")
+        log(
+            logger,
+            logging.WARNING,
+            "ROUTING_TABLE_NAME not configured, connection binding skipped",
+            outcome="skipped",
+            count=1,
+        )
         return True
     if not connection_id:
         return False
@@ -180,9 +193,14 @@ def bind_connection(connection_id: str, tenant_id: str, role: str, sub: str) -> 
                 "expires_at": now + CONNECTION_TTL_SECONDS,
             }
         )
-    except Exception as exc:
-        logger.error(
-            "Failed to bind connection %s to tenant %s: %s", connection_id, tenant_id, exc
+    except Exception:
+        log(
+            logger,
+            logging.ERROR,
+            f"Failed to bind connection {connection_id} to tenant {tenant_id}",
+            tenant_id=tenant_id,
+            outcome="error",
+            count=1,
         )
         return False
     return True
@@ -196,20 +214,38 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     token = extract_token(event)
     user = verify_token(token)
     if not user:
-        logger.warning("Denying connection %s without a verified Cognito token", connection_id)
+        log(
+            logger,
+            logging.WARNING,
+            f"Denying connection {connection_id} without a verified Cognito token",
+            outcome="denied",
+            count=1,
+        )
         return deny_connection(event)
 
     claims = decode_claims(token)
     client_id = claims.get("client_id")
     if USER_POOL_CLIENT_ID and client_id != USER_POOL_CLIENT_ID:
-        logger.warning("Denying token issued for unexpected client '%s'", client_id)
+        log(
+            logger,
+            logging.WARNING,
+            f"Denying token issued for unexpected client {client_id}",
+            outcome="denied",
+            count=1,
+        )
         return deny_connection(event)
 
     attributes = get_user_attributes(user)
     tenant_id = attributes.get(TENANT_CLAIM) or attributes.get("tenant_id") or ""
     sub = attributes.get("sub") or str(claims.get("sub") or user.get("Username") or "")
     if not tenant_id:
-        logger.warning("Denying connection %s for a user without a tenant claim", connection_id)
+        log(
+            logger,
+            logging.WARNING,
+            f"Denying connection {connection_id} for a user without a tenant claim",
+            outcome="denied",
+            count=1,
+        )
         return deny_connection(event, sub)
 
     role = resolve_role(parse_cognito_groups(claims.get(GROUPS_CLAIM)))
@@ -218,10 +254,23 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         # When the Gateway supplies an ID, persist the binding before allowing.
         # Some $connect authorizer payloads omit it; the subsequent $connect
         # integration persists the same trusted authorizer context instead.
-        logger.error("Denying connection %s: tenant binding could not be stored", connection_id)
+        log(
+            logger,
+            logging.ERROR,
+            f"Denying connection {connection_id}: tenant binding could not be stored",
+            tenant_id=tenant_id,
+            outcome="error",
+            count=1,
+        )
         return deny_connection(event, sub)
 
-    logger.info("Authorized connection %s for tenant %s as %s", connection_id, tenant_id, role)
+    log(
+        logger,
+        logging.INFO,
+        f"Authorized connection {connection_id} for tenant {tenant_id} as {role}",
+        tenant_id=tenant_id,
+        outcome="authorized",
+    )
     return allow_connection(
         event,
         sub or str(connection_id),

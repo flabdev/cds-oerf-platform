@@ -67,8 +67,9 @@ from oerf.platform.channels.registry import (
 from oerf.platform.inbound.dedupe import MessageDedupePort
 from oerf.platform.inbound.dynamo import DynamoMessageDedupe
 from oerf.platform.inbound.normalize import NormalizationError, NormalizedMessage, normalize_inbound
+from oerf.platform.observability.logging import get_logger, log
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 INCIDENT_TABLE_NAME = os.environ.get("INCIDENT_TABLE_NAME", "")
 TENANT_TABLE_NAME = os.environ.get("TENANT_TABLE_NAME", "")
@@ -138,7 +139,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str
             accepted = _dedupe_id(body)
             process_message(body, dependencies)
         except Exception:
-            logger.exception("Inbound record processing failed; requesting SQS retry")
+            log(
+                logger,
+                logging.ERROR,
+                "Inbound record processing failed; requesting SQS retry",
+                outcome="error",
+                count=1,
+            )
             # The id was accepted before the failure, so it is released only
             # then, and only so a retried record can finish the callback.
             if accepted is not None:
@@ -146,7 +153,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str
             if isinstance(message_id, str) and message_id:
                 failures.append({"itemIdentifier": message_id})
     # Record content is untrusted, so the batch is reported by count only.
-    logger.info("Processed inbound records=%d failures=%d", len(messages), len(failures))
+    log(
+        logger,
+        logging.INFO,
+        f"Processed inbound records={len(messages)} failures={len(failures)}",
+        outcome="received",
+        count=len(failures),
+    )
     return {"batchItemFailures": failures}
 
 
@@ -161,7 +174,13 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
         channel=message.channel,
         received_at=received,
     ).is_duplicate:
-        logger.info("Ignoring duplicate inbound id=%s", message.provider_msg_id)
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring duplicate inbound id={message.provider_msg_id}",
+            outcome="duplicate",
+            count=1,
+        )
         return "duplicate"
     if dependencies.registry is None:
         raise RuntimeError("provider inbound requires a sender registry")
@@ -173,16 +192,36 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
         registry=dependencies.registry,
     )
     if reply.kind == "opt_out":
-        logger.info("Handled provider opt-out; stopped=%d", len(reply.stopped_ids))
+        log(
+            logger,
+            logging.INFO,
+            f"Handled provider opt-out; stopped={len(reply.stopped_ids)}",
+            outcome="opt_out",
+            count=len(reply.stopped_ids),
+        )
         return "opt_out"
     if reply.engagement is None:
-        logger.info("Ignoring unknown or late provider reply id=%s", message.provider_msg_id)
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring unknown or late provider reply id={message.provider_msg_id}",
+            outcome="ignored",
+            count=1,
+        )
         return "ignored"
     resolution = dependencies.registry.resolve_sender(message.sender)
     if not _sender_owns_engagement(reply.engagement, resolution):
-        logger.warning(
-            "Ignoring reply from a sender that does not own engagement=%s",
-            reply.engagement.engagement_id,
+        log(
+            logger,
+            logging.WARNING,
+            (
+                "Ignoring reply from a sender that does not own "
+                f"engagement={reply.engagement.engagement_id}"
+            ),
+            tenant_id=reply.engagement.tenant_id,
+            incident_id=reply.engagement.incident_id,
+            engagement_id=reply.engagement.engagement_id,
+            outcome="ignored",
         )
         return "ignored"
     _resume(reply.engagement, _provider_payload(message), dependencies)
@@ -249,18 +288,50 @@ def _process_dashboard(body: dict[str, Any], dependencies: InboundDependencies) 
         received_at=_parse_received_at(timestamp),
         tenant_id=tenant_id,
     ).is_duplicate:
-        logger.info("Ignoring duplicate dashboard action id=%s", action_id)
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring duplicate dashboard action id={action_id}",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+            outcome="duplicate",
+            count=1,
+        )
         return "duplicate"
     if not engagement_id:
-        logger.info("Ignoring dashboard action without engagement id=%s", action_id)
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring dashboard action without engagement id={action_id}",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+            outcome="ignored",
+            count=1,
+        )
         return "ignored"
     engagement = dependencies.engagements.get(tenant_id, incident_id, engagement_id)
     if engagement is None or engagement.status != "WAITING":
-        logger.info("Ignoring unknown or late dashboard action id=%s", action_id)
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring unknown or late dashboard action id={action_id}",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+            outcome="ignored",
+            count=1,
+        )
         return "ignored"
     action, option_id = body.get("action"), _nonblank(body.get("option_id"))
     if action not in DASHBOARD_ACTIONS or (action == "pick_option" and not option_id):
-        logger.warning("Ignoring invalid dashboard action id=%s", action_id)
+        log(
+            logger,
+            logging.WARNING,
+            f"Ignoring invalid dashboard action id={action_id}",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+            outcome="invalid",
+            count=1,
+        )
         return "invalid"
     payload: dict[str, Any] = {
         "channel": "dashboard",
@@ -279,7 +350,15 @@ def _resume(
 ) -> None:
     """Send a bounded allowlisted response, then consume the waiting engagement."""
     if engagement.status != "WAITING":
-        logger.info("Ignoring non-waiting engagement=%s", engagement.engagement_id)
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring non-waiting engagement={engagement.engagement_id}",
+            tenant_id=engagement.tenant_id,
+            incident_id=engagement.incident_id,
+            engagement_id=engagement.engagement_id,
+            outcome="ignored",
+        )
         return
     resumed = {**payload, "engagement": _engagement_block(engagement)}
     output = json.dumps(resumed, separators=(",", ":"), ensure_ascii=False)
@@ -292,7 +371,15 @@ def _resume(
             raise
         # The wait state timed out or was already resumed, so the rung closes
         # without a second callback and a later reply correlates to nothing.
-        logger.info("Ignoring expired task token engagement=%s", engagement.engagement_id)
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring expired task token engagement={engagement.engagement_id}",
+            tenant_id=engagement.tenant_id,
+            incident_id=engagement.incident_id,
+            engagement_id=engagement.engagement_id,
+            outcome="ignored",
+        )
     dependencies.engagements.answer(
         engagement.tenant_id, engagement.incident_id, engagement.engagement_id
     )
@@ -356,7 +443,13 @@ def _release(dedupe: MessageDedupePort, message_id: str) -> None:
     try:
         dedupe.forget(message_id)
     except Exception:
-        logger.warning("Could not release dedupe id=%s for retry", message_id)
+        log(
+            logger,
+            logging.WARNING,
+            f"Could not release dedupe id={message_id} for retry",
+            outcome="error",
+            count=1,
+        )
 
 
 def _nonblank(value: Any) -> str | None:

@@ -1,6 +1,5 @@
 """EventBridge ingest validation, debounce, and start-execution contract."""
 
-import logging
 import threading
 from datetime import UTC, datetime
 from typing import Any
@@ -213,19 +212,19 @@ def test_concurrent_trigger_calls_open_one_incident() -> None:
     assert len({item["name"] for item in deps.executions.calls}) == 1
 
 
-def test_reading_values_are_not_logged(caplog: pytest.LogCaptureFixture) -> None:
+def test_reading_values_are_not_logged(capsys: pytest.CaptureFixture[str]) -> None:
     """Log lines carry identifiers only; untrusted reading values stay out."""
     deps = _deps()
 
-    with caplog.at_level(logging.INFO, logger="oerf.platform.ingest.handler"):
-        handler(_event("hot-1"), None, dependencies=deps)
-        handler(_event("hot-2", detail={"seq": 8}), None, dependencies=deps)
+    handler(_event("hot-1"), None, dependencies=deps)
+    handler(_event("hot-2", detail={"seq": 8}), None, dependencies=deps)
+    text = capsys.readouterr().out
 
-    assert "tenant=t1" in caplog.text
-    assert "shipment=PH-1" in caplog.text
-    assert "temperature_c" not in caplog.text
-    assert "17.4" not in caplog.text
-    assert "78.3" not in caplog.text
+    assert "tenant=t1" in text
+    assert "shipment=PH-1" in text
+    assert "temperature_c" not in text
+    assert "17.4" not in text
+    assert "78.3" not in text
 
 
 def test_reading_is_never_passed_through_as_the_return_value() -> None:

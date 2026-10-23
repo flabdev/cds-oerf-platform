@@ -36,12 +36,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from oerf.platform.incidents.debounce import DebounceStore, observe
 from oerf.platform.incidents.dynamo import DynamoIncidentStore
 from oerf.platform.incidents.repository import IncidentStore
+from oerf.platform.observability.logging import get_logger, log
 from oerf.platform.rules.trigger import TemperatureEvent, breach_reason, evaluate_trigger
 from oerf.platform.storage.dynamo import is_conditional_failure, key, n, text
 from oerf.platform.tenancy.config_resolver import ResolvedConfig, get_config
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 SOURCE = "sim.reefer"
@@ -228,7 +229,13 @@ def handler(
     try:
         reading = Reading.model_validate(event.get("detail"))
     except (ValidationError, TypeError):
-        logger.info("Ignoring malformed temperature reading event_id=%s", event_id)
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring malformed temperature reading event_id={event_id}",
+            outcome="ignored",
+            count=1,
+        )
         return {"status": "ignored", "reason": "invalid_reading"}
 
     ports = dependencies or build_dependencies()
@@ -327,11 +334,16 @@ def handler(
                 },
             },
         )
-        logger.info(
-            "Started cold-chain execution tenant=%s shipment=%s incident=%s",
-            tenant_id,
-            shipment_id,
-            incident.incident_id,
+        log(
+            logger,
+            logging.INFO,
+            (
+                "Started cold-chain execution "
+                f"tenant={tenant_id} shipment={shipment_id} incident={incident.incident_id}"
+            ),
+            tenant_id=tenant_id,
+            incident_id=incident.incident_id,
+            outcome="started",
         )
         return {
             "status": "triggered",

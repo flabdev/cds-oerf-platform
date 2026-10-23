@@ -114,7 +114,9 @@ def test_real_router_send_omits_recipient_message_and_errors(
     capsys: pytest.CaptureFixture[str], monkeypatch
 ) -> None:
     monkeypatch.setattr(router, "USE_MOCK_WHATSAPP", False)
+    monkeypatch.setattr(router, "WA_PHONE_NUMBER_ID_PARAM", "")
     monkeypatch.setattr(router, "WHATSAPP_PHONE_NUMBER_ID", "phone-id-1")
+    monkeypatch.setattr(router, "_cached_phone_number_id", router._PHONE_UNSET)
     monkeypatch.setattr(router, "ROUTING_TABLE_NAME", "")
 
     calls = {"n": 0}

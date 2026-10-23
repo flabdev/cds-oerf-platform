@@ -148,10 +148,10 @@ class OerfComputeStack(Stack):
                 resources=whatsapp_resources,
             )
         )
-        # WA_PHONE_NUMBER_ID_PARAM names the SSM parameter. GetParameter is
-        # limited to that one parameter. The ARN drops the leading slash.
-        # The router still reads WHATSAPP_PHONE_NUMBER_ID; it does not read
-        # this parameter name yet.
+        # WA_PHONE_NUMBER_ID_PARAM names the SSM parameter. The router reads
+        # it once per process and uses WHATSAPP_PHONE_NUMBER_ID only when
+        # this name is unset. GetParameter is limited to that one parameter.
+        # The ARN drops the leading slash.
         self.channel_router_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["ssm:GetParameter"],

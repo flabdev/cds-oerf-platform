@@ -33,6 +33,7 @@ logger.setLevel(logging.INFO)
 ROUTING_TABLE_NAME = os.environ.get("ROUTING_TABLE_NAME", "")
 SES_SOURCE_EMAIL = os.environ.get("SES_SOURCE_EMAIL", "")
 WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
+WA_PHONE_NUMBER_ID_PARAM = os.environ.get("WA_PHONE_NUMBER_ID_PARAM", "").strip()
 USE_MOCK_WHATSAPP = os.environ.get("USE_MOCK_WHATSAPP", "false").lower() == "true"
 USE_MOCK_SMS = os.environ.get("USE_MOCK_SMS", "false").lower() == "true"
 USE_MOCK_EMAIL = os.environ.get("USE_MOCK_EMAIL", "false").lower() == "true"
@@ -40,6 +41,9 @@ USE_MOCK_EMAIL = os.environ.get("USE_MOCK_EMAIL", "false").lower() == "true"
 # Lazy-loaded AWS clients
 _dynamodb = None
 _ses = None
+_ssm = None
+_PHONE_UNSET = object()
+_cached_phone_number_id: object = _PHONE_UNSET
 
 
 def get_dynamodb():
@@ -54,6 +58,50 @@ def get_ses():
     if _ses is None:
         _ses = boto3.client("sesv2")
     return _ses
+
+
+def _ssm_client():
+    global _ssm
+    if _ssm is None:
+        _ssm = boto3.client("ssm")
+    return _ssm
+
+
+def _whatsapp_phone_number_id() -> str:
+    """Return the live WhatsApp phone-number id, resolved once per process.
+
+    ``WA_PHONE_NUMBER_ID_PARAM`` is read from SSM. ``WHATSAPP_PHONE_NUMBER_ID``
+    is used only when that name is unset. A failed or empty parameter does not
+    fall back to the env var.
+    """
+
+    global _cached_phone_number_id
+    if _cached_phone_number_id is not _PHONE_UNSET:
+        return str(_cached_phone_number_id)
+    name = WA_PHONE_NUMBER_ID_PARAM.strip()
+    value = WHATSAPP_PHONE_NUMBER_ID.strip() if not name else _read_phone_number_id(name)
+    _cached_phone_number_id = value
+    return value
+
+
+def _read_phone_number_id(name: str) -> str:
+    try:
+        response = _ssm_client().get_parameter(Name=name, WithDecryption=True)
+    except Exception:
+        log(
+            logger,
+            logging.ERROR,
+            "wa_phone_id_unreadable",
+            channel="WHATSAPP",
+            outcome="error",
+            count=1,
+        )
+        return ""
+    parameter = response.get("Parameter") if isinstance(response, dict) else None
+    raw = parameter.get("Value") if isinstance(parameter, dict) else None
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return ""
 
 
 def _required_text(value: Any) -> str | None:
@@ -139,13 +187,19 @@ def send_whatsapp(recipient: str, message: str) -> dict[str, Any]:
             "status": "SIMULATED",
         }
 
-    if not WHATSAPP_PHONE_NUMBER_ID:
-        logger.warning(
-            "WHATSAPP_PHONE_NUMBER_ID not configured, falling back to next channel"
+    phone_number_id = _whatsapp_phone_number_id()
+    if not phone_number_id:
+        log(
+            logger,
+            logging.WARNING,
+            "wa_phone_id_missing",
+            channel="WHATSAPP",
+            outcome="error",
+            count=1,
         )
         return {
             "success": False,
-            "error": "WHATSAPP_PHONE_NUMBER_ID not configured",
+            "error": "wa_phone_id_missing",
             "channel": "WHATSAPP",
         }
 
@@ -160,7 +214,7 @@ def send_whatsapp(recipient: str, message: str) -> dict[str, Any]:
             "text": {"preview_url": False, "body": message},
         }
         resp = eum.send_whatsapp_message(
-            originationPhoneNumberId=WHATSAPP_PHONE_NUMBER_ID,
+            originationPhoneNumberId=phone_number_id,
             metaApiVersion="v20.0",
             message=json.dumps(payload).encode("utf-8"),
         )
