@@ -86,6 +86,15 @@ def dashboard_envelopes(
 
     tenant_id = item.get("tenant_id")
     incident_id = item.get("incident_id")
+    if isinstance(item.get("sk"), str) and item["sk"].startswith("EVT#"):
+        identity = _incident_identity(item.get("pk"))
+        if identity is None:
+            return None
+        key_tenant, key_incident = identity
+        if isinstance(tenant_id, str) and tenant_id.strip() != key_tenant:
+            return None
+        tenant_id = key_tenant
+        incident_id = incident_id or key_incident
     if not isinstance(tenant_id, str) or not tenant_id.strip():
         return None
     if not isinstance(incident_id, str) or not incident_id.strip():
@@ -207,6 +216,19 @@ def handler(event: dict[str, Any], context: Any) -> None:
                         )
                 else:
                     logger.error("Failed to push to connection %s: %s", conn_id, exc)
+
+
+def _incident_identity(value: Any) -> tuple[str, str] | None:
+    """Extract tenant and incident ids from canonical incident partition keys."""
+    if not isinstance(value, str):
+        return None
+    parts = value.split("#")
+    if len(parts) != 4 or parts[0] != "TENANT" or parts[2] != "INC":
+        return None
+    tenant_id, incident_id = parts[1], parts[3]
+    if not tenant_id.strip() or not incident_id.strip():
+        return None
+    return tenant_id, incident_id
 
 
 def _text(value: Any) -> str | None:

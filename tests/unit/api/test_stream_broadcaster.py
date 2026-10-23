@@ -27,6 +27,39 @@ def test_subscriptions_stay_on_the_bound_scope_and_incident() -> None:
     assert targets == [("tenant", "tenant"), ("match", "incident")]
 
 
+def test_persisted_transition_row_derives_tenant_and_incident_from_partition_key() -> None:
+    envelopes = dashboard_envelopes(
+        {
+            "pk": "TENANT#t1#INC#INC-1",
+            "sk": "EVT#2026-10-20T10:16:00Z#0002",
+            "tenant_id": "t1",
+            "previous_state": "OPEN",
+            "state": "DIAGNOSING",
+        },
+        emitted_at=EMITTED,
+    )
+
+    assert envelopes is not None
+    summary, update = envelopes
+    assert summary["tenant_id"] == update["tenant_id"] == "t1"
+    assert summary["incident_id"] == update["incident_id"] == "INC-1"
+    assert update["data"]["from_state"] == "OPEN"
+    assert update["data"]["to_state"] == "DIAGNOSING"
+
+
+def test_transition_row_with_mismatched_tenant_is_rejected() -> None:
+    assert dashboard_envelopes(
+        {
+            "pk": "TENANT#t1#INC#INC-1",
+            "sk": "EVT#2026-10-20T10:16:00Z#0002",
+            "tenant_id": "t2",
+            "previous_state": "OPEN",
+            "state": "DIAGNOSING",
+        },
+        emitted_at=EMITTED,
+    ) is None
+
+
 def test_the_desk_accepts_the_broadcaster_event_and_rejects_private_fields() -> None:
     envelopes = dashboard_envelopes(
         {
