@@ -6,6 +6,7 @@ Missing metrics do not alarm: a quiet queue is healthy.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 from aws_cdk import (
@@ -42,6 +43,22 @@ def lambda_functions(*scopes: Construct) -> list[lambda_.Function]:
             seen.add(child.node.addr)
             found.append(child)
     return found
+
+
+def error_alarm_id(fn: lambda_.IFunction, functions: Sequence[lambda_.IFunction]) -> str:
+    """Construct id for one function's errors alarm.
+
+    A unique ``node.id`` keeps ``{id}Errors``, the id already in the default
+    template. Provider framework handlers are all named ``framework-onEvent``.
+    Those take the construct path so two providers can synth together.
+    """
+
+    if sum(item.node.id == fn.node.id for item in functions) == 1:
+        return f"{fn.node.id}Errors"
+    sanitized = re.sub(r"[^A-Za-z0-9]", "", fn.node.path)
+    if not sanitized:
+        raise ValueError("function path produced an empty alarm id")
+    return f"{sanitized}Errors"
 
 
 class OerfObservabilityStack(Stack):
@@ -96,7 +113,7 @@ class OerfObservabilityStack(Stack):
             )
         )
         self.alarms.extend(
-            self._alarm(f"{fn.node.id}Errors", metric)
+            self._alarm(error_alarm_id(fn, functions), metric)
             for fn, metric in zip(functions, error_metrics, strict=True)
         )
         for alarm in self.alarms:

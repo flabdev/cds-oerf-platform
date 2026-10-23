@@ -381,6 +381,20 @@ def test_persistent_resources_use_retain_removal_policy(
         assert resource["DeletionPolicy"] == "Retain", logical_id
         assert resource["UpdateReplacePolicy"] == "Retain", logical_id
 
+def test_workflow_stub_traces_and_keeps_logs_for_thirty_days(template: Template) -> None:
+    functions = [
+        resource["Properties"]
+        for resource in template.find_resources("AWS::Lambda::Function").values()
+        if resource["Properties"].get("Handler") == "workflow_stub.handler"
+    ]
+    assert len(functions) == 1
+    props = functions[0]
+    assert props["TracingConfig"] == {"Mode": "Active"}
+    log_group_id = props["LoggingConfig"]["LogGroup"]["Ref"]
+    group = template.find_resources("AWS::Logs::LogGroup")[log_group_id]
+    assert group["Properties"]["RetentionInDays"] == 30
+
+
 def test_cold_chain_state_machine_has_tracing(template):
     template.has_resource_properties(
         "AWS::StepFunctions::StateMachine",

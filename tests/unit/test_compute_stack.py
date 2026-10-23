@@ -255,21 +255,47 @@ def test_no_role_is_granted_kms(template: Template) -> None:
     assert found == []
 
 
-def test_star_resources_are_listed_in_the_exceptions_file(template: Template) -> None:
+def test_star_resources_are_listed_in_the_exceptions_file(
+    stack: OerfComputeStack, template: Template
+) -> None:
+    """Compute and data templates. The data stack holds the OIDC provider role."""
+
+    data = stack.node.scope.node.try_find_child("OerfDataStack")
+    assert isinstance(data, OerfDataStack)
+    scanned = {
+        "OerfComputeStack": template,
+        "OerfDataStack": Template.from_stack(data),
+    }
     allowed = allowed_star_actions()
     assert allowed, f"{EXCEPTIONS} does not list any IAM actions"
     offenders = []
-    for statement in iter_allow_statements(template):
+    for stack_name, current in scanned.items():
+        for statement in iter_allow_statements(current):
+            if not resource_is_star(statement.get("Resource")):
+                continue
+            action = statement.get("Action", [])
+            names = [action] if isinstance(action, str) else list(action)
+            for name in names:
+                if name not in allowed:
+                    offenders.append(f"{stack_name} {name}")
+    assert offenders == [], (
+        "Resource * is outside docs/security/iam-exceptions.md: " + ", ".join(offenders)
+    )
+    oidc = {
+        "iam:CreateOpenIDConnectProvider",
+        "iam:DeleteOpenIDConnectProvider",
+        "iam:UpdateOpenIDConnectProviderThumbprint",
+        "iam:AddClientIDToOpenIDConnectProvider",
+        "iam:RemoveClientIDFromOpenIDConnectProvider",
+    }
+    found: set[str] = set()
+    for statement in iter_allow_statements(scanned["OerfDataStack"]):
         if not resource_is_star(statement.get("Resource")):
             continue
         action = statement.get("Action", [])
         names = [action] if isinstance(action, str) else list(action)
-        for name in names:
-            if name not in allowed:
-                offenders.append(name)
-    assert offenders == [], (
-        "Resource * is outside docs/security/iam-exceptions.md: " + ", ".join(offenders)
-    )
+        found.update(name for name in names if name in oidc)
+    assert found == oidc
 
 
 def test_send_task_success_is_only_on_the_inbound_role(template: Template) -> None:
