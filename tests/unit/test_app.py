@@ -54,9 +54,17 @@ def test_app_synthesizes_with_placeholder_account_when_unresolved(tmp_path):
     result = run_app(tmp_path)
 
     assert result.returncode == 0, result.stderr
-    assert stack_names(tmp_path) == {"OerfDataStack", "OerfComputeStack"}
+    assert stack_names(tmp_path) == {
+        "OerfDataStack",
+        "OerfComputeStack",
+        "OerfObservabilityStack",
+    }
     message = "Refusing to deploy with the synth placeholder account 000000000000"
-    for name in ("OerfDataStack.template.json", "OerfComputeStack.template.json"):
+    for name in (
+        "OerfDataStack.template.json",
+        "OerfComputeStack.template.json",
+        "OerfObservabilityStack.template.json",
+    ):
         template = (tmp_path / name).read_text()
         assert message in template
 
@@ -65,7 +73,11 @@ def test_app_synthesizes_stack_when_account_is_resolved(tmp_path):
     result = run_app(tmp_path, CDK_DEFAULT_ACCOUNT=ACCOUNT)
 
     assert result.returncode == 0, result.stderr
-    assert stack_names(tmp_path) == {"OerfDataStack", "OerfComputeStack"}
+    assert stack_names(tmp_path) == {
+        "OerfDataStack",
+        "OerfComputeStack",
+        "OerfObservabilityStack",
+    }
 
 
 def test_dashboard_flag_synthesizes_the_api_stack(tmp_path):
@@ -76,7 +88,12 @@ def test_dashboard_flag_synthesizes_the_api_stack(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert stack_names(tmp_path) == {"OerfDataStack", "OerfComputeStack", "OerfApiStack"}
+    assert stack_names(tmp_path) == {
+        "OerfDataStack",
+        "OerfComputeStack",
+        "OerfApiStack",
+        "OerfObservabilityStack",
+    }
     templates = {
         name: json.loads((tmp_path / f"{name}.template.json").read_text())
         for name in stack_names(tmp_path)

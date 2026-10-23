@@ -6,9 +6,12 @@ stack's WebSocket endpoint. Stack registration lives in ``infra/app.py``.
 
 from __future__ import annotations
 
+import json
+
 from aws_cdk import (
     CfnOutput,
     Duration,
+    RemovalPolicy,
     Stack,
     aws_apigateway as apigw,
     aws_cloudfront as cloudfront,
@@ -16,29 +19,64 @@ from aws_cdk import (
     aws_cognito as cognito,
     aws_iam as iam,
     aws_lambda as lambda_,
+    aws_logs as logs,
     aws_s3 as s3,
     aws_sqs as sqs,
 )
 from constructs import Construct
 
+from infra.iam_conditions import pin_source_account
+from infra.runtime_asset import runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
 
-_LAMBDA_EXCLUDE = [
-    "cdk.out",
-    ".git",
-    ".github",
-    ".venv",
-    "venv",
-    "tests",
-    "web",
-    "sim",
-    "node_modules",
-    "**/*.pyc",
-    "**/__pycache__",
-    ".pytest_cache",
-    "*.md",
-    "cds_oerf_platform.egg-info",
-]
+_DEFAULT_THROTTLE_RATE = 20
+_DEFAULT_THROTTLE_BURST = 40
+_ACCESS_LOG = json.dumps(
+    {
+        "requestId": "$context.requestId",
+        "ip": "$context.identity.sourceIp",
+        "httpMethod": "$context.httpMethod",
+        "resourcePath": "$context.resourcePath",
+        "status": "$context.status",
+        "responseLatency": "$context.responseLatency",
+        "sub": "$context.authorizer.claims.sub",
+    },
+    separators=(",", ":"),
+)
+
+
+def _context_int(scope: Construct, key: str, default: int) -> int:
+    raw = scope.node.try_get_context(key)
+    if raw is None or raw == "":
+        return default
+    return int(raw)
+
+
+def _dashboard_function(stack: Stack, construct_id: str, **kwargs: object) -> lambda_.Function:
+    """One role, a 30-day log group, and active X-Ray tracing."""
+
+    log_group = logs.LogGroup(
+        stack,
+        f"{construct_id}LogGroup",
+        retention=logs.RetentionDays.ONE_MONTH,
+        removal_policy=RemovalPolicy.DESTROY,
+    )
+    role = iam.Role(
+        stack,
+        f"{construct_id}Role",
+        assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+    )
+    log_group.grant_write(role)
+    return lambda_.Function(
+        stack,
+        construct_id,
+        role=role,
+        log_group=log_group,
+        # tracing ACTIVE adds xray:PutTraceSegments and xray:PutTelemetryRecords
+        # on Resource *. X-Ray rejects a resource ARN. See iam-exceptions.md.
+        tracing=lambda_.Tracing.ACTIVE,
+        **kwargs,
+    )
 
 
 class OerfApiStack(Stack):
@@ -52,8 +90,8 @@ class OerfApiStack(Stack):
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
-        code = lambda_.Code.from_asset(".", exclude=_LAMBDA_EXCLUDE)
-        self.query_fn = lambda_.Function(
+        code = lambda_.Code.from_asset(".", **runtime_code_args())
+        self.query_fn = _dashboard_function(
             self,
             "DashboardQueryFunction",
             runtime=lambda_.Runtime.PYTHON_3_11,
@@ -67,7 +105,7 @@ class OerfApiStack(Stack):
         )
         data_stack.incident_table.grant_read_data(self.query_fn)
         data_stack.tenant_table.grant_read_write_data(self.query_fn)
-        self.action_fn = lambda_.Function(
+        self.action_fn = _dashboard_function(
             self,
             "DashboardActionFunction",
             runtime=lambda_.Runtime.PYTHON_3_11,
@@ -101,6 +139,7 @@ class OerfApiStack(Stack):
             default_behavior=cloudfront.BehaviorOptions(
                 origin=origins.S3BucketOrigin.with_origin_access_control(self.dashboard_bucket),
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                response_headers_policy=cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
             ),
         )
         dashboard_origin = f"https://{self.distribution.distribution_domain_name}"
@@ -114,10 +153,31 @@ class OerfApiStack(Stack):
             "authorizer": authorizer,
             "authorization_type": apigw.AuthorizationType.COGNITO,
         }
+        access_logs = logs.LogGroup(
+            self,
+            "DashboardRestAccessLogs",
+            retention=logs.RetentionDays.ONE_MONTH,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        # Access logging needs the account CloudWatch role. CDK grants that
+        # role when cloud_watch_role is true. Deleting this stack retains it,
+        # because the role is account-wide.
         self.rest_api = apigw.RestApi(
             self,
             "OerfDashboardRestApi",
             rest_api_name="oerf-dashboard",
+            cloud_watch_role=True,
+            cloud_watch_role_removal_policy=RemovalPolicy.RETAIN,
+            deploy_options=apigw.StageOptions(
+                throttling_rate_limit=_context_int(
+                    self, "api:throttleRate", _DEFAULT_THROTTLE_RATE
+                ),
+                throttling_burst_limit=_context_int(
+                    self, "api:throttleBurst", _DEFAULT_THROTTLE_BURST
+                ),
+                access_log_destination=apigw.LogGroupLogDestination(access_logs),
+                access_log_format=apigw.AccessLogFormat.custom(_ACCESS_LOG),
+            ),
             default_cors_preflight_options=apigw.CorsOptions(
                 allow_origins=[dashboard_origin],
                 allow_methods=["GET", "POST", "PUT", "OPTIONS"],
@@ -183,3 +243,4 @@ class OerfApiStack(Stack):
         CfnOutput(self, "DashboardUrl", value=dashboard_origin)
         CfnOutput(self, "RestApiUrl", value=self.rest_api.url)
         CfnOutput(self, "WebSocketUrl", value=websocket_url)
+        pin_source_account(self)

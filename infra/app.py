@@ -1,4 +1,4 @@
-"""CDK app entry point for the OERF data, compute, and optional API stacks."""
+"""CDK app entry point for the OERF data, compute, alarm, and optional API stacks."""
 
 import os
 
@@ -7,6 +7,7 @@ import aws_cdk as cdk
 from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
+from infra.stacks.observability import OerfObservabilityStack, lambda_functions
 
 # Synth succeeds with this account when no credentials and no context account
 # are available. The rule below rejects a deploy of that placeholder.
@@ -63,20 +64,40 @@ compute_stack = OerfComputeStack(
 )
 
 stacks = [data_stack, compute_stack]
+scopes = [data_stack, compute_stack]
 if _dashboard_enabled(app):
     # Mudita owns api_stack.py. It stays out of the default synth until
     # dashboard:enabled=true. Actions use the compute inbound queue, and the
     # dashboard publishes that stack's WebSocket endpoint.
-    stacks.append(
-        OerfApiStack(
-            app,
-            "OerfApiStack",
-            data_stack=data_stack,
-            inbound_queue=compute_stack.inbound_queue,
-            websocket_url=compute_stack.ws_stage.url,
-            env=cdk_env,
-        )
+    api_stack = OerfApiStack(
+        app,
+        "OerfApiStack",
+        data_stack=data_stack,
+        inbound_queue=compute_stack.inbound_queue,
+        websocket_url=compute_stack.ws_stage.url,
+        env=cdk_env,
     )
+    stacks.append(api_stack)
+    scopes.append(api_stack)
+
+stacks.append(
+    OerfObservabilityStack(
+        app,
+        "OerfObservabilityStack",
+        functions=lambda_functions(*scopes),
+        dead_letter_queues=[
+            compute_stack.inbound_dlq,
+            compute_stack.ingest_dlq,
+            compute_stack.stream_dlq,
+        ],
+        state_machines=[
+            data_stack.cold_chain_state_machine,
+            data_stack.engage_party_state_machine,
+        ],
+        channel_router_log_group=compute_stack.channel_router_fn.log_group,
+        env=cdk_env,
+    )
+)
 
 if account == SYNTH_PLACEHOLDER_ACCOUNT:
     for stack in stacks:

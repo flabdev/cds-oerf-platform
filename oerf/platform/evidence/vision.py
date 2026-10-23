@@ -29,9 +29,10 @@ from oerf.platform.evidence.policy import (
     resolve_policy,
 )
 from oerf.platform.observability.ai_trace import TraceRejected, record_invocation
+from oerf.platform.observability.logging import get_logger, log
 from oerf.platform.storage.dynamo import incident_pk
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
@@ -104,6 +105,13 @@ Return ONLY valid raw JSON with no markdown backticks or explanation."""
 _EXTRACT_INSTRUCTION = (
     "Please extract the telemetry from this reefer display according to your instructions."
 )
+
+
+def _required_text(value: Any) -> str | None:
+    """Return a stripped string, or None when the value is missing or blank."""
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 def _image_format(key: str) -> str:
@@ -229,17 +237,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     when it is well formed, and the stored record carries the verification so a
     reader can ask a human when the model is unsure or claims an unknown code.
     """
-    # Only ids are logged. The key can carry a filename, never the image.
-    logger.info(
-        "Analyzing evidence %s for incident %s",
-        event.get("key", ""),
-        incident_id_of(event),
-    )
-
     bucket = event.get("bucket", "")
     key = event.get("key", "")
-    tenant_id = event.get("tenant_id", "default")
+    tenant_id = _required_text(event.get("tenant_id"))
     incident_id = event.get("incident_id", "unknown")
+    if tenant_id is None:
+        logger.error("Rejected evidence analysis: tenant_required")
+        return {"success": False, "error": "tenant_required", "fallback_required": True}
 
     if not tenant_key(tenant_id, key):
         logger.warning("Refusing evidence key outside the tenant prefix")
@@ -276,6 +280,14 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             key,
             reading.analysis,
             reading.verification,
+        )
+        log(
+            logger,
+            logging.INFO,
+            "evidence_analyzed",
+            tenant_id=tenant_id,
+            incident_id=incident_id if isinstance(incident_id, str) else None,
+            outcome="mock",
         )
         return {
             "success": True,
@@ -328,7 +340,14 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         )
     except (ClientError, ValueError, KeyError, json.JSONDecodeError, AnalysisRejected) as exc:
         _record(latency_ms=_elapsed_ms(started), response=response, outcome="ERROR")
-        logger.error("Failed to analyze evidence image: %s", exc)
+        log(
+            logger,
+            logging.ERROR,
+            "evidence_analysis_failed",
+            tenant_id=tenant_id,
+            incident_id=incident_id if isinstance(incident_id, str) else None,
+            outcome="error",
+        )
         return {
             "success": False,
             "error": str(exc),
@@ -345,6 +364,14 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         reading.verification,
     )
 
+    log(
+        logger,
+        logging.INFO,
+        "evidence_analyzed",
+        tenant_id=tenant_id,
+        incident_id=incident_id if isinstance(incident_id, str) else None,
+        outcome="analyzed",
+    )
     return {
         "success": True,
         "analysis": reading.analysis,
