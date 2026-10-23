@@ -38,6 +38,7 @@ def template(templates: tuple[Template, Template]) -> Template:
     return templates[0]
 
 
+@pytest.mark.security
 def test_api_permissions_require_this_account(template: Template) -> None:
     permissions = template.find_resources("AWS::Lambda::Permission")
     assert permissions
@@ -110,6 +111,7 @@ def test_throttle_limits_come_from_context() -> None:
     assert settings["ThrottlingBurstLimit"] == 9
 
 
+@pytest.mark.security
 def test_distribution_uses_the_security_headers_policy(template: Template) -> None:
     distributions = template.find_resources("AWS::CloudFront::Distribution")
     assert len(distributions) == 1
@@ -123,6 +125,7 @@ def test_distribution_uses_the_security_headers_policy(template: Template) -> No
     )
 
 
+@pytest.mark.security
 def test_rest_routes_require_the_cognito_authorizer(template: Template) -> None:
     template.resource_count_is("AWS::ApiGateway::RestApi", 1)
     template.has_resource_properties(
@@ -172,6 +175,7 @@ def test_actions_enqueue_on_the_inbound_queue_and_cannot_transition_state(
     assert resources == [{"Fn::ImportValue": _inbound_queue_export(refs)}]
 
 
+@pytest.mark.security
 def test_dashboard_bucket_is_private_behind_cloudfront(template: Template) -> None:
     template.has_resource_properties(
         "AWS::S3::Bucket",
@@ -194,6 +198,7 @@ def test_dashboard_bucket_is_private_behind_cloudfront(template: Template) -> No
     assert "BucketKeyEnabled" not in default
 
 
+@pytest.mark.security
 def test_dashboard_roles_are_not_granted_kms(template: Template) -> None:
     found = []
     for policy in template.find_resources("AWS::IAM::Policy").values():

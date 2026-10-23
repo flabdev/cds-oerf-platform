@@ -18,6 +18,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[3]
 _IMAGE = _ROOT / "oerf" / "platform" / "agent" / "agentcore"
 _DOCKERFILE = _IMAGE / "Dockerfile"
@@ -224,6 +226,7 @@ def test_the_packaged_configuration_the_resolver_reads_is_copied() -> None:
     assert [path for path in copied if path.parts[:2] == ("sim", "seed")]
 
 
+@pytest.mark.security
 def test_the_build_context_ignore_file_keeps_bytecode_out() -> None:
     lines = [line.strip() for line in _IGNORE.read_text(encoding="utf-8").splitlines()]
 

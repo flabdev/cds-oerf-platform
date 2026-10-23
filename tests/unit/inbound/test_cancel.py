@@ -164,6 +164,7 @@ def test_throttled_stop_leaves_the_incident_unchanged_for_sqs_retry() -> None:
     assert len(stopper.calls) == 2
 
 
+@pytest.mark.security
 def test_cancel_without_an_engagement_uses_the_stored_incident(capsys) -> None:
     dependencies, incidents, stopper, callbacks = _world(engagement=False)
 
@@ -178,6 +179,7 @@ def test_cancel_without_an_engagement_uses_the_stored_incident(capsys) -> None:
     assert BODY_ARN not in text
 
 
+@pytest.mark.security
 def test_duplicate_cancel_does_not_stop_again() -> None:
     dependencies, incidents, stopper, callbacks = _world()
     message = _cancel()
@@ -212,6 +214,7 @@ def test_second_cancel_after_a_finished_execution_does_not_stop_again() -> None:
     assert incidents.get(TENANT, INCIDENT).state == "CANCELLED"
 
 
+@pytest.mark.security
 def test_unauthorised_role_does_not_stop_or_cancel() -> None:
     dependencies, incidents, stopper, callbacks = _world()
 
@@ -229,6 +232,7 @@ def test_unauthorised_role_does_not_stop_or_cancel() -> None:
     assert incidents.lock.get_lock(TENANT, SHIPMENT) is not None
 
 
+@pytest.mark.security
 def test_a_different_body_tenant_does_not_stop() -> None:
     dependencies, incidents, stopper, callbacks = _world()
 

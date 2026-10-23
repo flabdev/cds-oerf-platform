@@ -56,6 +56,7 @@ def test_join_creates_only_an_sbx_session(stack) -> None:
     assert store.join_count(DAY) == 1
 
 
+@pytest.mark.security
 def test_a_production_number_is_rejected_without_leaking_its_tenant(stack) -> None:
     registry, store = stack
     registry.register_contact("t1", "C-T1-DRV", "driver", PHONE, opt_in=True)
@@ -226,6 +227,7 @@ def test_stop_blocks_a_later_send_and_a_later_join(stack) -> None:
     assert store.join_count(DAY) == 1
 
 
+@pytest.mark.security
 def test_stop_for_a_production_number_does_not_change_that_contact(stack) -> None:
     registry, store = stack
     registry.register_contact("t1", "C-T1-DRV", "driver", PHONE, opt_in=True)

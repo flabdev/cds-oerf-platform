@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import boto3
+import pytest
 from botocore.stub import Stubber
 
 from oerf.platform.api.claims import DEFAULT_ROLE, PLATFORM_ADMIN_GROUP, TENANT_CLAIM
@@ -179,6 +180,7 @@ def test_dry_run_makes_no_write_calls() -> None:
     present_stub.assert_no_pending_responses()
 
 
+@pytest.mark.security
 def test_environment_password_is_set_once_and_not_printed(monkeypatch, capsys) -> None:
     monkeypatch.setenv("DEMO_USER_PASSWORD", PASSWORD)
     client, stubber = _cognito()
@@ -205,6 +207,7 @@ def test_environment_password_is_set_once_and_not_printed(monkeypatch, capsys) -
     stubber.assert_no_pending_responses()
 
 
+@pytest.mark.security
 def test_dry_run_command_prints_no_password(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         "scripts.seed_demo_users.generate_password",
@@ -266,6 +269,7 @@ def test_stack_output_is_the_cognito_pool_id() -> None:
     stubber.assert_no_pending_responses()
 
 
+@pytest.mark.security
 def test_a_real_email_domain_is_rejected_before_any_call() -> None:
     client, stubber = _cognito()
     stubber.activate()

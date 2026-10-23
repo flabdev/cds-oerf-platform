@@ -3,6 +3,10 @@
 import re
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.security
+
 ROOT = Path(__file__).resolve().parents[3] / "oerf"
 
 # Assignment forms that write a stand-in tenant. Example payloads in docstrings

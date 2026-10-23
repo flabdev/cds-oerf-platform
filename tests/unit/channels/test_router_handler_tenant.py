@@ -1,6 +1,10 @@
 """The deployed router handler fails closed when the event has no tenant."""
 
+import pytest
+
 from oerf.platform.channels import router
+
+pytestmark = pytest.mark.security
 
 
 def test_missing_tenant_does_not_send_or_write(monkeypatch) -> None:

@@ -3,6 +3,8 @@
 import base64
 import json
 
+import pytest
+
 from oerf.platform.api import action_handler, ws_authorizer, ws_handler
 from oerf.platform.channels import router
 
@@ -32,6 +34,7 @@ class FakeDynamoDB:
         return self.table
 
 
+@pytest.mark.security
 def test_websocket_authorizer_returns_policy_and_binds_verified_tenant(monkeypatch):
     claims = {"client_id": "client-1", "sub": "user-1", "cognito:groups": "tenant_admin"}
     payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
@@ -100,6 +103,7 @@ def test_websocket_authorizer_works_when_gateway_omits_connection_id(monkeypatch
     assert result["context"]["tenant_id"] == "tenant-1"
 
 
+@pytest.mark.security
 def test_websocket_authorizer_denies_invalid_token_with_policy(monkeypatch):
     monkeypatch.setattr(ws_authorizer, "verify_token", lambda _token: {})
 
@@ -116,6 +120,7 @@ def test_websocket_authorizer_denies_invalid_token_with_policy(monkeypatch):
     assert "isAuthenticated" not in result
 
 
+@pytest.mark.security
 def test_subscribe_uses_connection_tenant_not_client_requested_tenant():
     table = FakeTable(
         {("WS#conn-1", "METADATA"): {"tenant_id": "tenant-1", "role": "ops_user"}}
@@ -147,6 +152,7 @@ def test_subscribe_uses_connection_tenant_not_client_requested_tenant():
     assert subscription["incident_id"] == "INC-1"
 
 
+@pytest.mark.security
 def test_subscribe_rejects_all_and_stores_a_tenant_scope():
     table = FakeTable({("WS#conn-1", "METADATA"): {"tenant_id": "tenant-1"}})
 
@@ -169,6 +175,7 @@ def test_subscribe_rejects_all_and_stores_a_tenant_scope():
     assert "incident_id" not in table.put_items[-1]
 
 
+@pytest.mark.security
 def test_subscribe_rejects_connection_without_tenant_binding():
     table = FakeTable()
 

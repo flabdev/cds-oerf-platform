@@ -96,6 +96,7 @@ def test_second_open_does_not_reset_a_stopped_engagement(store) -> None:
     assert again.status == "STOPPED"
 
 
+@pytest.mark.security
 def test_other_tenant_cannot_read_the_engagement(store) -> None:
     engagements, _clock = store
     _open(engagements)

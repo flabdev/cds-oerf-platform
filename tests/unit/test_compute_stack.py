@@ -244,6 +244,7 @@ def test_every_function_has_active_tracing_and_thirty_day_logs(template: Templat
     assert referenced == set(log_groups)
 
 
+@pytest.mark.security
 def test_no_role_is_granted_kms(template: Template) -> None:
     """Bucket and table grants do not add kms:Decrypt for aws/s3 or aws/dynamodb."""
 
@@ -255,6 +256,7 @@ def test_no_role_is_granted_kms(template: Template) -> None:
     assert found == []
 
 
+@pytest.mark.security
 def test_star_resources_are_listed_in_the_exceptions_file(
     stack: OerfComputeStack, template: Template
 ) -> None:
@@ -298,6 +300,7 @@ def test_star_resources_are_listed_in_the_exceptions_file(
     assert found == oidc
 
 
+@pytest.mark.security
 def test_send_task_success_is_only_on_the_inbound_role(template: Template) -> None:
     inbound = role_actions(template, "oerf-inbound")
     action = role_actions(template, "oerf-action-handler")
@@ -318,6 +321,7 @@ def test_send_task_success_is_only_on_the_inbound_role(template: Template) -> No
     assert all(not key.endswith("trigger") for key in routes)
 
 
+@pytest.mark.security
 def test_inbound_can_stop_only_cold_chain_executions(template: Template) -> None:
     inbound = functions_by_name(template)["oerf-inbound"]
     stops = [
@@ -337,6 +341,7 @@ def test_inbound_can_stop_only_cold_chain_executions(template: Template) -> None
         assert "states:StopExecution" not in role_actions(template, name)
 
 
+@pytest.mark.security
 def test_invokers_and_queue_allows_require_this_account(template: Template) -> None:
     permissions = template.find_resources("AWS::Lambda::Permission")
     assert permissions
@@ -495,6 +500,7 @@ def test_inbound_event_source_reports_batch_item_failures(template: Template) ->
     assert source["Fn::GetAtt"][0].startswith("InboundQueue")
 
 
+@pytest.mark.security
 def test_queues_and_inbound_topic_deny_insecure_transport(template: Template) -> None:
     queues = template.find_resources("AWS::SQS::Queue")
     assert len(queues) == 4

@@ -3,7 +3,8 @@ name: CI
 # Pull-request and main-branch checks for this repo. A failing job blocks the change.
 #
 # Python installs the package with the dev extra, then runs ruff, pytest with the aws
-# marker excluded, and four CDK synths: the default stacks, dashboard:enabled=true,
+# marker excluded, pytest -m security as its own step, and four CDK synths: the default
+# stacks, dashboard:enabled=true,
 # whatsapp:wabaId, and agentcore:enabled=true. Every synth passes
 # -c account=000000000000 so ambient credentials cannot replace the placeholder.
 # --lookups false makes no AWS API calls. The AgentCore synth stages the image
@@ -56,6 +57,9 @@ jobs:
 
       - name: Pytest
         run: pytest -q -m "not aws"
+
+      - name: Security tests
+        run: pytest -q -m security
 
       # aws-cdk-lib is the library. The cdk command is the CLI, same install as deploy.yml.
       - name: Install CDK CLI
