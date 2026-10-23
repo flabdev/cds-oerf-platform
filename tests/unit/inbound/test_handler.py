@@ -39,7 +39,12 @@ def setup_inbound():
     registry.register_contact("trusted-tenant", "contact-1", "driver", "+15550000001")
     dedupe = InboundDedupe(clock=lambda: NOW)
     callbacks = CallbackClient()
-    deps = InboundDependencies(dedupe, engagements, callbacks, registry)
+
+    class _NoopEvidence:
+        def store(self, tenant_id, message_id, media_id, mime_type):
+            return None
+
+    deps = InboundDependencies(dedupe, engagements, callbacks, registry, _NoopEvidence())
     engagement = engagements.open_engagement(
         "trusted-tenant",
         "incident-1",
@@ -215,6 +220,85 @@ def test_media_is_capped_and_projected_before_callback(setup_inbound) -> None:
     assert len(payload["media"]) == 10
     assert payload["media"][0] == {"id": "m-0", "mime_type": "image/jpeg"}
     assert all(set(item) == {"id", "mime_type"} for item in payload["media"])
+
+
+def test_an_unquoted_reply_uses_the_single_waiting_address_match(setup_inbound) -> None:
+    deps, _engagements, _registry, callbacks, _opened = setup_inbound
+    deps.engagements.register_address("whatsapp", "+15550000001", _opened)
+    body = _provider()
+    body.pop("context_msg_id")
+
+    assert process_message(body, deps) == "resumed"
+    assert len(callbacks.calls) == 1
+
+
+def test_an_unquoted_reply_with_ambiguous_address_is_ignored(setup_inbound) -> None:
+    deps, engagements, _registry, callbacks, _opened = setup_inbound
+    extra = engagements.open_engagement(
+        "trusted-tenant",
+        "incident-2",
+        "engagement-2",
+        "driver",
+        "confirm",
+        "policy-1",
+        "another-task-token",
+        {},
+        contact_id="contact-1",
+        rung=1,
+        deadline=DEADLINE,
+    )
+    engagements.register_address("whatsapp", "+15550000001", extra)
+    engagements.register_address("whatsapp", "+15550000001", _opened)
+    body = _provider()
+    body.pop("context_msg_id")
+
+    assert process_message(body, deps) == "ignored"
+    assert callbacks.calls == []
+
+
+def test_quoted_correlation_takes_precedence_over_address_matches(setup_inbound) -> None:
+    deps, engagements, _registry, callbacks, opened = setup_inbound
+    extra = engagements.open_engagement(
+        "trusted-tenant",
+        "incident-2",
+        "engagement-2",
+        "driver",
+        "confirm",
+        "policy-1",
+        "another-task-token",
+        {},
+        contact_id="contact-1",
+        rung=1,
+        deadline=DEADLINE,
+    )
+    engagements.register_address("whatsapp", "+15550000001", extra)
+    engagements.register_outbound("outbound-1", opened)
+
+    assert process_message(_provider(), deps) == "resumed"
+    assert callbacks.calls[0]["taskToken"] == "secret-task-token"
+
+
+def test_media_evidence_is_stored_and_key_is_forwarded(setup_inbound) -> None:
+    deps, _engagements, _registry, callbacks, opened = setup_inbound
+    stored: list[tuple[str, str, str, str | None]] = []
+
+    class _Evidence:
+        def store(self, tenant_id, message_id, media_id, mime_type):
+            stored.append((tenant_id, message_id, media_id, mime_type))
+            return f"tenants/{tenant_id}/inbound/{message_id}/evidence.jpg"
+
+    deps = InboundDependencies(
+        deps.dedupe, deps.engagements, deps.callbacks, deps.registry, _Evidence()
+    )
+    body = _provider()
+    body["media"] = [{"id": "meta-media-1", "mime_type": "image/jpeg"}]
+
+    assert process_message(body, deps) == "resumed"
+    payload = json.loads(callbacks.calls[0]["output"])
+    assert stored == [(opened.tenant_id, "incoming-1", "meta-media-1", "image/jpeg")]
+    assert payload["media"][0]["evidence_key"] == (
+        "tenants/trusted-tenant/inbound/incoming-1/evidence.jpg"
+    )
 
 
 def test_oversized_provider_media_fields_are_capped_before_callback(setup_inbound) -> None:
