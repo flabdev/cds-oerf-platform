@@ -231,15 +231,23 @@ def test_report_run_omits_the_object_key_and_pii(
         def get_item(self, **kwargs: object) -> dict[str, dict[str, str]]:
             return {
                 "Item": {
+                    "pk": "TENANT#t1#INC#INC-LOG",
+                    "sk": "META",
+                    "tenant_id": "t1",
                     "shipment_id": "PH-1",
-                    "status": "RESOLVED",
+                    "state": "RESOLVED",
                     "diagnosis": BODY,
-                    "phone": PHONE,
-                    "email": EMAIL,
-                    "name": NAME,
-                    "task_token": TOKEN,
+                    "evidence": {
+                        "phone": PHONE,
+                        "email": EMAIL,
+                        "name": NAME,
+                        "task_token": TOKEN,
+                    },
                 }
             }
+
+        def query(self, **_kwargs: object) -> dict[str, list]:
+            return {"Items": []}
 
     class _Dynamo:
         def Table(self, _name: str) -> _Table:
