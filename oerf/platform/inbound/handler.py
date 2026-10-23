@@ -50,6 +50,7 @@ import logging
 import os
 import urllib.parse
 import urllib.request
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
