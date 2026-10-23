@@ -89,34 +89,10 @@ class OerfComputeStack(Stack):
         # seed data available to ``seed_demo_devices``.
         lambda_code = lambda_.Code.from_asset(".", **runtime_code_args())
 
-        # Demo devices only. Off unless context demo:seedDevices is true, so a
-        # production deploy does not write t1, t2, or sbx rows. The handler
-        # rereads sim/seed and PutItem is safe to run again.
-        if _context_enabled(self, "demo:seedDevices", default=False):
-            self.device_seed_fn = self._function(
-                "DeviceSeedFunction",
-                function_name="oerf-device-seed",
-                handler="oerf.platform.channels.devices.seed_handler",
-                code=lambda_code,
-                timeout=Duration.seconds(30),
-                environment={"ROUTING_TABLE_NAME": data_stack.routing_table.table_name},
-            )
-            data_stack.routing_table.grant_write_data(self.device_seed_fn)
-            seed_provider = cr.Provider(
-                self,
-                "DeviceSeedProvider",
-                on_event_handler=self.device_seed_fn,
-            )
-            CustomResource(
-                self,
-                "DemoDeviceSeed",
-                service_token=seed_provider.service_token,
-                properties={"SeedVersion": "1"},
-            )
-
         # ---------------------------------------------------------
         # Seed the deterministic device registry once per deployment. The
         # custom resource is idempotent (PutItem on DEVICE#{id}/META).
+        # Rows come only from sim/seed (t1, t2, sbx).
         # ---------------------------------------------------------
         self.device_seed_fn = self._function(
             "DeviceSeedFunction",

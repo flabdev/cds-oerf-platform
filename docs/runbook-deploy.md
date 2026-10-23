@@ -27,7 +27,7 @@ The account must already be bootstrapped (`CDKToolkit` in `us-east-1`). This rol
 
 `seed_demo_devices` writes `DEVICE#{device_id}` / `META` on the routing table from `sim/seed/*/shipments.json`. The row carries `tenant_id`, `shipment_id`, and `asset_id` (`truck`). Ingest only reads that row and still drops an unknown device. The files are the demo tenants `t1`, `t2`, and `sbx`. A second run replaces the same ids.
 
-The deploy writes those rows only when CDK context `demo:seedDevices` is `true`. The default deploy does not. Passing the flag adds `oerf-device-seed` and a custom resource `DemoDeviceSeed` (`SeedVersion` `1`) on `OerfComputeStack`. Delete of that resource does not remove the rows.
+Every `OerfComputeStack` deploy runs `oerf-device-seed` through the custom resource `DemoDeviceSeed` (`SeedVersion` `1`). Delete of that resource does not remove the rows.
 
 Unit tests do not prove the deployed table. After a deploy with the flag, confirm `RF-7781` resolves to tenant `t1` and shipment `PH-2841`, and that an id that is not in the seed files does not resolve.
 
