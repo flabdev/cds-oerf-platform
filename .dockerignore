@@ -1,2 +1,15 @@
-__pycache__
-*.pyc
+*
+!oerf/__init__.py
+!oerf/platform/__init__.py
+!oerf/platform/evidence/
+!oerf/platform/observability/
+!oerf/platform/storage/
+!oerf/platform/tenancy/
+!oerf/platform/agent/agentcore/
+!domains/
+!sim/
+**/.*
+**/*.env
+**/.demo-numbers*
+**/__pycache__
+**/*.pyc

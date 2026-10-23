@@ -140,6 +140,20 @@ def test_converse_failure_does_not_call_a_second_model(
     assert "claude" not in result["error"].lower()
 
 
+def test_missing_tenant_does_not_read_s3_or_write_dynamodb(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(vision, "INCIDENT_TABLE_NAME", "incidents")
+    monkeypatch.setattr(vision, "get_s3", lambda: (_ for _ in ()).throw(AssertionError("s3")))
+    monkeypatch.setattr(
+        vision, "get_dynamodb", lambda: (_ for _ in ()).throw(AssertionError("dynamodb"))
+    )
+
+    for mock in (True, False):
+        monkeypatch.setattr(vision, "USE_MOCK_BEDROCK", mock)
+        result = vision.handler({"bucket": "evidence", "key": "photos/display.jpg"}, None)
+        assert result["success"] is False
+        assert result["error"] == "tenant_required"
+
+
 def _live(monkeypatch: pytest.MonkeyPatch, text: str, *, response: dict | None = None) -> dict:
     """Run the live path over a fake S3 object and model answer."""
 

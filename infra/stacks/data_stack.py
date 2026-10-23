@@ -90,6 +90,7 @@ class OerfDataStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            encryption=dynamodb.TableEncryption.AWS_MANAGED,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
         )
@@ -109,6 +110,7 @@ class OerfDataStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            encryption=dynamodb.TableEncryption.AWS_MANAGED,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
         )
@@ -130,6 +132,7 @@ class OerfDataStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            encryption=dynamodb.TableEncryption.AWS_MANAGED,
             stream=dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
@@ -163,6 +166,7 @@ class OerfDataStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            encryption=dynamodb.TableEncryption.AWS_MANAGED,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
             time_to_live_attribute="expires_at",
@@ -171,24 +175,44 @@ class OerfDataStack(Stack):
         # ---------------------------------------------------------
         # S3: Evidence Bucket
         # ---------------------------------------------------------
+        # Current objects last 90 days. Noncurrent versions last 30 (ADR-018).
         self.evidence_bucket = s3.Bucket(
             self,
             "EvidenceBucket",
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-            encryption=s3.BucketEncryption.S3_MANAGED,
+            encryption=s3.BucketEncryption.KMS_MANAGED,
+            bucket_key_enabled=True,
             versioned=True,
+            enforce_ssl=True,
+            lifecycle_rules=[
+                s3.LifecycleRule(
+                    id="expire-evidence",
+                    expiration=Duration.days(90),
+                    noncurrent_version_expiration=Duration.days(30),
+                )
+            ],
             removal_policy=RemovalPolicy.RETAIN,
         )
 
         # ---------------------------------------------------------
         # S3: Report Bucket
         # ---------------------------------------------------------
+        # Reports are the audit record, so current versions are kept.
+        # Noncurrent versions expire after 90 days.
         self.report_bucket = s3.Bucket(
             self,
             "ReportBucket",
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-            encryption=s3.BucketEncryption.S3_MANAGED,
+            encryption=s3.BucketEncryption.KMS_MANAGED,
+            bucket_key_enabled=True,
             versioned=True,
+            enforce_ssl=True,
+            lifecycle_rules=[
+                s3.LifecycleRule(
+                    id="expire-noncurrent-reports",
+                    noncurrent_version_expiration=Duration.days(90),
+                )
+            ],
             removal_policy=RemovalPolicy.RETAIN,
         )
 
@@ -264,12 +288,29 @@ class OerfDataStack(Stack):
                 resources=[workflow_stub.function_arn, f"{workflow_stub.function_arn}:*"],
             )
         )
+        # ERROR only. Execution data can carry phone numbers and message text.
+        # Logging adds logs:CreateLogDelivery and the rest of the delivery
+        # family on Resource *. Tracing adds xray:PutTraceSegments,
+        # PutTelemetryRecords, GetSamplingRules, and GetSamplingTargets on
+        # Resource *. Those APIs have no resource type. See iam-exceptions.md.
+        engagement_logs = logs.LogGroup(
+            self,
+            "EngagePartyStateMachineLogGroup",
+            retention=logs.RetentionDays.ONE_MONTH,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
         self.engage_party_state_machine = sfn.StateMachine(
             self,
             "EngagePartyStateMachine",
             state_machine_name="oerf-engage-party",
             state_machine_type=sfn.StateMachineType.STANDARD,
             role=engagement_role,
+            tracing_enabled=True,
+            logs=sfn.LogOptions(
+                destination=engagement_logs,
+                level=sfn.LogLevel.ERROR,
+                include_execution_data=False,
+            ),
             definition_body=sfn.DefinitionBody.from_string(engagement_definition),
         )
         workflow_role.add_to_policy(
@@ -285,6 +326,12 @@ class OerfDataStack(Stack):
         definition = definition.replace(
             "__ENGAGE_PARTY_ARN__", self.engage_party_state_machine.state_machine_arn
         )
+        cold_chain_logs = logs.LogGroup(
+            self,
+            "ColdChainStateMachineLogGroup",
+            retention=logs.RetentionDays.ONE_MONTH,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
         self.cold_chain_state_machine = sfn.StateMachine(
             self,
             "OerfColdChainStateMachine",
@@ -292,6 +339,11 @@ class OerfDataStack(Stack):
             state_machine_type=sfn.StateMachineType.STANDARD,
             role=workflow_role,
             tracing_enabled=True,
+            logs=sfn.LogOptions(
+                destination=cold_chain_logs,
+                level=sfn.LogLevel.ERROR,
+                include_execution_data=False,
+            ),
             definition_body=sfn.DefinitionBody.from_string(definition),
         )
         # ---------------------------------------------------------
@@ -301,6 +353,10 @@ class OerfDataStack(Stack):
         # custom_attributes here: Schema is create-only and would replace this pool.
         # V2 pre-token events, which copy custom:tenant_id onto the access token,
         # require Essentials or Plus.
+        # Password policy, MfaConfiguration, EnabledMfas, and
+        # TemporaryPasswordValidityDays are "Update requires: No interruption"
+        # (CloudFormation UserPool and PasswordPolicy). UserPoolAddOns is paid
+        # threat protection and stays unset.
         self.user_pool = cognito.UserPool(
             self,
             "OerfUserPool",
@@ -308,6 +364,16 @@ class OerfDataStack(Stack):
             self_sign_up_enabled=False,
             auto_verify=cognito.AutoVerifiedAttrs(email=True),
             feature_plan=cognito.FeaturePlan.ESSENTIALS,
+            password_policy=cognito.PasswordPolicy(
+                min_length=12,
+                require_lowercase=True,
+                require_uppercase=True,
+                require_digits=True,
+                require_symbols=True,
+                temp_password_validity=Duration.days(3),
+            ),
+            mfa=cognito.Mfa.OPTIONAL,
+            mfa_second_factor=cognito.MfaSecondFactor(sms=False, otp=True),
             removal_policy=RemovalPolicy.RETAIN,
         )
         self.user_pool.add_trigger(
