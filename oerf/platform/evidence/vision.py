@@ -30,6 +30,7 @@ from oerf.platform.evidence.policy import (
 )
 from oerf.platform.observability.ai_trace import TraceRejected, record_invocation
 from oerf.platform.observability.logging import get_logger, log
+from oerf.platform.storage.dynamo import incident_pk
 
 logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
@@ -154,6 +155,29 @@ def _policy(tenant_id: str) -> EvidencePolicy:
     return resolve_policy(tenant_id, tenant=tenant, config=config)
 
 
+def _persist_reading(
+    tenant_id: str,
+    incident_id: str,
+    evidence_key: str,
+    analysis: dict[str, Any],
+    verification: dict[str, Any],
+) -> None:
+    """Persist the validated reading on the canonical incident META item."""
+    if INCIDENT_TABLE_NAME:
+        get_dynamodb().Table(INCIDENT_TABLE_NAME).update_item(
+            Key={"pk": incident_pk(tenant_id, incident_id), "sk": "META"},
+            UpdateExpression=(
+                "SET evidence_analysis = :ea, evidence_verification = :ev, "
+                "last_analyzed_key = :k"
+            ),
+            ExpressionAttributeValues={
+                ":ea": analysis,
+                ":ev": verification,
+                ":k": evidence_key,
+            },
+        )
+
+
 def _record(
     *,
     latency_ms: int,
@@ -250,6 +274,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             known_fault_codes=policy.known_fault_codes,
             min_confidence=policy.min_confidence,
         )
+        _persist_reading(
+            tenant_id,
+            incident_id,
+            key,
+            reading.analysis,
+            reading.verification,
+        )
         log(
             logger,
             logging.INFO,
@@ -325,19 +356,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     _record(latency_ms=_elapsed_ms(started), response=response, outcome="SUCCESS")
 
-    if INCIDENT_TABLE_NAME:
-        get_dynamodb().Table(INCIDENT_TABLE_NAME).update_item(
-            Key={"pk": f"TENANT#{tenant_id}", "sk": f"INCIDENT#{incident_id}"},
-            UpdateExpression=(
-                "SET evidence_analysis = :ea, evidence_verification = :ev, "
-                "last_analyzed_key = :k"
-            ),
-            ExpressionAttributeValues={
-                ":ea": reading.analysis,
-                ":ev": reading.verification,
-                ":k": key,
-            },
-        )
+    _persist_reading(
+        tenant_id,
+        incident_id,
+        key,
+        reading.analysis,
+        reading.verification,
+    )
 
     log(
         logger,

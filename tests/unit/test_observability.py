@@ -17,6 +17,7 @@ ACCOUNT = "123456789012"
 REGION = "us-east-1"
 _NAMED_FUNCTIONS = {
     "oerf-channel-router",
+    "oerf-device-seed",
     "oerf-evidence-analyzer",
     "oerf-report-generator",
     "oerf-ws-handler",
@@ -123,7 +124,11 @@ def test_email_subscription_comes_only_from_context() -> None:
 
 
 def test_waba_providers_each_get_one_errors_alarm() -> None:
-    """Two Provider framework-onEvent functions must synth as two alarms."""
+    """Each Provider framework-onEvent function gets its own errors alarm.
+
+    With a WABA id the synth has three: the tenant-attribute provider, the
+    always-on device-seed provider, and the WABA provider.
+    """
 
     template, functions, _queues, _machines, _names = _build(
         context={"whatsapp:wabaId": "waba-0000000000000000"}
@@ -139,11 +144,11 @@ def test_waba_providers_each_get_one_errors_alarm() -> None:
         functions
     )
     framework = [fn for fn in functions if fn.node.id == "framework-onEvent"]
-    assert len(framework) == 2
+    assert len(framework) == 3
     prefixes = {
         re.sub(r"[^A-Za-z0-9]", "", error_alarm_id(fn, functions)) for fn in framework
     }
-    assert len(prefixes) == 2
+    assert len(prefixes) == 3
     for prefix in prefixes:
         assert any(logical_id.startswith(prefix) for logical_id in errors)
 
