@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 
 import { App } from "./App.jsx";
+import { acceptDeskEvent, mergeDeskRows, subscribeBody } from "./deskEvents.js";
 import {
   authorizeUrl,
   createVerifier,
   exchangeCode,
   loadIncident,
   loadIncidents,
+  presentIncident,
   principalFromIdToken,
   sendDashboard,
 } from "./session.js";
@@ -19,6 +21,7 @@ export function LiveDesk({ config }) {
   const [token, setToken] = useState(() => sessionStorage.getItem(ACCESS_KEY) || "");
   const [principal, setPrincipal] = useState(() => principalFromIdToken(tokenFromStorage()));
   const [incidents, setIncidents] = useState(null);
+  const [watchId, setWatchId] = useState("");
   const redirectUri = window.location.origin;
 
   useEffect(() => {
@@ -79,6 +82,36 @@ export function LiveDesk({ config }) {
     };
   }, [config.apiUrl, principal.authenticated, token]);
 
+  useEffect(() => {
+    if (!principal.authenticated || !token || !config.wsUrl) {
+      return undefined;
+    }
+    const scope = watchId ? "incident" : "tenant";
+    const socket = new WebSocket(`${config.wsUrl}?token=${encodeURIComponent(token)}`);
+    socket.addEventListener("open", () => {
+      socket.send(JSON.stringify(subscribeBody(scope, watchId)));
+    });
+    socket.addEventListener("message", (message) => {
+      const accepted = acceptDeskEvent(message.data, {
+        tenantId: principal.tenantId,
+        scope,
+        incidentId: watchId,
+      });
+      if (!accepted) {
+        return;
+      }
+      setIncidents((current) =>
+        mergeDeskRows(current, {
+          ...accepted,
+          incident: presentIncident(accepted.incident),
+        }),
+      );
+    });
+    return () => {
+      socket.close();
+    };
+  }, [config.wsUrl, principal.authenticated, principal.tenantId, token, watchId]);
+
   async function signIn() {
     const { verifier, challenge } = await createVerifier();
     sessionStorage.setItem(VERIFIER_KEY, verifier);
@@ -90,6 +123,7 @@ export function LiveDesk({ config }) {
   }
 
   async function select(incidentId) {
+    setWatchId(incidentId);
     const detail = await loadIncident(config.apiUrl, token, incidentId);
     setIncidents((current) => {
       if (!Array.isArray(current)) {

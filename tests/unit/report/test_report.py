@@ -112,19 +112,112 @@ def test_handler_without_a_tenant_does_not_read_or_publish(monkeypatch) -> None:
 
 def test_handler_publishes_a_versioned_html_report(monkeypatch) -> None:
     store = MemoryReportStore()
+    table = _Table(_stored_incident())
     monkeypatch.setattr("oerf.platform.report.generator._store", lambda: store)
-    monkeypatch.setattr("oerf.platform.report.generator.INCIDENT_TABLE_NAME", "")
+    monkeypatch.setattr("oerf.platform.report.generator.INCIDENT_TABLE_NAME", "incidents")
+    monkeypatch.setattr("oerf.platform.report.generator.get_dynamodb", lambda: table)
 
     result = handler(
         {"tenant_id": "t1", "incident_id": "INC-9", "qa_email": "qa@example.com"},
         None,
     )
+    html = store.objects[result["report_key"]].decode()
 
+    assert table.keys == [{"pk": "TENANT#t1#INC#INC-9", "sk": "META"}]
     assert result["success"] is True
     assert result["report_key"] == "reports/t1/INC-9/v1.html"
     assert result["locked"] is True
-    assert result["sha256"]
-    assert "qa@example.com" not in store.objects[result["report_key"]].decode()
+    assert result["sha256"] == hashlib.sha256(html.encode()).hexdigest()
+    assert "PH-9" in html
+    assert "EVT#2026-10-20T10:16:00Z#0001 OPEN" in html
+    assert "used_minutes=3" in html
+    assert "qa@example.com" not in html
+    assert "+910000000101" not in html
+    assert "task-token" not in html
+    assert "&lt;b&gt;" in html
+
+
+def test_handler_does_not_publish_when_the_incident_is_missing(monkeypatch) -> None:
+    store = MemoryReportStore()
+    table = _Table(None)
+    monkeypatch.setattr("oerf.platform.report.generator._store", lambda: store)
+    monkeypatch.setattr("oerf.platform.report.generator.INCIDENT_TABLE_NAME", "incidents")
+    monkeypatch.setattr("oerf.platform.report.generator.get_dynamodb", lambda: table)
+
+    missing = handler({"tenant_id": "t1", "incident_id": "INC-missing"}, None)
+    unnamed = handler({"tenant_id": "t1"}, None)
+
+    assert missing == {"success": False, "error": "incident_not_found"}
+    assert unnamed == {"success": False, "error": "incident_id_required"}
+    monkeypatch.setattr("oerf.platform.report.generator.INCIDENT_TABLE_NAME", "")
+    no_table = handler({"tenant_id": "t1", "incident_id": "INC-9"}, None)
+    assert no_table == {"success": False, "error": "incident_table_required"}
+    assert store.objects == {}
+
+
+def test_the_same_stored_incident_renders_the_same_html(monkeypatch) -> None:
+    store = MemoryReportStore()
+    table = _Table(_stored_incident())
+    monkeypatch.setattr("oerf.platform.report.generator._store", lambda: store)
+    monkeypatch.setattr("oerf.platform.report.generator.INCIDENT_TABLE_NAME", "incidents")
+    monkeypatch.setattr("oerf.platform.report.generator.get_dynamodb", lambda: table)
+
+    first = handler({"tenant_id": "t1", "incident_id": "INC-9"}, None)
+    second = handler({"tenant_id": "t1", "incident_id": "INC-9"}, None)
+
+    assert first["report_version"] == 1
+    assert second["report_version"] == 2
+    assert store.objects[first["report_key"]] == store.objects[second["report_key"]]
+
+
+class _Table:
+    def __init__(self, item: dict | None) -> None:
+        self.item = item
+        self.keys: list[dict] = []
+
+    def Table(self, _name: str) -> "_Table":
+        return self
+
+    def get_item(self, Key: dict) -> dict:
+        self.keys.append(Key)
+        if self.item is None:
+            return {}
+        if Key == {"pk": self.item["pk"], "sk": "META"}:
+            return {"Item": self.item}
+        return {}
+
+    def query(self, **_kwargs: object) -> dict:
+        if self.item is None:
+            return {"Items": []}
+        return {"Items": self.item.get("timeline_rows", [])}
+
+
+def _stored_incident() -> dict:
+    return {
+        "pk": "TENANT#t1#INC#INC-9",
+        "sk": "META",
+        "tenant_id": "t1",
+        "incident_id": "INC-9",
+        "shipment_id": "PH-9 <b>",
+        "state": "CONTAINED",
+        "reason": "temperature",
+        "evidence": {"fault_code": "E17", "phone": "+910000000101", "task_token": "task-token"},
+        "timeline_rows": [
+            {"sk": "EVT#2026-10-20T10:16:00Z#0001", "state": "OPEN", "reason": ""},
+        ],
+        "decision_trace": {
+            "used_minutes": 3,
+            "temperature_c": 8.19,
+            "allowance_minutes": 45,
+            "upper_c": 8,
+            "unload_min": 4,
+            "rise_rate_c_per_min": 0.03,
+            "cooldown_rate_c_per_min": 0.12,
+            "min_spare_allowance_min": 5,
+            "options": [],
+            "recommended": "FACILITY_A",
+        },
+    }
 
 
 def _ph2841() -> ReportDocument:

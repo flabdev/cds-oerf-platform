@@ -193,7 +193,7 @@ def dispatch(
         return 403, {"error": "tenant_mismatch"}
 
     incident_id = _match(r"^/incidents/([^/]+)$", path)
-    action_id = _match(r"^/incidents/([^/]+)/actions?$", path)
+    action_id = _match(r"^/incidents/([^/]+)/actions$", path)
     if method == "GET" and path == "/incidents":
         return _list(principal, services, limit=limit, cursor=cursor)
     if method == "GET" and incident_id and "/actions" not in path:

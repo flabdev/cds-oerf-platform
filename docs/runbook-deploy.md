@@ -23,6 +23,18 @@ The `*` also matches `cdk-hnb659fds-cfn-exec-role-<account>-us-east-1`. That rol
 
 The account must already be bootstrapped (`CDKToolkit` in `us-east-1`). This role cannot create the bootstrap stack.
 
+## Demo device seed
+
+`seed_demo_devices` writes `DEVICE#{device_id}` / `META` on the routing table from `sim/seed/*/shipments.json`. The row carries `tenant_id`, `shipment_id`, and `asset_id` (`truck`). Ingest only reads that row and still drops an unknown device. The files are the demo tenants `t1`, `t2`, and `sbx`. A second run replaces the same ids.
+
+Every `OerfComputeStack` deploy runs `oerf-device-seed` through the custom resource `DemoDeviceSeed` (`SeedVersion` `1`). Delete of that resource does not remove the rows.
+
+Unit tests do not prove the deployed table. After a deploy with the flag, confirm `RF-7781` resolves to tenant `t1` and shipment `PH-2841`, and that an id that is not in the seed files does not resolve.
+
+## Demo incident trigger
+
+`POST /incidents/trigger` on `oerf-http-api` stays as a demo hook. It requires a Cognito token, takes the tenant from `custom:tenant_id`, ignores a tenant in the body, and writes one item: `TENANT#{tenant}#INC#{id}` / `META`. It then calls `StartExecution`. Frozen ingest remains the EventBridge path. Dashboard actions are `POST /incidents/{id}/actions` and do not write incident state.
+
 ## First deploy from main
 
 Do this once, from `main`, before any later deploy uses the narrowed role.
