@@ -65,7 +65,6 @@ EXPECTED_FUNCTIONS = {
         "env": {
             "INCIDENT_TABLE_NAME",
             "ROUTING_TABLE_NAME",
-            "STATE_MACHINE_ARN",
             "INBOUND_QUEUE_URL",
         },
     },
@@ -77,6 +76,7 @@ EXPECTED_FUNCTIONS = {
             "ROUTING_TABLE_NAME",
             "PLATFORM_TABLE_NAME",
             "EVIDENCE_BUCKET_NAME",
+            "STATE_MACHINE_ARN",
             "LOG_LEVEL",
         },
     },
@@ -306,8 +306,16 @@ def test_send_task_success_is_only_on_the_inbound_role(template: Template) -> No
     assert "states:StopExecution" in inbound
     assert "states:SendTaskSuccess" not in action
     assert "states:SendTaskFailure" not in action
+    assert "states:StartExecution" not in action
+    assert "states:StartExecution" in role_actions(template, "oerf-ingest")
     assert "states:SendTaskSuccess" not in role_actions(template, "oerf-ingest")
     assert "sqs:SendMessage" in action
+    routes = [
+        resource["Properties"]["RouteKey"]
+        for resource in template.find_resources("AWS::ApiGatewayV2::Route").values()
+    ]
+    assert routes
+    assert all(not key.endswith("trigger") for key in routes)
 
 
 def test_inbound_can_stop_only_cold_chain_executions(template: Template) -> None:

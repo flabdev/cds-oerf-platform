@@ -1,9 +1,11 @@
 # OERF interface contract
 
-**FROZEN v1.12** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.14** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.14 (2026-10-23) `POST /incidents/trigger` is retired. The action handler does not call `states:StartExecution`. Ingest (`sim.reefer` on EventBridge) is the only start of an incident and its execution.
+- v1.13 (2026-10-23, ADR-019) `cancel` is implemented in the inbound handler. It stops the execution ingest started, sets the incident to `CANCELLED` through the repository, and does not resume a task token. A duplicate action or a `CLOSED` or `CANCELLED` incident does not call `StopExecution` again. `ExecutionDoesNotExist` is already finished and is not an error. Authorised roles are `platform_admin`, `tenant_admin`, and `ops_user`. The queued message carries that token `role`.
 - v1.12 (2026-10-23, OERF-308) the broadcaster envelope is `event_type`, `tenant_id`, `incident_id`, `version`, `emitted_at`, and `data`. Incident `data` is `state`, `stage`, `opened_at`, `updated_at`, `recommended_option`, and `option_ids`. Tenant-list `data` is `incident_id`, `state`, `stage`, and `version`. `timeline` and `evidence_analysis` are not sent. A subscription row with no `scope` receives nothing. `REMOVE` is not an event.
 - v1.11 (2026-10-22, ADR-019) a `cancel` action is handled by the inbound handler. It stops the `oerf-cold-chain` execution, sets the incident to `CANCELLED`, and the repository releases the lock. That handler logic is not implemented. The action handler has no task-token actions.
 - v1.10 (2026-10-22, OERF-303) the logger writes each JSON object to stdout and does not pass the record to a logging handler. A failed route sets `channel` to `none` when no channel was selected.
@@ -152,6 +154,7 @@ Queued message (tenant and user come from the token):
   "action": "pick_option",
   "option_id": "OPT-B",
   "user_id": "user-1",
+  "role": "ops_user",
   "type": "text",
   "text": null,
   "media_ref": null,
@@ -163,7 +166,7 @@ Dedupe key: `INMSG#{action_id}` (section 5). An action whose engagement is no lo
 
 Deployed deviation, Mudita (208/302) to migrate: `POST /incidents/{id}/action` accepts `APPROVE`, `REJECT`, and `OVERRIDE`. The handler does not call `SendTaskSuccess`.
 
-`cancel` enters through this queue. The inbound handler stops the `oerf-cold-chain` execution (`states:StopExecution` on that machine's executions only), sets the incident to `CANCELLED`, and the repository releases the shipment lock (ADR-019). The handler logic is not implemented. The project lead owns it.
+`cancel` enters through this queue. The inbound handler stops the execution ingest started (`states:StopExecution` on that machine's executions only). The execution name is the incident id sanitized the same way ingest names `StartExecution`, under `STATE_MACHINE_ARN`. The handler then sets the incident to `CANCELLED` through the repository, which writes the timeline event and releases the shipment lock (ADR-019). It does not call `states:SendTaskSuccess`. A duplicate `action_id`, or an incident already `CLOSED` or `CANCELLED`, does not call `StopExecution` again. `ExecutionDoesNotExist` means the execution is already finished and is not an error. Authorised roles are `platform_admin`, `tenant_admin`, and `ops_user`. Any other role is ignored. The queued `role` is the token role, not a client field. When `engagement_id` is present, the tenant cancelled is that stored engagement's tenant. Otherwise it is the stored incident's tenant. A message `tenant_id` that does not match the stored engagement is ignored.
 
 ## 4. Event envelopes
 
@@ -249,6 +252,7 @@ Owner: inbound handler (name pending, OERF-201–207). The queue message, after 
     "action": { "enum": ["confirm_transfer", "pick_option", "cancel", null] },
     "option_id": { "type": ["string", "null"] },
     "user_id": { "type": ["string", "null"] },
+    "role": { "enum": ["platform_admin", "tenant_admin", "ops_user"] },
     "type": { "enum": ["button", "text", "image", "audio", "document"] },
     "text": { "type": ["string", "null"] },
     "media_ref": { "type": ["string", "null"] },
@@ -302,7 +306,7 @@ Owner: OERF-112 for the repository (Mudita). Data-stack owner for indexes. Autho
 
 `PK=TENANT#{tid}#INC#{iid}`, `SK=META`. Timeline rows: `SK=EVT#{iso-timestamp}#{seq}`.
 
-Deployed deviation, Mudita (208): the action handler writes `PK=TENANT#{tid}`, `SK=INCIDENT#{id}`. That shape is not the contract.
+Ingest writes the authoritative key. The retired trigger route no longer writes a separate incident item.
 
 Lock item (ADR-016): `PK=TENANT#{tid}#SHIP#{sid}`, `SK=OPEN_INCIDENT`, conditional put, deleted on close or cancel.
 
@@ -372,7 +376,7 @@ API `oerf-http-api`. Cognito JWT authorizer, identity source `Authorization`. CO
 | `GET /incidents/{id}` | Incident META for the token tenant and path id: `incident_id`, `tenant_id`, `shipment_id`, `state`, `reason`, `opened_at`, `config_version`. `config_snapshot` is included on this authenticated read. `pk` and `sk` stay off the wire. |
 | `GET /incidents` | List for the token tenant. Blocked on GSI1 (pattern 12). Each row is the summary object in section 7.3. |
 
-Deployed and non-conformant: `POST /incidents/{id}/action`, and `POST /incidents/trigger` (the action handler writes an incident and calls `StartExecution`). Ingest is the EventBridge path in section 4.1. Whether `POST /incidents/trigger` remains as a demo hook is open (section 14).
+Deployed and non-conformant: `POST /incidents/{id}/action`. Ingest (`sim.reefer` / `TemperatureReading`) is the only way an incident and its execution start.
 
 ### 7.2 Subscribe
 
@@ -493,7 +497,7 @@ This ticket does not rename variables on deployed functions. OERF-301 sets missi
 | `EVIDENCE_BUCKET_NAME` | required when a function reads or writes evidence. Vision does not read this variable yet. | OERF-301 |
 | `REPORT_BUCKET_NAME` | deployed on the report function | compute stack |
 | `EVENT_BUS_NAME` | value `oerf-events`. Required on ingest and any publisher. | OERF-301 |
-| `STATE_MACHINE_ARN` | deployed on the action handler. Ingest reads it for `StartExecution`. | compute stack |
+| `STATE_MACHINE_ARN` | Inbound and ingest. Ingest uses it for `StartExecution`. Inbound uses it to derive the execution ARN for `StopExecution`. | compute stack |
 | `INBOUND_QUEUE_URL` | Inbound queue URL. Set on the action handler. OERF-208 reads it to send the dashboard action. | OERF-301 |
 | `CONFIG_ROOT` | directory of domain packages inside the asset. Value `domains`. The config library currently resolves the installed `domains` package and does not read this variable. | OERF-301, when a function needs an explicit root |
 | `LOG_LEVEL` | logging level name. Default `INFO` when unset. | OERF-301 / OERF-303 |
@@ -603,7 +607,7 @@ Mudita's other ticket numbers in this table are ownership for coordination. They
 | 1 | Resource env vars use `*_TABLE_NAME` and `*_BUCKET_NAME`. | Ananda, 301 (acked) |
 | 2 | Role comes from `cognito:groups`. `custom:role` is dropped. | contract |
 | 3 | Actions are `POST /incidents/{id}/actions` with `confirm_transfer`, `pick_option`, or `cancel`, plus `action_id`, via SQS. The deployed `/action` verbs are non-conformant. | Mudita, 208/302 |
-| 4 | Incident key `TENANT#{tid}#INC#{iid}` is authoritative. The action-handler key is non-conformant. | Mudita, 208 |
+| 4 | Incident key `TENANT#{tid}#INC#{iid}` is authoritative. Ingest writes it. | Mudita, 208 |
 | 5 | `states:SendTaskSuccess` belongs only to the inbound handler. | Ananda, 301 |
 | 6 | WebSocket scopes are incident (full sanitized event) and tenant list (summary only). No `ALL`. | Ananda 308, Mudita 302 |
 | 7 | Simulator `Detail` keeps `tenant_id` and `shipment_id`. Ingest uses `DEVICE#{id}` and drops the event when `detail.tenant_id` disagrees. | OERF-118 and ingest |
@@ -615,7 +619,7 @@ Mudita's other ticket numbers in this table are ownership for coordination. They
 ## 14. Open items
 
 1. OERF-201–207 owner names. Blank on purpose.
-2. `POST /incidents/trigger` on the action handler starts the placeholder state machine and writes the non-conformant incident key. The frozen ingest path is EventBridge. Owner to confirm whether the route stays as a demo hook: Mudita (208) with Ananda (301).
+2. Retired in v1.14. `POST /incidents/trigger` is removed. Ingest is the only start path.
 3. The report function's role has `ses:SendEmail`. ADR-008 puts SES send on the channel router. Mudita (117) confirms the report email path.
 4. `custom:tenant_id` is a data-stack change, not a product choice. It is HIGH and unblocked: [change request](change-requests/2026-10-18-cognito-custom-tenant-id.md).
 5. GSI1 is a data-stack change, dependency of OERF-302: [change request](change-requests/2026-10-18-incident-gsi1-by-status.md).

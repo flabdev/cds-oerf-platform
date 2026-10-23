@@ -67,6 +67,13 @@ from oerf.platform.channels.registry import (
 from oerf.platform.inbound.dedupe import MessageDedupePort
 from oerf.platform.inbound.dynamo import DynamoMessageDedupe
 from oerf.platform.inbound.normalize import NormalizationError, NormalizedMessage, normalize_inbound
+from oerf.platform.incidents.dynamo import DynamoIncidentStore
+from oerf.platform.incidents.repository import (
+    TERMINAL_STATES,
+    IncidentNotFound,
+    IncidentStore,
+    StaleIncidentUpdate,
+)
 from oerf.platform.observability.logging import get_logger, log
 
 logger = get_logger(__name__)
@@ -79,10 +86,17 @@ MAX_MEDIA_ITEMS = 10
 MAX_MEDIA_FIELD = 256
 MAX_CALLBACK_BYTES = 8192
 DASHBOARD_ACTIONS = frozenset({"confirm_transfer", "pick_option", "cancel"})
+CANCEL_ROLES = frozenset({"platform_admin", "tenant_admin", "ops_user"})
+_FINISHED_EXECUTION = frozenset({"ExecutionDoesNotExist"})
+_STATE_MACHINE = ":stateMachine:"
 
 
 class TaskCallbacks(Protocol):
     def send_task_success(self, *, taskToken: str, output: str) -> Any: ...
+
+
+class ExecutionStop(Protocol):
+    def stop_execution(self, *, executionArn: str, error: str, cause: str) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -91,6 +105,9 @@ class InboundDependencies:
     engagements: EngagementStore
     callbacks: TaskCallbacks
     registry: PhoneRegistry | None = None
+    incidents: IncidentStore | None = None
+    executions: ExecutionStop | None = None
+    state_machine_arn: str = ""
 
 
 _dependencies: InboundDependencies | None = None
@@ -112,11 +129,15 @@ def build_dependencies() -> InboundDependencies:
         )
     if _client is None:
         _client = boto3.client("dynamodb")
+    stepfunctions = boto3.client("stepfunctions")
     return InboundDependencies(
         dedupe=DynamoMessageDedupe(_client, ROUTING_TABLE_NAME),
         engagements=DynamoEngagementStore(_client, INCIDENT_TABLE_NAME, ROUTING_TABLE_NAME),
-        callbacks=boto3.client("stepfunctions"),
+        callbacks=stepfunctions,
         registry=DynamoPhoneRegistry(_client, ROUTING_TABLE_NAME, TENANT_TABLE_NAME),
+        incidents=DynamoIncidentStore(_client, INCIDENT_TABLE_NAME),
+        executions=stepfunctions,
+        state_machine_arn=os.environ.get("STATE_MACHINE_ARN", ""),
     )
 
 
@@ -298,6 +319,8 @@ def _process_dashboard(body: dict[str, Any], dependencies: InboundDependencies) 
             count=1,
         )
         return "duplicate"
+    if body.get("action") == "cancel":
+        return _cancel(body, tenant_id, incident_id, engagement_id, action_id, dependencies)
     if not engagement_id:
         log(
             logger,
@@ -343,6 +366,155 @@ def _process_dashboard(body: dict[str, Any], dependencies: InboundDependencies) 
         payload["option_id"] = option_id
     _resume(engagement, payload, dependencies)
     return "resumed"
+
+
+def _cancel(
+    body: dict[str, Any],
+    lookup_tenant: str,
+    lookup_incident: str,
+    engagement_id: str | None,
+    action_id: str,
+    dependencies: InboundDependencies,
+) -> str:
+    """Stop the ingest execution and cancel the stored incident.
+
+    The message tenant only selects the row. The engagement, when present,
+    and then the incident row supply the tenant that is cancelled. A body
+    execution ARN is ignored. This path does not resume a task token.
+    """
+
+    role = _nonblank(body.get("role"))
+    if role not in CANCEL_ROLES:
+        log(
+            logger,
+            logging.WARNING,
+            f"Ignoring cancel from an unauthorised role id={action_id}",
+            outcome="denied",
+            count=1,
+        )
+        return "ignored"
+    if dependencies.incidents is None or dependencies.executions is None:
+        raise RuntimeError("incident store and step functions are required to cancel")
+    tenant_id, incident_id = _cancel_target(
+        dependencies, lookup_tenant, lookup_incident, engagement_id
+    )
+    if tenant_id is None or incident_id is None:
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring cancel with no stored incident id={action_id}",
+            tenant_id=lookup_tenant,
+            incident_id=lookup_incident,
+            outcome="ignored",
+            count=1,
+        )
+        return "ignored"
+    try:
+        incident = dependencies.incidents.get(tenant_id, incident_id)
+    except IncidentNotFound:
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring cancel for a missing incident id={action_id}",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+            outcome="ignored",
+            count=1,
+        )
+        return "ignored"
+    if incident.tenant_id != tenant_id or incident.incident_id != incident_id:
+        return "ignored"
+    if incident.state in TERMINAL_STATES:
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring cancel for a terminal incident id={action_id}",
+            tenant_id=incident.tenant_id,
+            incident_id=incident.incident_id,
+            outcome="ignored",
+            count=1,
+        )
+        return "ignored"
+    _stop_execution(dependencies, incident.incident_id)
+    try:
+        dependencies.incidents.transition(
+            incident.tenant_id,
+            incident.incident_id,
+            from_state=incident.state,
+            to_state="CANCELLED",
+        )
+    except StaleIncidentUpdate:
+        latest = dependencies.incidents.get(incident.tenant_id, incident.incident_id)
+        if latest.state not in TERMINAL_STATES:
+            raise
+    log(
+        logger,
+        logging.INFO,
+        f"Cancelled incident id={action_id}",
+        tenant_id=incident.tenant_id,
+        incident_id=incident.incident_id,
+        outcome="cancelled",
+        count=1,
+    )
+    return "cancelled"
+
+
+def _cancel_target(
+    dependencies: InboundDependencies,
+    lookup_tenant: str,
+    lookup_incident: str,
+    engagement_id: str | None,
+) -> tuple[str | None, str | None]:
+    """Return the stored tenant and incident, ignoring a mismatched body."""
+
+    if not engagement_id:
+        return lookup_tenant, lookup_incident
+    engagement = dependencies.engagements.get(lookup_tenant, lookup_incident, engagement_id)
+    if engagement is None:
+        return None, None
+    if engagement.tenant_id != lookup_tenant or engagement.incident_id != lookup_incident:
+        return None, None
+    return engagement.tenant_id, engagement.incident_id
+
+
+def _stop_execution(dependencies: InboundDependencies, incident_id: str) -> None:
+    """Stop the execution, or accept that it is already gone.
+
+    A successful ``StopExecution`` covers an execution that is still running
+    and one the service accepts because it has already finished. The only
+    error treated the same way is ``ExecutionDoesNotExist``. Throttling,
+    access denied, and every other error propagate. The caller has not
+    changed the incident yet, and the SQS handler returns that record as a
+    partial-batch failure.
+    """
+
+    arn = _execution_arn(dependencies.state_machine_arn, incident_id)
+    executions = dependencies.executions
+    if executions is None:
+        raise RuntimeError("step functions are required to cancel")
+    try:
+        executions.stop_execution(executionArn=arn, error="Cancelled", cause="dashboard_cancel")
+    except ClientError as exc:
+        if not _is_finished_execution(exc):
+            raise
+
+
+def _execution_arn(state_machine_arn: str, incident_id: str) -> str:
+    """The execution ARN ingest would have started for this incident."""
+
+    from oerf.platform.ingest.handler import _execution_name
+
+    if _STATE_MACHINE not in state_machine_arn:
+        raise RuntimeError("STATE_MACHINE_ARN is required to cancel")
+    prefix, machine = state_machine_arn.split(_STATE_MACHINE, 1)
+    return f"{prefix}:execution:{machine}:{_execution_name(incident_id)}"
+
+
+def _is_finished_execution(exc: BaseException) -> bool:
+    code = None
+    if isinstance(exc, ClientError):
+        code = exc.response.get("Error", {}).get("Code")
+    return code in _FINISHED_EXECUTION
 
 
 def _resume(

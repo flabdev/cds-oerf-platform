@@ -441,6 +441,7 @@ class OerfComputeStack(Stack):
                 "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
                 "PLATFORM_TABLE_NAME": data_stack.platform_table.table_name,
                 "EVIDENCE_BUCKET_NAME": data_stack.evidence_bucket.bucket_name,
+                "STATE_MACHINE_ARN": data_stack.cold_chain_state_machine.state_machine_arn,
                 "LOG_LEVEL": "INFO",
             },
         )
@@ -452,8 +453,8 @@ class OerfComputeStack(Stack):
         # Inbound is the role that resumes a paused execution (ADR-028).
         self._grant_task_token(self.inbound_fn)
         # ADR-019. StopExecution applies to an execution ARN, not the state
-        # machine. The handler that calls it is not implemented; the project
-        # lead owns that logic.
+        # machine. The handler derives that ARN from STATE_MACHINE_ARN and the
+        # execution name ingest used for StartExecution.
         data_stack.cold_chain_state_machine.grant_execution(
             self.inbound_fn, "states:StopExecution"
         )
@@ -476,13 +477,11 @@ class OerfComputeStack(Stack):
             environment={
                 "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
                 "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
-                "STATE_MACHINE_ARN": data_stack.cold_chain_state_machine.state_machine_arn,
                 "INBOUND_QUEUE_URL": self.inbound_queue.queue_url,
             },
         )
         data_stack.incident_table.grant_read_write_data(self.action_handler_fn)
         data_stack.routing_table.grant_read_write_data(self.action_handler_fn)
-        data_stack.cold_chain_state_machine.grant_start_execution(self.action_handler_fn)
         self.inbound_queue.grant_send_messages(self.action_handler_fn)
 
         self.http_api = apigwv2.HttpApi(
@@ -509,12 +508,6 @@ class OerfComputeStack(Stack):
 
         action_integration = integrations.HttpLambdaIntegration(
             "ActionIntegration", self.action_handler_fn
-        )
-        self.http_api.add_routes(
-            path="/incidents/trigger",
-            methods=[apigwv2.HttpMethod.POST],
-            integration=action_integration,
-            authorizer=http_authorizer,
         )
         self.http_api.add_routes(
             path="/incidents",
@@ -560,8 +553,7 @@ class OerfComputeStack(Stack):
         data_stack.tenant_table.grant_read_data(self.ingest_fn)
         data_stack.routing_table.grant_read_data(self.ingest_fn)
         data_stack.incident_table.grant_read_write_data(self.ingest_fn)
-        # The placeholder handler does not call StartExecution. The real ingest
-        # (project lead, OERF-201-205) starts this state machine and no other.
+        # Ingest is the only caller of StartExecution. Cancel rebuilds this name.
         data_stack.cold_chain_state_machine.grant_start_execution(self.ingest_fn)
 
         self.ingest_dlq = sqs.Queue(
