@@ -26,6 +26,7 @@ from aws_cdk import (
     aws_sns as sns,
     aws_sns_subscriptions as subscriptions,
     aws_sqs as sqs,
+    custom_resources as cr,
 )
 from constructs import Construct
 
@@ -91,7 +92,6 @@ class OerfComputeStack(Stack):
                 "venv",
                 "tests",
                 "web",
-                "sim",
                 "node_modules",
                 "infra/custom_resources",
                 "**/*.pyc",
@@ -100,6 +100,31 @@ class OerfComputeStack(Stack):
                 "*.md",
                 "cds_oerf_platform.egg-info",
             ],
+        )
+
+        # ---------------------------------------------------------
+        # Seed the deterministic device registry once per deployment. The
+        # custom resource is idempotent (PutItem on DEVICE#{id}/META).
+        # ---------------------------------------------------------
+        self.device_seed_fn = self._function(
+            "DeviceSeedFunction",
+            function_name="oerf-device-seed",
+            handler="oerf.platform.channels.devices.seed_handler",
+            code=lambda_code,
+            timeout=Duration.seconds(30),
+            environment={"ROUTING_TABLE_NAME": data_stack.routing_table.table_name},
+        )
+        data_stack.routing_table.grant_write_data(self.device_seed_fn)
+        seed_provider = cr.Provider(
+            self,
+            "DeviceSeedProvider",
+            on_event_handler=self.device_seed_fn,
+        )
+        cr.CustomResource(
+            self,
+            "DemoDeviceSeed",
+            service_token=seed_provider.service_token,
+            properties={"SeedVersion": "1"},
         )
 
         # ---------------------------------------------------------
@@ -431,7 +456,22 @@ class OerfComputeStack(Stack):
         data_stack.incident_table.grant_read_write_data(self.inbound_fn)
         data_stack.tenant_table.grant_read_data(self.inbound_fn)
         data_stack.platform_table.grant_read_data(self.inbound_fn)
-        data_stack.evidence_bucket.grant_put(self.inbound_fn)
+        self.inbound_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["s3:PutObject"],
+                resources=[
+                    data_stack.evidence_bucket.arn_for_objects("tenants/*/inbound/*")
+                ],
+            )
+        )
+        self.inbound_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["secretsmanager:GetSecretValue"],
+                resources=[
+                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:oerf/whatsapp/access_token-*"
+                ],
+            )
+        )
         # Inbound is the role that resumes a paused execution (ADR-028).
         self._grant_task_token(self.inbound_fn)
         self.inbound_fn.add_event_source(

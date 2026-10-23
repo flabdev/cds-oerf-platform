@@ -50,6 +50,29 @@ def test_mock_path_keeps_the_output_schema(monkeypatch: pytest.MonkeyPatch) -> N
     assert result["analysis"]["setpoint_temp_c"] == 4.0
 
 
+def test_mock_reading_persists_to_canonical_incident_item(monkeypatch: pytest.MonkeyPatch) -> None:
+    stored: dict = {}
+
+    class _Table:
+        def update_item(self, **kwargs):
+            stored.update(kwargs)
+
+    class _Dynamo:
+        def Table(self, name):
+            stored["table"] = name
+            return _Table()
+
+    monkeypatch.setattr(vision, "USE_MOCK_BEDROCK", True)
+    monkeypatch.setattr(vision, "TENANT_TABLE_NAME", "")
+    monkeypatch.setattr(vision, "INCIDENT_TABLE_NAME", "incident-table")
+    monkeypatch.setattr(vision, "get_dynamodb", lambda: _Dynamo())
+
+    vision.handler(_EVENT, None)
+
+    assert stored["Key"] == {"pk": "TENANT#t1#INC#INC-1", "sk": "META"}
+    assert stored["ExpressionAttributeValues"][":ev"]
+
+
 def test_converse_uses_the_configured_model_and_parses_the_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -198,7 +221,7 @@ def test_a_well_formed_reading_is_validated_and_stored(
 
     assert result["analysis"]["fault_codes"] == ["AL02"]
     assert stored["table"] == "incident-table"
-    assert stored["Key"] == {"pk": "TENANT#t1", "sk": "INCIDENT#INC-1"}
+    assert stored["Key"] == {"pk": "TENANT#t1#INC#INC-1", "sk": "META"}
     assert stored["ExpressionAttributeValues"][":ea"]["fault_codes"] == ["AL02"]
     assert ":ev" in stored["ExpressionAttributeValues"]
     assert stored["ExpressionAttributeValues"][":k"] == _EVENT["key"]
