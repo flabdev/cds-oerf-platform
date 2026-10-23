@@ -40,6 +40,17 @@ def run_app(outdir: Path, **env_overrides: str) -> subprocess.CompletedProcess:
     )
 
 
+def framework_error_alarms(outdir: Path) -> list[str]:
+    """Logical ids of errors alarms on Provider framework-onEvent functions."""
+
+    template = json.loads((outdir / "OerfObservabilityStack.template.json").read_text())
+    return [
+        logical_id
+        for logical_id in template["Resources"]
+        if "frameworkonEventErrors" in logical_id
+    ]
+
+
 def stack_names(outdir: Path) -> set[str]:
     """CloudFormation stack ids in a synth output directory."""
     manifest = json.loads((outdir / "manifest.json").read_text())
@@ -154,8 +165,42 @@ def test_waba_app_gives_each_lambda_one_errors_alarm(tmp_path):
         for logical_id in templates["OerfObservabilityStack"]["Resources"]
         if "frameworkonEventErrors" in logical_id
     ]
-    # Tenant-attribute, device-seed, and WABA providers each get one alarm.
-    assert len(framework) == 3
+    # Tenant-attribute and WABA providers each get one alarm. Device seed is off.
+    assert len(framework) == 2
+
+
+def test_seed_devices_gate_changes_the_provider_alarm_count(tmp_path):
+    """Seed off is the tenant-attribute provider. Seed on adds the device-seed provider."""
+
+    off = tmp_path / "off"
+    on = tmp_path / "on"
+    both = tmp_path / "both"
+    off.mkdir()
+    on.mkdir()
+    both.mkdir()
+    bare = run_app(off, CDK_DEFAULT_ACCOUNT=ACCOUNT)
+    seeded = run_app(
+        on,
+        CDK_DEFAULT_ACCOUNT=ACCOUNT,
+        CDK_CONTEXT_JSON=json.dumps({"demo:seedDevices": "true"}),
+    )
+    combined = run_app(
+        both,
+        CDK_DEFAULT_ACCOUNT=ACCOUNT,
+        CDK_CONTEXT_JSON=json.dumps(
+            {
+                "whatsapp:wabaId": "waba-0000000000000000",
+                "demo:seedDevices": "true",
+            }
+        ),
+    )
+
+    assert bare.returncode == 0, bare.stderr
+    assert seeded.returncode == 0, seeded.stderr
+    assert combined.returncode == 0, combined.stderr
+    assert len(framework_error_alarms(off)) == 1
+    assert len(framework_error_alarms(on)) == 2
+    assert len(framework_error_alarms(both)) == 3
 
 
 def test_dashboard_flag_synthesizes_the_api_stack(tmp_path):

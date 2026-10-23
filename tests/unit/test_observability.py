@@ -17,7 +17,6 @@ ACCOUNT = "123456789012"
 REGION = "us-east-1"
 _NAMED_FUNCTIONS = {
     "oerf-channel-router",
-    "oerf-device-seed",
     "oerf-evidence-analyzer",
     "oerf-report-generator",
     "oerf-ws-handler",
@@ -126,8 +125,8 @@ def test_email_subscription_comes_only_from_context() -> None:
 def test_waba_providers_each_get_one_errors_alarm() -> None:
     """Each Provider framework-onEvent function gets its own errors alarm.
 
-    With a WABA id the synth has three: the tenant-attribute provider, the
-    always-on device-seed provider, and the WABA provider.
+    With a WABA id and device seeding off, the synth has two: the
+    tenant-attribute provider and the WABA provider.
     """
 
     template, functions, _queues, _machines, _names = _build(
@@ -144,13 +143,45 @@ def test_waba_providers_each_get_one_errors_alarm() -> None:
         functions
     )
     framework = [fn for fn in functions if fn.node.id == "framework-onEvent"]
-    assert len(framework) == 3
+    assert len(framework) == 2
     prefixes = {
         re.sub(r"[^A-Za-z0-9]", "", error_alarm_id(fn, functions)) for fn in framework
     }
-    assert len(prefixes) == 3
+    assert len(prefixes) == 2
     for prefix in prefixes:
         assert any(logical_id.startswith(prefix) for logical_id in errors)
+
+
+def test_device_seed_gate_adds_one_provider_alarm() -> None:
+    """Seed off keeps the tenant-attribute provider. Seed on adds device seed."""
+
+    off_errors, off_framework, off_names, off_functions = _framework_alarms()
+    assert "oerf-device-seed" not in off_names
+    assert len(off_framework) == 1
+    assert len(off_errors) == len(off_functions)
+
+    on_errors, on_framework, on_names, on_functions = _framework_alarms(
+        {"demo:seedDevices": "true"}
+    )
+    assert "oerf-device-seed" in on_names
+    assert len(on_framework) == len(off_framework) + 1
+    assert len(on_errors) == len(on_functions)
+    _assert_each_framework_alarm(on_errors, on_framework, on_functions)
+
+
+def test_waba_and_seed_providers_each_get_one_errors_alarm() -> None:
+    """WABA plus device seeding is three providers: tenant-attribute, seed, and WABA."""
+
+    errors, framework, names, functions = _framework_alarms(
+        {
+            "whatsapp:wabaId": "waba-0000000000000000",
+            "demo:seedDevices": "true",
+        }
+    )
+    assert "oerf-device-seed" in names
+    assert len(framework) == 3
+    assert len(errors) == len(functions)
+    _assert_each_framework_alarm(errors, framework, functions)
 
 
 def test_dashboard_lambdas_get_error_alarms() -> None:
@@ -163,6 +194,24 @@ def test_dashboard_lambdas_get_error_alarms() -> None:
         if "MetricName" in alarm["Properties"]
     ]
     assert errors.count("Errors") == len(functions)
+
+
+def _framework_alarms(context: dict | None = None):
+    template, functions, _queues, _machines, names = _build(context=context)
+    errors = {
+        logical_id: alarm
+        for logical_id, alarm in template.find_resources("AWS::CloudWatch::Alarm").items()
+        if alarm["Properties"].get("MetricName") == "Errors"
+    }
+    framework = [fn for fn in functions if fn.node.id == "framework-onEvent"]
+    return errors, framework, names, functions
+
+
+def _assert_each_framework_alarm(errors: dict, framework: list, functions: list) -> None:
+    prefixes = {re.sub(r"[^A-Za-z0-9]", "", error_alarm_id(fn, functions)) for fn in framework}
+    assert len(prefixes) == len(framework)
+    for prefix in prefixes:
+        assert any(logical_id.startswith(prefix) for logical_id in errors)
 
 
 def _assert_unique_function_alarms_keep_their_ids(alarms: dict, functions: list) -> None:

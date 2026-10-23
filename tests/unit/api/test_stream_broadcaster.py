@@ -241,7 +241,30 @@ const summary = acceptDeskEvent(input.summary, {
   scope: "tenant",
   incidentId: "",
 });
-process.stdout.write(JSON.stringify({ update, summary }));
+const otherTenant = acceptDeskEvent(input.update, {
+  tenantId: "other-tenant",
+  scope: "incident",
+  incidentId: input.update.incident_id,
+});
+const otherIncident = acceptDeskEvent(input.update, {
+  tenantId: input.update.tenant_id,
+  scope: "incident",
+  incidentId: "INC-OTHER",
+});
+const leaked = acceptDeskEvent(
+  {
+    ...input.update,
+    data: { ...input.update.data, evidence_analysis: { fault: "E17" } },
+  },
+  {
+    tenantId: input.update.tenant_id,
+    scope: "incident",
+    incidentId: input.update.incident_id,
+  },
+);
+process.stdout.write(JSON.stringify({
+  update, summary, otherTenant, otherIncident, leaked,
+}));
 """
 
 
@@ -276,6 +299,9 @@ def test_desk_accepts_broadcaster_update_and_summary(monkeypatch) -> None:
         "stage": "verify",
         "version": 4,
     }
+    assert accepted["otherTenant"] is None
+    assert accepted["otherIncident"] is None
+    assert accepted["leaked"] is None
 
 
 @pytest.mark.security
