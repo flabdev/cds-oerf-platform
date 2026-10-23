@@ -15,11 +15,12 @@ from typing import Any
 
 import boto3
 
+from oerf.platform.observability.logging import get_logger, log
 from oerf.platform.report.model import ReportDocument
 from oerf.platform.report.service import publish_report
 from oerf.platform.report.store import MemoryReportStore, S3ReportStore
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 REPORT_BUCKET_NAME = os.environ.get("REPORT_BUCKET_NAME", "")
@@ -45,7 +46,7 @@ def get_dynamodb():
 
 def format_report_markdown(incident: dict[str, Any]) -> str:
     """Render a clean GxP-compliant incident report."""
-    tenant_id = incident.get("tenant_id", "Unknown")
+    tenant_id = incident.get("tenant_id") or ""
     incident_id = incident.get("incident_id", "Unknown")
     shipment_id = incident.get("shipment_id", "Unknown")
     status = incident.get("status", "RESOLVED")
@@ -102,10 +103,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         "qa_email": "qa-manager@pharma.com"
     }
     """
-    logger.info("Generating report for: %s", json.dumps(event))
-
-    tenant_id = event.get("tenant_id", "T1")
+    tenant_id = _required_text(event.get("tenant_id"))
     incident_id = event.get("incident_id", "unknown")
+    if tenant_id is None:
+        logger.error("Rejected report: tenant_required")
+        return {"success": False, "error": "tenant_required"}
 
     # Fetch incident details from table
     incident = {}
@@ -132,7 +134,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     )
     receipt = publish_report(document, _store())
     s3_uri = f"s3://{REPORT_BUCKET_NAME}/{receipt.s3_key}" if REPORT_BUCKET_NAME else ""
-    logger.info("Published report %s for %s", receipt.s3_key, incident_id)
+    log(
+        logger,
+        logging.INFO,
+        "report_published",
+        tenant_id=tenant_id,
+        incident_id=incident_id if isinstance(incident_id, str) else None,
+        outcome="published",
+        count=receipt.report_version,
+    )
     return {
         "success": True,
         "report_key": receipt.s3_key,
@@ -143,6 +153,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         "generated_at": receipt.generated_at,
         "sections": receipt.sections,
     }
+
+
+def _required_text(value: Any) -> str | None:
+    """Return a stripped string, or None when the value is missing or blank."""
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 def _store():

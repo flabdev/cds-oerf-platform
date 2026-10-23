@@ -94,6 +94,22 @@ def test_pdf_backend_without_a_renderer_still_publishes_html(monkeypatch) -> Non
     assert receipt.s3_key.endswith(".html")
 
 
+def test_handler_without_a_tenant_does_not_read_or_publish(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "oerf.platform.report.generator.get_dynamodb",
+        lambda: (_ for _ in ()).throw(AssertionError("dynamodb")),
+    )
+    monkeypatch.setattr(
+        "oerf.platform.report.generator._store",
+        lambda: (_ for _ in ()).throw(AssertionError("s3")),
+    )
+    monkeypatch.setattr("oerf.platform.report.generator.INCIDENT_TABLE_NAME", "incidents")
+
+    result = handler({"incident_id": "INC-9", "qa_email": "qa@example.com"}, None)
+
+    assert result == {"success": False, "error": "tenant_required"}
+
+
 def test_handler_publishes_a_versioned_html_report(monkeypatch) -> None:
     store = MemoryReportStore()
     monkeypatch.setattr("oerf.platform.report.generator._store", lambda: store)

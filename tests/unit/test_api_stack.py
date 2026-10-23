@@ -1,8 +1,10 @@
 """Template assertions for the dashboard API stack. No AWS calls."""
 
+import json
+
 import aws_cdk as cdk
 import pytest
-from aws_cdk import aws_sqs as sqs
+from aws_cdk import aws_cloudfront as cloudfront, aws_sqs as sqs
 from aws_cdk.assertions import Template
 
 from infra.stacks.api_stack import OerfApiStack
@@ -34,6 +36,91 @@ def templates() -> tuple[Template, Template]:
 @pytest.fixture(scope="module")
 def template(templates: tuple[Template, Template]) -> Template:
     return templates[0]
+
+
+def test_api_permissions_require_this_account(template: Template) -> None:
+    permissions = template.find_resources("AWS::Lambda::Permission")
+    assert permissions
+    for logical_id, resource in permissions.items():
+        props = resource["Properties"]
+        assert props["Principal"] == "apigateway.amazonaws.com"
+        assert props["SourceAccount"] == ACCOUNT, logical_id
+        assert "SourceArn" in props
+
+
+def test_stage_throttles_and_logs_the_request_line(template: Template) -> None:
+    stages = template.find_resources("AWS::ApiGateway::Stage")
+    assert len(stages) == 1
+    props = next(iter(stages.values()))["Properties"]
+    settings = props["MethodSettings"]
+    assert len(settings) == 1
+    assert settings[0]["ResourcePath"] == "/*"
+    assert settings[0]["HttpMethod"] == "*"
+    assert settings[0]["ThrottlingRateLimit"] == 20
+    assert settings[0]["ThrottlingBurstLimit"] == 40
+    log_format = props["AccessLogSetting"]["Format"]
+    for field in (
+        "$context.requestId",
+        "$context.identity.sourceIp",
+        "$context.httpMethod",
+        "$context.resourcePath",
+        "$context.status",
+        "$context.responseLatency",
+        "$context.authorizer.claims.sub",
+    ):
+        assert field in log_format
+    lowered = log_format.lower()
+    for forbidden in ("header", "body", "query", "token", "authorization"):
+        assert forbidden not in lowered
+    destination = json.dumps(props["AccessLogSetting"]["DestinationArn"])
+    groups = template.find_resources("AWS::Logs::LogGroup")
+    matched = [
+        group
+        for logical_id, group in groups.items()
+        if logical_id in destination
+    ]
+    assert len(matched) == 1
+    assert matched[0]["Properties"]["RetentionInDays"] == 30
+    accounts = template.find_resources("AWS::ApiGateway::Account")
+    assert len(accounts) == 1
+    role_arn = next(iter(accounts.values()))["Properties"]["CloudWatchRoleArn"]
+    role_id = role_arn["Fn::GetAtt"][0]
+    role = template.find_resources("AWS::IAM::Role")[role_id]
+    assert role["DeletionPolicy"] == "Retain"
+    assert role["UpdateReplacePolicy"] == "Retain"
+
+
+def test_throttle_limits_come_from_context() -> None:
+    app = cdk.App(context={"api:throttleRate": "5", "api:throttleBurst": "9"})
+    env = cdk.Environment(account=ACCOUNT, region=REGION)
+    data = OerfDataStack(app, "OerfDataStack", env=env)
+    refs = cdk.Stack(app, "InboundRefs", env=env)
+    queue = sqs.Queue(refs, "InboundQueue")
+    stack = OerfApiStack(
+        app,
+        "OerfApiStack",
+        data_stack=data,
+        inbound_queue=queue,
+        websocket_url=WEBSOCKET_URL,
+        env=env,
+    )
+    stage = next(iter(Template.from_stack(stack).find_resources("AWS::ApiGateway::Stage").values()))
+    settings = stage["Properties"]["MethodSettings"][0]
+    assert settings["ThrottlingRateLimit"] == 5
+    assert settings["ThrottlingBurstLimit"] == 9
+
+
+def test_distribution_uses_the_security_headers_policy(template: Template) -> None:
+    distributions = template.find_resources("AWS::CloudFront::Distribution")
+    assert len(distributions) == 1
+    behavior = next(iter(distributions.values()))["Properties"]["DistributionConfig"][
+        "DefaultCacheBehavior"
+    ]
+    assert behavior["ViewerProtocolPolicy"] == "redirect-to-https"
+    assert (
+        behavior["ResponseHeadersPolicyId"]
+        == cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS.response_headers_policy_id
+    )
 
 
 def test_rest_routes_require_the_cognito_authorizer(template: Template) -> None:
@@ -99,6 +186,40 @@ def test_dashboard_bucket_is_private_behind_cloudfront(template: Template) -> No
     )
     template.resource_count_is("AWS::CloudFront::Distribution", 1)
     template.resource_count_is("AWS::CloudFront::OriginAccessControl", 1)
+    buckets = template.find_resources("AWS::S3::Bucket")
+    assert len(buckets) == 1
+    rule = next(iter(buckets.values()))["Properties"]["BucketEncryption"]
+    default = rule["ServerSideEncryptionConfiguration"][0]
+    assert default["ServerSideEncryptionByDefault"] == {"SSEAlgorithm": "AES256"}
+    assert "BucketKeyEnabled" not in default
+
+
+def test_dashboard_roles_are_not_granted_kms(template: Template) -> None:
+    found = []
+    for policy in template.find_resources("AWS::IAM::Policy").values():
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            if statement.get("Effect") == "Deny":
+                continue
+            action = statement.get("Action", [])
+            names = [action] if isinstance(action, str) else list(action)
+            found.extend(name for name in names if name.startswith("kms:"))
+    assert found == []
+
+
+def test_dashboard_functions_trace_and_keep_logs_for_thirty_days(template: Template) -> None:
+    functions = template.find_resources("AWS::Lambda::Function")
+    assert len(functions) == 2
+    log_groups = template.find_resources("AWS::Logs::LogGroup")
+    assert len(log_groups) == 3
+    referenced = set()
+    for props in functions.values():
+        assert props["Properties"]["TracingConfig"] == {"Mode": "Active"}
+        log_group = props["Properties"]["LoggingConfig"]["LogGroup"]
+        assert "Ref" in log_group
+        referenced.add(log_group["Ref"])
+    assert referenced < set(log_groups)
+    for group in log_groups.values():
+        assert group["Properties"]["RetentionInDays"] == 30
 
 
 def test_websocket_is_the_compute_endpoint_and_cors_is_cloudfront(

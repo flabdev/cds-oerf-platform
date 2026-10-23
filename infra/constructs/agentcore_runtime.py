@@ -51,6 +51,10 @@ class AgentCoreRuntime(Construct):
         model_id: str,
     ) -> None:
         super().__init__(scope, construct_id)
+        # CDK v2 reads the repo-root .dockerignore into the staging exclude
+        # list and matches it with IgnoreMode.DOCKER. The flag
+        # @aws-cdk/aws-ecr-assets:dockerIgnoreSupport defaults on, so the
+        # same allow-list is not passed again as exclude.
         image_asset = ecr_assets.DockerImageAsset(
             self,
             "Image",
@@ -58,11 +62,25 @@ class AgentCoreRuntime(Construct):
             file=str(_DOCKERFILE.relative_to(_REPO_ROOT)),
             platform=ecr_assets.Platform.LINUX_ARM64,
         )
+        stack = Stack.of(self)
+        # AgentCore passes both keys when it assumes this role.
+        # https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-permissions.html
         self.execution_role = iam.Role(
             self,
             "AgentRuntimeExecutionRole",
             role_name="oerf-agent-runtime",
-            assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"),
+            assumed_by=iam.ServicePrincipal(
+                "bedrock-agentcore.amazonaws.com",
+                conditions={
+                    "StringEquals": {"aws:SourceAccount": stack.account},
+                    "ArnLike": {
+                        "aws:SourceArn": stack.format_arn(
+                            service="bedrock-agentcore",
+                            resource="*",
+                        )
+                    },
+                },
+            ),
         )
         image_asset.repository.grant_pull(self.execution_role)
         incident_table.grant_read_data(self.execution_role)

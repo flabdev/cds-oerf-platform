@@ -34,11 +34,13 @@ from constructs import Construct
 from infra.constructs.agentcore_runtime import AgentCoreRuntime
 from infra.constructs.bedrock_guardrail import BedrockGuardrail
 from infra.constructs.waba_event_destination import WabaEventDestination
+from infra.iam_conditions import pin_source_account
+from infra.runtime_asset import runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
 
 # Task-token APIs have no resource type in the IAM Service Authorization
 # Reference. The resource stays "*"; see docs/security/iam-exceptions.md.
-_TASK_TOKEN_ACTIONS = ["states:SendTaskSuccess", "states:SendTaskFailure"]
+_TASK_TOKEN_ACTIONS = ["states:SendTaskSuccess"]
 _INBOUND_TIMEOUT = Duration.seconds(30)
 _VISIBILITY_MULTIPLE = 6
 _DEFAULT_INGEST_CONCURRENCY = 5
@@ -82,26 +84,10 @@ class OerfComputeStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
 
         # Shared asset. Packaged from the repo root so imports stay ``oerf.*``
-        # and do not shadow the stdlib ``platform`` module.
-        lambda_code = lambda_.Code.from_asset(
-            ".",
-            exclude=[
-                "cdk.out",
-                ".git",
-                ".github",
-                ".venv",
-                "venv",
-                "tests",
-                "web",
-                "node_modules",
-                "infra/custom_resources",
-                "**/*.pyc",
-                "**/__pycache__",
-                ".pytest_cache",
-                "*.md",
-                "cds_oerf_platform.egg-info",
-            ],
-        )
+        # and do not shadow the stdlib ``platform`` module. The allow-list is
+        # ``oerf``, ``domains``, and ``sim``, which keeps the demo shipment
+        # seed data available to ``seed_demo_devices``.
+        lambda_code = lambda_.Code.from_asset(".", **runtime_code_args())
 
         # ---------------------------------------------------------
         # Seed the deterministic device registry once per deployment. The
@@ -389,12 +375,25 @@ class OerfComputeStack(Stack):
         # DynamoEventSource adds dynamodb:ListStreams on Resource *.
         # ListStreams has no resource type. The stream read actions stay on
         # this table's stream ARN. See docs/security/iam-exceptions.md.
+        # A failed batch is bisected, then sent here after 24 hours or the
+        # retry limit. DynamoDB streams are not readable past 24 hours.
+        self.stream_dlq = sqs.Queue(
+            self,
+            "StreamBroadcasterDlq",
+            encryption=sqs.QueueEncryption.SQS_MANAGED,
+            enforce_ssl=True,
+            retention_period=Duration.days(14),
+        )
         self.stream_broadcaster_fn.add_event_source(
             event_sources.DynamoEventSource(
                 data_stack.incident_table,
                 starting_position=lambda_.StartingPosition.LATEST,
                 batch_size=10,
                 retry_attempts=3,
+                bisect_batch_on_error=True,
+                max_record_age=Duration.hours(24),
+                report_batch_item_failures=True,
+                on_failure=event_sources.SqsDlq(self.stream_dlq),
             )
         )
 
@@ -409,17 +408,20 @@ class OerfComputeStack(Stack):
             "InboundTopic",
             display_name="oerf-inbound",
             fifo=False,
+            enforce_ssl=True,
         )
         self.inbound_dlq = sqs.Queue(
             self,
             "InboundDlq",
             encryption=sqs.QueueEncryption.SQS_MANAGED,
+            enforce_ssl=True,
             retention_period=Duration.days(14),
         )
         self.inbound_queue = sqs.Queue(
             self,
             "InboundQueue",
             encryption=sqs.QueueEncryption.SQS_MANAGED,
+            enforce_ssl=True,
             visibility_timeout=Duration.seconds(
                 _INBOUND_TIMEOUT.to_seconds() * _VISIBILITY_MULTIPLE
             ),
@@ -475,6 +477,12 @@ class OerfComputeStack(Stack):
         )
         # Inbound is the role that resumes a paused execution (ADR-028).
         self._grant_task_token(self.inbound_fn)
+        # ADR-019. StopExecution applies to an execution ARN, not the state
+        # machine. The handler that calls it is not implemented; the project
+        # lead owns that logic.
+        data_stack.cold_chain_state_machine.grant_execution(
+            self.inbound_fn, "states:StopExecution"
+        )
         self.inbound_fn.add_event_source(
             event_sources.SqsEventSource(
                 self.inbound_queue,
@@ -502,13 +510,6 @@ class OerfComputeStack(Stack):
         data_stack.routing_table.grant_read_write_data(self.action_handler_fn)
         data_stack.cold_chain_state_machine.grant_start_execution(self.action_handler_fn)
         self.inbound_queue.grant_send_messages(self.action_handler_fn)
-        # OERF-208: action_handler.py still calls SendTaskSuccess. The contract
-        # gives that action to the inbound role. Keep it here while
-        # compat:actionHandlerTaskToken is true (the default) so the deployed
-        # handler keeps working. Set the flag to false once OERF-208 sends the
-        # action to INBOUND_QUEUE_URL instead.
-        if _context_enabled(self, "compat:actionHandlerTaskToken", default=True):
-            self._grant_task_token(self.action_handler_fn)
 
         self.http_api = apigwv2.HttpApi(
             self,
@@ -589,10 +590,11 @@ class OerfComputeStack(Stack):
         # (project lead, OERF-201-205) starts this state machine and no other.
         data_stack.cold_chain_state_machine.grant_start_execution(self.ingest_fn)
 
-        ingest_dlq = sqs.Queue(
+        self.ingest_dlq = sqs.Queue(
             self,
             "IngestTargetDlq",
             encryption=sqs.QueueEncryption.SQS_MANAGED,
+            enforce_ssl=True,
             retention_period=Duration.days(14),
         )
         temperature_rule = events.Rule(
@@ -607,7 +609,7 @@ class OerfComputeStack(Stack):
         temperature_rule.add_target(
             targets.LambdaFunction(
                 self.ingest_fn,
-                dead_letter_queue=ingest_dlq,
+                dead_letter_queue=self.ingest_dlq,
                 retry_attempts=2,
                 max_event_age=Duration.hours(1),
             )
@@ -646,6 +648,7 @@ class OerfComputeStack(Stack):
         CfnOutput(self, "ChannelRouterArn", value=self.channel_router_fn.function_arn)
         CfnOutput(self, "EvidenceAnalyzerArn", value=self.evidence_analyzer_fn.function_arn)
         CfnOutput(self, "ReportGeneratorArn", value=self.report_generator_fn.function_arn)
+        pin_source_account(self)
 
     def _function(
         self,
@@ -691,7 +694,7 @@ class OerfComputeStack(Stack):
         )
 
     def _grant_task_token(self, fn: lambda_.Function) -> None:
-        """Allow SendTaskSuccess and SendTaskFailure. Resource must be ``*``."""
+        """Allow SendTaskSuccess. SendTaskFailure is not granted. Resource is ``*``."""
         fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=_TASK_TOKEN_ACTIONS,
