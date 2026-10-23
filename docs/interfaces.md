@@ -1,9 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.16** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.17** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.17 (2026-10-23) WhatsApp media is stored by End User Messaging `GetWhatsAppMessageMedia`. The handler checks `mimeType` and `fileSize` with `metadataOnly`, then signs a presigned PUT (`headers` empty, no SSE header, 300 seconds) for `tenants/{tenant_id}/inbound/{sha256}/{uuid}{ext}`. The bucket default SSE-KMS `aws/s3` applies. Allowed types are `image/jpeg`, `image/png`, `image/webp`, and `application/pdf`. The size cap is `INBOUND_MEDIA_MAX_BYTES`, default 10 MB. The origination phone id is `WA_PHONE_NUMBER_ID_PARAM` from SSM, or `WHATSAPP_PHONE_NUMBER_ID` when that parameter name is unset. No Meta token is read.
 - v1.16 (2026-10-23) Incident-scope `INCIDENT_UPDATE` `data` is `incident_id`, `state`, `stage`, integer `version`, and `updated_at` when the image has one. `incident_id` and `version` match the envelope. `opened_at`, `recommended_option`, and `option_ids` are not sent. `INCIDENT_SUMMARY` is unchanged. The desk allowlist in `web/src/deskEvents.js` accepts this payload.
 - v1.15 (2026-10-23) Combined with origin/main (PRs #28 and #29). An unquoted provider reply resumes only when exactly one waiting engagement is stored for that sender; zero or several are ignored. WhatsApp media is downloaded with the Meta Graph API (`https://graph.facebook.com/v21.0/{media_id}`, secret `oerf/whatsapp/access_token`) and stored at `tenants/{tenant_id}/inbound/{sha256}/{uuid}`. Vision writes `evidence_analysis` and `evidence_verification` on incident META. `DemoDeviceSeed` is the only device-seed custom resource and runs on every `OerfComputeStack` deploy. WebSocket `event_type` values stay `INCIDENT_SUMMARY` and `INCIDENT_UPDATE`. `POST /incidents/trigger` stays retired.
 - v1.14 (2026-10-23) `POST /incidents/trigger` is retired. The action handler does not call `states:StartExecution`. Ingest (`sim.reefer` on EventBridge) is the only start of an incident and its execution.
@@ -277,7 +278,7 @@ Order for a provider message:
 2. Opt-out keywords (`STOP`, `UNSUBSCRIBE`, and the tenant's local equivalents) before correlation. Set opt-in false and stop that contact's engagements.
 3. `JOIN` (exact text, case-insensitive) when `PHONE#{e164}` has no item whose sort key is a non-sandbox tenant. A number registered to any non-sandbox tenant is not joined. A repeat `JOIN` returns that judge's existing sandbox shipment. The daily counter is `PK=SANDBOX#JOINS#{date}`, `SK=META`, conditional increment while `count` is below `sandbox.max_joins_per_day` (platform setting, default 20). Over the cap, the reply logical name is `sandbox_full`. Under the cap, the sandbox tenant gains a contact (opted in) and a shipment, and the logical reply is `judge_welcome`. Both replies go out through the channel router.
 4. Correlation. `context_msg_id` loads `OUTMSG#{id}`. With no context id, `ADDR#{channel}#{address}` loads open engagements. Exactly one match is used. Zero or several are ignored; the handler does not send a disambiguation reply. The channel router writes that address row, SK `ENG#{tid}#{iid}#{eid}`, when it registers an outbound message, and deletes it when the engagement leaves `WAITING`. The address is the phone or email that was sent; it is not taken from the inbound body.
-5. WhatsApp media is downloaded with the Meta Graph API and secret `oerf/whatsapp/access_token`, then stored at `tenants/{tenant_id}/inbound/{sha256(message_id)}/{uuid}{ext}` with SSE-S3. The handler then calls `states:SendTaskSuccess` on the current rung token. Classification happens in the engagement Interpret step (ADR-017), not here. Vision later writes `evidence_analysis` and `evidence_verification` on incident META.
+5. WhatsApp media is stored by End User Messaging `GetWhatsAppMessageMedia`. A `metadataOnly` call must return an allowed `mimeType` (`image/jpeg`, `image/png`, `image/webp`, `application/pdf`) and a `fileSize` at or under `INBOUND_MEDIA_MAX_BYTES` (default 10 MB). The handler then signs a presigned PUT for `tenants/{tenant_id}/inbound/{sha256(message_id)}/{uuid}{ext}` with SigV4 in `us-east-1`, a 300 second expiry, and no extra headers. It does not set server-side encryption; the evidence bucket default SSE-KMS `aws/s3` applies. A second call passes that URL as `destinationS3PresignedUrl`. The handler does not download the bytes and does not read a Meta token. A disallowed type, an oversize file, or an invalid media id is acknowledged and omitted from the callback. Throttling and a 5xx are retried. A missing origination phone id fails closed. The handler then calls `states:SendTaskSuccess` on the current rung token. Classification happens in the engagement Interpret step (ADR-017), not here. Vision later writes `evidence_analysis` and `evidence_verification` on incident META.
 
 Dashboard messages skip steps 2–4 and correlate on `engagement_id`.
 
@@ -505,14 +506,15 @@ This ticket does not rename variables on deployed functions. OERF-301 sets missi
 | `USER_POOL_ID` | deployed on the WebSocket authorizer | compute stack |
 | `USER_POOL_CLIENT_ID` | deployed on the WebSocket authorizer | compute stack |
 | `WEBSOCKET_ENDPOINT` | deployed on the broadcaster | compute stack |
-| `WHATSAPP_PHONE_NUMBER_ID` | Router. Value is context `whatsapp:phoneNumberId`, default empty. | WhatsApp infra |
+| `WHATSAPP_PHONE_NUMBER_ID` | Router and inbound. Value is context `whatsapp:phoneNumberId`, default empty. Used only when `WA_PHONE_NUMBER_ID_PARAM` is unset. | WhatsApp infra |
 | `SES_SOURCE_EMAIL` | deployed on the router and the report function | compute stack |
 | `USE_MOCK_WHATSAPP` | Router. Default `true`. `false` only when context `channels:live` is true. | WhatsApp infra |
 | `USE_MOCK_SMS` | Router. Same default as `USE_MOCK_WHATSAPP`. | WhatsApp infra |
 | `USE_MOCK_EMAIL` | Router. Same default as `USE_MOCK_WHATSAPP`. | WhatsApp infra |
 | `USE_MOCK_BEDROCK` | Vision. Default `true`. `false` only when context `channels:live` is true. | ADR-020 |
 | `BEDROCK_MODEL_ID` | Vision. Context `bedrock:modelId`, default `amazon.nova-lite-v1:0`. | ADR-020 |
-| `WA_PHONE_NUMBER_ID_PARAM` | Router. Value `/oerf/whatsapp/phone-number-id`. The handler does not read it yet. | WhatsApp infra |
+| `WA_PHONE_NUMBER_ID_PARAM` | Router and inbound. Value `/oerf/whatsapp/phone-number-id`. The handler reads that SSM parameter once per process. An empty or failed read does not fall back to `WHATSAPP_PHONE_NUMBER_ID`. | WhatsApp infra |
+| `INBOUND_MEDIA_MAX_BYTES` | Inbound. Default `10485760` (10 MB). WhatsApp `fileSize` above this is rejected. | compute stack |
 | `GUARDRAIL_ID` | Vision only. Id of the guardrail in `OerfComputeStack`. | OERF-310 |
 | `GUARDRAIL_VERSION` | Vision only. Published version of that guardrail. | OERF-310 |
 | `AGENT_RUNTIME_ARN` | Value of stack output `AgentRuntimeArn` when context `agentcore:enabled` is true. Cross-stack export name is `AGENT-RUNTIME-ARN` because an export name cannot contain underscores. Not set on a function. Default synth leaves it unset. | OERF-312 |
