@@ -1,7 +1,10 @@
 """Stream broadcaster isolation, envelope, and batch failures. No AWS calls."""
 
 import json
+import os
+import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from boto3.dynamodb.types import TypeSerializer
@@ -207,18 +210,72 @@ def test_tenant_list_rows_get_summary_keys_only(monkeypatch) -> None:
     incident = by_connection["conn-x"]
     assert incident["event_type"] == "INCIDENT_UPDATE"
     assert set(incident["data"]) == {
+        "incident_id",
         "state",
         "stage",
-        "opened_at",
         "updated_at",
-        "recommended_option",
-        "option_ids",
+        "version",
     }
-    assert incident["data"]["option_ids"] == ["facility-a", "continue"]
-    assert incident["data"]["recommended_option"] == "facility-a"
+    assert incident["data"]["incident_id"] == "INC-X"
+    assert incident["data"]["version"] == 4
+    assert isinstance(incident["data"]["version"], int)
     assert incident["version"] == 4
     assert incident["emitted_at"] == "2026-10-18T12:00:00Z"
     _assert_clean(list(by_connection.values()))
+
+
+_DESK_EVENTS = Path(__file__).resolve().parents[3] / "web" / "src" / "deskEvents.js"
+_DESK_CHECK = """
+import { pathToFileURL } from "node:url";
+const { acceptDeskEvent } = await import(pathToFileURL(process.env.DESK_EVENTS).href);
+const chunks = [];
+for await (const chunk of process.stdin) chunks.push(chunk);
+const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+const update = acceptDeskEvent(input.update, {
+  tenantId: input.update.tenant_id,
+  scope: "incident",
+  incidentId: input.update.incident_id,
+});
+const summary = acceptDeskEvent(input.summary, {
+  tenantId: input.summary.tenant_id,
+  scope: "tenant",
+  incidentId: "",
+});
+process.stdout.write(JSON.stringify({ update, summary }));
+"""
+
+
+def _accept_on_desk(update: dict, summary: dict) -> dict:
+    """Run the real desk validator. Node resolves ``web/src/deskEvents.js``."""
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", _DESK_CHECK],
+        input=json.dumps({"update": update, "summary": summary}),
+        text=True,
+        capture_output=True,
+        check=False,
+        env={**os.environ, "DESK_EVENTS": str(_DESK_EVENTS)},
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_desk_accepts_broadcaster_update_and_summary(monkeypatch) -> None:
+    items = [_sub("conn-x", "incident", "INC-X"), _sub("conn-list", "tenant")]
+    _result, _table, api = _run(monkeypatch, items, [_record(_meta())])
+    by_connection = dict(api.sent)
+    accepted = _accept_on_desk(by_connection["conn-x"], by_connection["conn-list"])
+
+    assert accepted["update"]["kind"] == "update"
+    assert accepted["update"]["incident"]["incident_id"] == "INC-X"
+    assert accepted["update"]["incident"]["version"] == 4
+    assert accepted["summary"]["kind"] == "summary"
+    assert accepted["summary"]["incident"] == {
+        "incident_id": "INC-X",
+        "state": "VERIFYING",
+        "stage": "verify",
+        "version": 4,
+    }
 
 
 @pytest.mark.security

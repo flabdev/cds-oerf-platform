@@ -1,9 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.15** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.16** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.16 (2026-10-23) Incident-scope `INCIDENT_UPDATE` `data` is `incident_id`, `state`, `stage`, integer `version`, and `updated_at` when the image has one. `incident_id` and `version` match the envelope. `opened_at`, `recommended_option`, and `option_ids` are not sent. `INCIDENT_SUMMARY` is unchanged. The desk allowlist in `web/src/deskEvents.js` accepts this payload.
 - v1.15 (2026-10-23) Combined with origin/main (PRs #28 and #29). An unquoted provider reply resumes only when exactly one waiting engagement is stored for that sender; zero or several are ignored. WhatsApp media is downloaded with the Meta Graph API (`https://graph.facebook.com/v21.0/{media_id}`, secret `oerf/whatsapp/access_token`) and stored at `tenants/{tenant_id}/inbound/{sha256}/{uuid}`. Vision writes `evidence_analysis` and `evidence_verification` on incident META. `DemoDeviceSeed` is the only device-seed custom resource and runs on every `OerfComputeStack` deploy. WebSocket `event_type` values stay `INCIDENT_SUMMARY` and `INCIDENT_UPDATE`. `POST /incidents/trigger` stays retired.
 - v1.14 (2026-10-23) `POST /incidents/trigger` is retired. The action handler does not call `states:StartExecution`. Ingest (`sim.reefer` on EventBridge) is the only start of an incident and its execution.
 - v1.13 (2026-10-23, ADR-019) `cancel` is implemented in the inbound handler. It stops the execution ingest started, sets the incident to `CANCELLED` through the repository, and does not resume a task token. A duplicate action or a `CLOSED` or `CANCELLED` incident does not call `StopExecution` again. `ExecutionDoesNotExist` is already finished and is not an error. Authorised roles are `platform_admin`, `tenant_admin`, and `ops_user`. The queued message carries that token `role`.
@@ -405,7 +406,7 @@ Shared by OERF-302 and OERF-308. Times are UTC `YYYY-MM-DDTHH:MM:SSZ`.
 
 The envelope is exactly these keys. `scope` is not a field. The subscription row chooses which `data` object is sent. Adding a `data` key is a minor version of this contract.
 
-Incident scope (`event_type` `INCIDENT_UPDATE`). `data` may contain only `state`, `stage`, `opened_at`, `updated_at`, `recommended_option`, and `option_ids`. `state` and `stage` are always present. A timestamp is copied only when it is `YYYY-MM-DDTHH:MM:SSZ` or a non-negative integer epoch second. `recommended_option` is the option id string. `option_ids` is the list of option id strings, not the option objects. Absent values are omitted.
+Incident scope (`event_type` `INCIDENT_UPDATE`). `data` is `incident_id`, `state`, `stage`, and integer `version`, plus `updated_at` when the image has one. `incident_id` is the same value as the envelope. `version` is the same integer as the envelope. `state` and `stage` are always present. `updated_at` is copied only when it is `YYYY-MM-DDTHH:MM:SSZ` or a non-negative integer epoch second. `opened_at`, `recommended_option`, and `option_ids` are not sent. The desk also allows `config_version`, `from_state`, `latest_reading`, `shipment_id`, `timeline`, and `to_state`; this broadcaster does not send them.
 
 ```json
 {
@@ -415,12 +416,11 @@ Incident scope (`event_type` `INCIDENT_UPDATE`). `data` may contain only `state`
   "version": 4,
   "emitted_at": "2026-10-18T12:00:00Z",
   "data": {
+    "incident_id": "INC-000123",
     "state": "VERIFYING",
     "stage": "verify",
-    "opened_at": "2026-10-18T11:00:00Z",
     "updated_at": "2026-10-18T12:00:00Z",
-    "recommended_option": "facility-a",
-    "option_ids": ["facility-a", "continue"]
+    "version": 4
   }
 }
 ```
@@ -443,7 +443,7 @@ Tenant-list scope (`event_type` `INCIDENT_SUMMARY`). `data` is exactly these fou
 }
 ```
 
-Neither payload carries a raw DynamoDB image, `timeline`, `evidence_analysis`, message text, phone numbers, names, task tokens, prompts, images, or model output. A record whose key is not `TENANT#{tid}#INC#{id}` / `META`, or that has no tenant id and incident id, is skipped. `REMOVE` is skipped. This contract has no removed event. A connection subscribed to tenant A never receives tenant B. An incident subscription receives only that incident's `INCIDENT_UPDATE`. A row whose `scope` is missing, `ALL`, or `*` receives nothing. A `scope` of `tenant` is the tenant list and receives `INCIDENT_SUMMARY` only.
+Neither payload carries a raw DynamoDB image, `opened_at`, `recommended_option`, `option_ids`, `timeline`, `evidence_analysis`, message text, phone numbers, names, task tokens, prompts, images, or model output. A record whose key is not `TENANT#{tid}#INC#{id}` / `META`, or that has no tenant id and incident id, is skipped. `REMOVE` is skipped. This contract has no removed event. A connection subscribed to tenant A never receives tenant B. An incident subscription receives only that incident's `INCIDENT_UPDATE`. A row whose `scope` is missing, `ALL`, or `*` receives nothing. A `scope` of `tenant` is the tenant list and receives `INCIDENT_SUMMARY` only.
 
 ## 8. Handler entry points
 
