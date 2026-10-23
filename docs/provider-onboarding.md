@@ -18,7 +18,7 @@ reads environment flags and returns one of `simulated`, `not_configured`, or
 
 | Channel | Secret name | Status today | External owner | What is still open |
 | --- | --- | --- | --- | --- |
-| WhatsApp | `oerf/whatsapp/phone_number_id` | external approval | AWS account owner | Business registration, approved templates, webhook |
+| WhatsApp | `oerf/whatsapp/phone_number_id`; `oerf/whatsapp/access_token` | external approval | AWS account owner | Business registration, approved templates, webhook |
 | SMS | `oerf/pinpoint/origination_number` | external approval | AWS account owner | Pinpoint origination number |
 | Email, outbound | `oerf/ses/source_identity` | external approval | AWS account owner | SPF, DKIM, production sending access |
 | Email, inbound QA | `oerf/ses/inbound_rule` and `oerf/ses/qa_allowlist` | external approval | AWS account owner | Receipt rule, spam and virus checks |
@@ -34,6 +34,9 @@ application does not write secret values.
 
 Sender identity is the End User Messaging Social phone number id, supplied at
 runtime as `WHATSAPP_PHONE_NUMBER_ID` from `oerf/whatsapp/phone_number_id`.
+Inbound media download reads the Meta access token from the narrowly scoped
+`oerf/whatsapp/access_token` Secrets Manager secret. Store either a plain token
+or JSON with an `access_token` field; the inbound Lambda never logs or forwards it.
 The message body is rendered by the channel router from the template catalog
 in `domains/cold_chain_excursion/messages.json`. Only `driver_checkin` has SMS
 text today. Other template ids fail that channel with `no_template` and the
@@ -96,9 +99,10 @@ report goes through the channel router.
 ## Secret access
 
 OERF-301 creates the secrets named above and grants the channel-router role
-`secretsmanager:GetSecretValue` on those names only. The role does not get
-`PutSecretValue`. Runtime values are written by the account owner. This
-repository does not contain them.
+`secretsmanager:GetSecretValue` on those names only. The inbound role additionally
+gets `secretsmanager:GetSecretValue` on `oerf/whatsapp/access_token` only, for
+Meta media downloads. Neither role gets `PutSecretValue`. Runtime values are
+written by the account owner. This repository does not contain them.
 
 ## Simulated and delivered
 

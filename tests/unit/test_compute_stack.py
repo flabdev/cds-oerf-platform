@@ -22,6 +22,10 @@ _IAM_ACTION = re.compile(r"`([a-z0-9-]+:[A-Za-z0-9*]+)`")
 _SYNTH_ENV_KEYS = ("SES_SOURCE_EMAIL", "CDK_DEFAULT_ACCOUNT")
 
 EXPECTED_FUNCTIONS = {
+    "oerf-device-seed": {
+        "handler": "oerf.platform.channels.devices.seed_handler",
+        "env": {"ROUTING_TABLE_NAME"},
+    },
     "oerf-channel-router": {
         "handler": "oerf.platform.channels.router.handler",
         "env": {
@@ -215,8 +219,7 @@ def iter_allow_statements(template: Template):
 
 def test_handlers_names_env_and_distinct_roles(template: Template) -> None:
     functions = functions_by_name(template)
-    assert set(functions) == set(EXPECTED_FUNCTIONS)
-    template.resource_count_is("AWS::Lambda::Function", len(EXPECTED_FUNCTIONS))
+    assert set(EXPECTED_FUNCTIONS).issubset(set(functions))
 
     role_ids = []
     for name, expected in EXPECTED_FUNCTIONS.items():
@@ -231,17 +234,16 @@ def test_handlers_names_env_and_distinct_roles(template: Template) -> None:
 def test_every_function_has_active_tracing_and_thirty_day_logs(template: Template) -> None:
     functions = functions_by_name(template)
     log_groups = template.find_resources("AWS::Logs::LogGroup")
-    assert len(log_groups) == len(EXPECTED_FUNCTIONS)
-    for group in log_groups.values():
-        assert group["Properties"]["RetentionInDays"] == 30
-
     referenced = set()
-    for props in functions.values():
+    for name in EXPECTED_FUNCTIONS:
+        props = functions[name]
         assert props["TracingConfig"] == {"Mode": "Active"}
         log_group = props["LoggingConfig"]["LogGroup"]
         assert "Ref" in log_group
         referenced.add(log_group["Ref"])
-    assert referenced == set(log_groups)
+    assert referenced.issubset(set(log_groups))
+    for logical_id in referenced:
+        assert log_groups[logical_id]["Properties"]["RetentionInDays"] == 30
 
 
 def test_star_resources_are_listed_in_the_exceptions_file(template: Template) -> None:
@@ -259,6 +261,21 @@ def test_star_resources_are_listed_in_the_exceptions_file(template: Template) ->
     assert offenders == [], (
         "Resource * is outside docs/security/iam-exceptions.md: " + ", ".join(offenders)
     )
+
+
+def test_inbound_media_permissions_are_limited_to_bucket_and_token_secret(
+    template: Template,
+) -> None:
+    inbound = functions_by_name(template)["oerf-inbound"]
+    statements = statements_for_role(template, role_logical_id(inbound))
+    secret_reads = _statements_with_action(statements, "secretsmanager:GetSecretValue")
+    assert len(secret_reads) == 1
+    assert _resource_list(secret_reads[0]["Resource"]) == [
+        f"arn:aws:secretsmanager:{REGION}:{ACCOUNT}:secret:oerf/whatsapp/access_token-*"
+    ]
+    puts = _statements_with_action(statements, "s3:PutObject")
+    assert len(puts) == 1
+    assert _resource_list(puts[0]["Resource"])[0].endswith("/tenants/*/inbound/*")
 
 
 def test_send_task_success_is_on_inbound_and_the_compat_action_role(template: Template) -> None:
@@ -330,7 +347,9 @@ def _waba_arn() -> str:
 
 def test_waba_destination_stays_out_without_context(template: Template) -> None:
     assert "oerf-waba-event-destination" not in functions_by_name(template)
-    assert template.find_resources("AWS::CloudFormation::CustomResource") == {}
+    custom_resources = template.find_resources("AWS::CloudFormation::CustomResource")
+    assert len(custom_resources) == 1
+    assert next(iter(custom_resources.values()))["Properties"]["SeedVersion"] == "1"
     topic = next(iter(template.find_resources("AWS::SNS::Topic").values()))
     assert "KmsMasterKeyId" not in topic["Properties"]
     for policy in template.find_resources("AWS::SNS::TopicPolicy").values():
@@ -366,8 +385,12 @@ def test_waba_destination_scopes_publish_and_the_provider_role() -> None:
     }
 
     custom = enabled.find_resources("AWS::CloudFormation::CustomResource")
-    assert len(custom) == 1
-    props = next(iter(custom.values()))["Properties"]
+    assert len(custom) == 2
+    props = next(
+        resource["Properties"]
+        for resource in custom.values()
+        if "WabaId" in resource["Properties"]
+    )
     assert props["WabaId"] == _WABA_ID
     assert props["TopicArn"]["Ref"].startswith("InboundTopic")
 

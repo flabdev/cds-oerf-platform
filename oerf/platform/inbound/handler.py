@@ -2,9 +2,10 @@
 
 Ordering for a provider message follows ``docs/interfaces.md`` section 5:
 normalize, dedupe on ``INMSG#{provider_msg_id}``, opt-out keywords, correlate on
-``OUTMSG#{context_msg_id}`` (or nothing when the reply quotes nothing), check the
-engagement is still ``WAITING``, then ``states:SendTaskSuccess`` on the persisted
-token. A dashboard action skips opt-out and correlation: the API already wrote
+``OUTMSG#{context_msg_id}`` when quoted, otherwise match exactly one waiting
+engagement on ``ADDR#{channel}#{sender}``, validate sender ownership, store inbound
+media as evidence, and then resume the persisted task token. A dashboard action
+skips opt-out and correlation: the API already wrote
 ``tenant_id``, ``incident_id`` and ``engagement_id`` from a verified token, so the
 engagement is loaded with a tenant-scoped ``get``.
 
@@ -34,21 +35,21 @@ Boundaries this module keeps:
   the execution because a reply was unusable would let whoever holds a contacted
   number stop a workflow, so an unusable reply leaves the rung waiting instead.
 
-``TODO(OERF-301)``: deploy this entry point on the inbound SQS queue with
-``ReportBatchItemFailures``, and grant ``states:SendTaskSuccess`` to this role
-while removing it from the action handler (ADR-028). The module reads
-``INCIDENT_TABLE_NAME``, ``ROUTING_TABLE_NAME`` and ``TENANT_TABLE_NAME``, all
-of which the deployed ``oerf-inbound`` function already sets; no infrastructure
-is changed here. Section 5 items still owned elsewhere: the ``ADDR#`` fallback
-with its ``disambiguation`` and out-of-context replies, the ``JOIN`` sandbox
-path, and evidence storage of inbound media (OERF-207).
+The inbound Lambda uses the deployed evidence bucket and accesses only the
+``oerf/whatsapp/access_token`` secret for Meta media download. A missing or
+ambiguous address match is acknowledged without resuming; a storage or provider
+failure releases the dedupe id for retry. The ``JOIN`` sandbox path remains
+separate from this provider reply handler.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import urllib.parse
+import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -77,7 +78,142 @@ MAX_REPLY_TEXT = 4000
 MAX_MEDIA_ITEMS = 10
 MAX_MEDIA_FIELD = 256
 MAX_CALLBACK_BYTES = 8192
+MAX_MEDIA_BYTES = 15 * 1024 * 1024
+WHATSAPP_ACCESS_TOKEN_SECRET = "oerf/whatsapp/access_token"
+WHATSAPP_GRAPH_API_VERSION = "v21.0"
+META_MEDIA_HOSTS = frozenset({"lookaside.fbsbx.com"})
 DASHBOARD_ACTIONS = frozenset({"confirm_transfer", "pick_option", "cancel"})
+
+
+class _MetaMediaRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Permit redirects only to the expected HTTPS Meta media host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urllib.parse.urlparse(newurl)
+        if parsed.scheme != "https" or parsed.hostname not in META_MEDIA_HOSTS:
+            raise ValueError("WhatsApp media redirect is not an approved Meta host")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class MediaEvidenceStore(Protocol):
+    def store(
+        self, tenant_id: str, message_id: str, media_id: str, mime_type: str | None
+    ) -> str | None:
+        """Download one provider media item and return its tenant-scoped S3 key."""
+
+
+class WhatsAppMediaEvidenceStore:
+    """Fetch Meta media using its ID API, then persist bytes in the evidence bucket."""
+
+    def __init__(self, bucket_name: str) -> None:
+        self._bucket = bucket_name
+        self._s3 = boto3.client("s3")
+        self._secrets = boto3.client("secretsmanager")
+        self._token: str | None = None
+
+    def _access_token(self) -> str:
+        if self._token is None:
+            secret = self._secrets.get_secret_value(SecretId=WHATSAPP_ACCESS_TOKEN_SECRET)
+            value = secret.get("SecretString", "")
+            try:
+                parsed = json.loads(value)
+            except (TypeError, json.JSONDecodeError):
+                parsed = value
+            if isinstance(parsed, dict):
+                value = parsed.get("access_token", "")
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("WhatsApp media access token is unavailable")
+            self._token = value.strip()
+        return self._token
+
+    def store(self, tenant_id: str, message_id: str, media_id: str, mime_type: str | None) -> str:
+        token = self._access_token()
+        metadata_url = (
+            f"https://graph.facebook.com/{WHATSAPP_GRAPH_API_VERSION}/"
+            f"{urllib.parse.quote(media_id, safe='')}"
+        )
+        opener = urllib.request.build_opener(_MetaMediaRedirectHandler())
+        metadata_request = urllib.request.Request(
+            metadata_url,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        try:
+            with opener.open(metadata_request, timeout=10) as response:
+                metadata = json.loads(response.read(64 * 1024))
+        except Exception:
+            raise ValueError("WhatsApp media metadata request failed") from None
+        download_url = metadata.get("url") if isinstance(metadata, dict) else None
+        if not isinstance(download_url, str):
+            raise ValueError("WhatsApp media response did not include a download URL")
+        parsed_url = urllib.parse.urlparse(download_url)
+        if parsed_url.scheme != "https" or parsed_url.hostname not in META_MEDIA_HOSTS:
+            raise ValueError("WhatsApp media download URL is not an approved Meta host")
+        download_request = urllib.request.Request(
+            download_url,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        try:
+            with opener.open(download_request, timeout=20) as response:
+                content = response.read(MAX_MEDIA_BYTES + 1)
+        except Exception:
+            raise ValueError("WhatsApp media download failed") from None
+        if len(content) > MAX_MEDIA_BYTES:
+            raise ValueError("WhatsApp media exceeds the maximum evidence size")
+        content_type = mime_type or str(metadata.get("mime_type") or "application/octet-stream")
+        extension = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+            "audio/ogg": ".ogg",
+            "application/pdf": ".pdf",
+        }.get(content_type.split(";", 1)[0].lower(), ".bin")
+        message_ref = hashlib.sha256(message_id.encode("utf-8")).hexdigest()
+        evidence_key = (
+            f"tenants/{tenant_id}/inbound/{message_ref}/{uuid.uuid4().hex}{extension}"
+        )
+        self._s3.put_object(
+            Bucket=self._bucket,
+            Key=evidence_key,
+            Body=content,
+            ContentType=content_type,
+            ServerSideEncryption="AES256",
+        )
+        return evidence_key
+
+
+def _evidence_store() -> MediaEvidenceStore | None:
+    bucket = os.environ.get("EVIDENCE_BUCKET_NAME", "").strip()
+    return WhatsAppMediaEvidenceStore(bucket) if bucket else None
+
+
+def _persist_media(
+    message: NormalizedMessage,
+    tenant_id: str,
+    store: MediaEvidenceStore | None,
+) -> list[dict[str, str | None]]:
+    """Store provider media and project only safe metadata into the callback."""
+    projected: list[dict[str, str | None]] = []
+    for item in message.media[:MAX_MEDIA_ITEMS]:
+        if not item.id:
+            raise ValueError("provider media id is required for evidence storage")
+        if store is None:
+            raise RuntimeError("evidence bucket is required for inbound media")
+        evidence_key = store.store(
+            tenant_id,
+            message.provider_msg_id,
+            item.id,
+            item.mime_type,
+        )
+        projected.append(
+            {
+                "id": item.id[:MAX_MEDIA_FIELD],
+                "mime_type": item.mime_type[:MAX_MEDIA_FIELD]
+                if item.mime_type is not None
+                else None,
+                **({"evidence_key": evidence_key} if evidence_key else {}),
+            }
+        )
+    return projected
 
 
 class TaskCallbacks(Protocol):
@@ -90,6 +226,7 @@ class InboundDependencies:
     engagements: EngagementStore
     callbacks: TaskCallbacks
     registry: PhoneRegistry | None = None
+    media_evidence: MediaEvidenceStore | None = None
 
 
 _dependencies: InboundDependencies | None = None
@@ -116,6 +253,7 @@ def build_dependencies() -> InboundDependencies:
         engagements=DynamoEngagementStore(_client, INCIDENT_TABLE_NAME, ROUTING_TABLE_NAME),
         callbacks=boto3.client("stepfunctions"),
         registry=DynamoPhoneRegistry(_client, ROUTING_TABLE_NAME, TENANT_TABLE_NAME),
+        media_evidence=_evidence_store(),
     )
 
 
@@ -167,7 +305,7 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
         raise RuntimeError("provider inbound requires a sender registry")
     reply = handle_reply(
         message.text,
-        context_id or message.provider_msg_id,
+        context_id,
         message.sender,
         engagements=dependencies.engagements,
         registry=dependencies.registry,
@@ -175,17 +313,29 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
     if reply.kind == "opt_out":
         logger.info("Handled provider opt-out; stopped=%d", len(reply.stopped_ids))
         return "opt_out"
-    if reply.engagement is None:
+    engagement = reply.engagement
+    if context_id is None:
+        candidates = dependencies.engagements.for_address(message.channel, message.sender)
+        if len(candidates) != 1:
+            logger.info(
+                "Ignoring unquoted reply with candidate_count=%d id=%s",
+                len(candidates),
+                message.provider_msg_id,
+            )
+            return "ignored"
+        engagement = candidates[0]
+    if engagement is None:
         logger.info("Ignoring unknown or late provider reply id=%s", message.provider_msg_id)
         return "ignored"
     resolution = dependencies.registry.resolve_sender(message.sender)
-    if not _sender_owns_engagement(reply.engagement, resolution):
+    if not _sender_owns_engagement(engagement, resolution):
         logger.warning(
             "Ignoring reply from a sender that does not own engagement=%s",
-            reply.engagement.engagement_id,
+            engagement.engagement_id,
         )
         return "ignored"
-    _resume(reply.engagement, _provider_payload(message), dependencies)
+    media = _persist_media(message, engagement.tenant_id, dependencies.media_evidence)
+    _resume(engagement, _provider_payload(message, media), dependencies)
     return "resumed"
 
 
@@ -308,7 +458,10 @@ def _engagement_block(engagement: Engagement) -> dict[str, Any]:
     }
 
 
-def _provider_payload(message: NormalizedMessage) -> dict[str, Any]:
+def _provider_payload(
+    message: NormalizedMessage,
+    media: list[dict[str, str | None]] | None = None,
+) -> dict[str, Any]:
     """Strip the provider envelope and cap user-controlled values before callback."""
     return {
         "channel": message.channel,
@@ -316,7 +469,9 @@ def _provider_payload(message: NormalizedMessage) -> dict[str, Any]:
         "received_at": message.received_at,
         "type": message.type,
         "text": message.text[:MAX_REPLY_TEXT] if message.text is not None else None,
-        "media": [
+        "media": media
+        if media is not None
+        else [
             {
                 "id": item.id[:MAX_MEDIA_FIELD] if item.id is not None else None,
                 "mime_type": (
