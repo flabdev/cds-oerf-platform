@@ -1,9 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.19** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.20** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.20 (2026-10-23) The six cold-chain step functions are `oerf-step-context`, `oerf-step-assess`, `oerf-step-act`, `oerf-step-verify`, `oerf-step-qa`, and `oerf-step-close` in `OerfComputeStack`. `oerf-cold-chain` invokes them for `GatherContext`, `Assess`, `Act`, `VerifyLoop`, `QA`, and `Close`. Every other task in that machine, and every task in `oerf-engage-party`, still invokes `ColdChainWorkflowStub`. Ingest copies a shipment row's `product_profile` onto `workflow.shipment.product_profile_id` when that id is absent. The stored shipment row is unchanged.
 - v1.19 (2026-10-23) Ingest writes one temperature row while the shipment lock is present: `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}` with `seq` six digits, attributes `ts` and `temperature_c` only, `expires_at` 90 days from the reading. A conditional put leaves an existing key unchanged. The report temperature section reads those rows. The broadcaster stream filter stays on `SK=META`, so `READ#` is not delivered.
 - v1.18 (2026-10-23) Combined with origin/main (PR #30). `DemoDeviceSeed` is created only when context `demo:seedDevices` is true; a normal deploy does not write seed rows. `DeviceSeedFunctionRole` and its X-Ray `Resource: *` exist only in that synth (`docs/security/iam-exceptions.md`). The report generator writes an S3 key only when it is absent (`IfNoneMatch`), pages through every list result, fills the temperature section from `READ#`, and the state timeline from `EVT#`. A missing tenant, a missing incident, or a META `tenant_id` that does not match the event still fails closed. The broadcaster envelope stays the v1.16 shape. The desk rejects another tenant, another incident, and a private field; this broadcaster does not send `shipment_id`, `config_version`, `latest_reading`, `from_state`, `to_state`, or `timeline`.
 - v1.17 (2026-10-23) WhatsApp media is stored by End User Messaging `GetWhatsAppMessageMedia`. The handler checks `mimeType` and `fileSize` with `metadataOnly`, then signs a presigned PUT (`headers` empty, no SSE header, 300 seconds) for `tenants/{tenant_id}/inbound/{sha256}/{uuid}{ext}`. The bucket default SSE-KMS `aws/s3` applies. Allowed types are `image/jpeg`, `image/png`, `image/webp`, and `application/pdf`. The size cap is `INBOUND_MEDIA_MAX_BYTES`, default 10 MB. The origination phone id is `WA_PHONE_NUMBER_ID_PARAM` from SSM, or `WHATSAPP_PHONE_NUMBER_ID` when that parameter name is unset. No Meta token is read.
@@ -458,13 +459,17 @@ IAM column is the target. Current wildcards are called out and are not the targe
 
 | Module | Function | Owner | Trigger | IAM target | Status |
 | --- | --- | --- | --- | --- | --- |
-| `domains.cold_chain_excursion.steps.context` | `handler` | pending (OERF-201–207) | Step Functions | Read tenant and incident for the execution's tenant. No messaging, no task token. | not deployed |
-| `domains.cold_chain_excursion.steps.assess` | `handler` | pending (OERF-201–207) | Step Functions | Read incident and config snapshot. Write `OPTION#` items. No messaging. | not deployed |
-| `domains.cold_chain_excursion.steps.act` | `handler` | pending (OERF-201–207) | Step Functions | Read/write incident state for act transitions. Sends go through the router, not from this role. | not deployed |
-| `domains.cold_chain_excursion.steps.verify` | `handler` | pending (OERF-201–207) | Step Functions | Read incident and readings. Write containment state. | not deployed |
-| `domains.cold_chain_excursion.steps.qa` | `handler` | pending (OERF-201–207) | Step Functions | Read incident and report pointer. No SES. | not deployed |
-| `domains.cold_chain_excursion.steps.close` | `handler` | pending (OERF-201–207) | Step Functions | Write `CLOSED`, delete the lock item. No messaging. | not deployed |
+| `domains.cold_chain_excursion.steps.context` | `handler` | pending (OERF-201–207) | Step Functions `GatherContext` | Read tenant and incident for the execution's tenant. No messaging, no task token. | `oerf-step-context` |
+| `domains.cold_chain_excursion.steps.assess` | `handler` | pending (OERF-201–207) | Step Functions `Assess` | Read incident and config snapshot. Write `OPTION#` items. No messaging. | `oerf-step-assess` |
+| `domains.cold_chain_excursion.steps.act` | `handler` | pending (OERF-201–207) | Step Functions `Act` | Read/write incident state for act transitions. Sends go through the router, not from this role. | `oerf-step-act` |
+| `domains.cold_chain_excursion.steps.verify` | `handler` | pending (OERF-201–207) | Step Functions `VerifyLoop` | Read incident and readings. Write containment state. | `oerf-step-verify` |
+| `domains.cold_chain_excursion.steps.qa` | `handler` | pending (OERF-201–207) | Step Functions `QA` | Read incident and report pointer. No SES. | `oerf-step-qa` |
+| `domains.cold_chain_excursion.steps.close` | `handler` | pending (OERF-201–207) | Step Functions `Close` | Write `CLOSED`, delete the lock item. No messaging. | `oerf-step-close` |
 | `oerf.platform.ingest.handler` | `handler` | pending (OERF-201–207) | EventBridge `sim.reefer` / `TemperatureReading` | Read routing device item and tenant config. Transact incident META plus lock. `states:StartExecution` on `STATE_MACHINE_ARN` only. | not deployed |
+
+`oerf-cold-chain` invokes the six functions above by fixed name: `GatherContext`, `Assess`, `Act`, `VerifyLoop` (payload step `Verify`), `QA`, and `Close`. The data stack writes `arn:aws:lambda:{region}:{account}:function:{name}` into the definition and does not reference `OerfComputeStack`. Every other task in `oerf-cold-chain`, and every task in `oerf-engage-party`, still invokes `ColdChainWorkflowStub`.
+
+The execution input's `workflow.shipment` is a copy of the tenant shipment row. When that row has `product_profile` and no `product_profile_id`, ingest sets `product_profile_id` to the profile value. `PH-2841` stores `product_profile` `PP-2-8-45`, so GatherContext receives `product_profile_id` `PP-2-8-45`. The stored row is not rewritten.
 | `oerf.platform.inbound.handler` | `handler` | pending (OERF-201–207) | SQS inbound queue | Read/write routing and incident. Write evidence objects. `states:SendTaskSuccess` only; section 5 keeps reply classification in Interpret, so this role sends no `states:SendTaskFailure`. `states:StopExecution` on executions of `oerf-cold-chain` only. No channel-send APIs. | not deployed |
 | `oerf.platform.channels.router` | `handler` | Mudita | Step Functions / direct invoke | Read/write routing (`OUTMSG#`, `ADDR#`). The only role with WhatsApp, SMS, and SES send. | deployed `oerf-channel-router` |
 | `oerf.platform.report.generator` | `handler` | Mudita (OERF-117) | Step Functions | Read incident META, `EVT#`, and `READ#`. Write `REPORT_BUCKET_NAME` only when the key is absent. SES send is not the target (ADR-008). | deployed `oerf-report-generator` |

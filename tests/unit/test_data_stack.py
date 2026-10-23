@@ -13,6 +13,7 @@ from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk.assertions import Template
 
 from infra.stacks.data_stack import OerfDataStack
+from infra.step_functions import STEP_FUNCTION_NAMES, WIRED_STATES, function_arn
 
 ACCOUNT = "123456789012"
 REGION = "us-east-1"
@@ -141,7 +142,7 @@ def test_cold_chain_workflow_has_a_stub_lambda(template: Template) -> None:
     assert functions[next(iter(functions))]["Properties"]["Runtime"] == "python3.11"
 
 
-def test_cold_chain_state_machine_wires_every_task_to_the_stub(
+def test_cold_chain_state_machine_wires_real_steps_and_keeps_the_stub(
     template: Template,
 ) -> None:
     machines = template.find_resources("AWS::StepFunctions::StateMachine")
@@ -153,7 +154,10 @@ def test_cold_chain_state_machine_wires_every_task_to_the_stub(
     definition_string = json.dumps(definition)
 
     assert "__STUB_ARN__" not in definition_string
+    assert "__STEP_" not in definition_string
     assert "cold_chain_excursion_v1" in definition_string
+    for name in STEP_FUNCTION_NAMES.values():
+        assert function_arn(REGION, ACCOUNT, name) in definition_string
     for state in (
         "OPEN",
         "GatherContext",
@@ -173,6 +177,51 @@ def test_cold_chain_state_machine_wires_every_task_to_the_stub(
         "Escalate",
     ):
         assert state in definition_string, state
+    for state in WIRED_STATES:
+        assert function_arn(REGION, ACCOUNT, STEP_FUNCTION_NAMES[WIRED_STATES[state]]) in (
+            definition_string
+        )
+
+
+def _invoke_resources(template: Template, role_prefix: str) -> list:
+    resources: list = []
+    for policy in template.find_resources("AWS::IAM::Policy").values():
+        roles = json.dumps(policy["Properties"].get("Roles", []))
+        if role_prefix not in roles:
+            continue
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            action = statement.get("Action", [])
+            names = [action] if isinstance(action, str) else list(action)
+            if "lambda:InvokeFunction" not in names:
+                continue
+            found = statement["Resource"]
+            resources.extend(found if isinstance(found, list) else [found])
+    return resources
+
+
+@pytest.mark.security
+def test_cold_chain_role_invokes_only_the_six_steps_and_the_stub(template: Template) -> None:
+    """InvokeFunction stays on the six fixed names plus the stub. No Resource *."""
+
+    expected = set()
+    for name in STEP_FUNCTION_NAMES.values():
+        arn = function_arn(REGION, ACCOUNT, name)
+        expected.add(arn)
+        expected.add(f"{arn}:*")
+    resources = _invoke_resources(template, "OerfColdChainStateMachineRole")
+    strings = {item for item in resources if isinstance(item, str)}
+    assert strings == expected
+    assert "*" not in strings
+    assert len(resources) == len(expected) + 2
+    rendered = json.dumps(resources)
+    assert "ColdChainWorkflowStub" in rendered
+    assert rendered.count(":*") == len(STEP_FUNCTION_NAMES) + 1
+
+    engagement = json.dumps(_invoke_resources(template, "EngagePartyStateMachineRole"))
+    assert "oerf-step-" not in engagement
+    assert "ColdChainWorkflowStub" in engagement
+    assert "*" not in engagement or '":*"' in engagement
+    assert '"*"' not in engagement
 
 
 def test_cold_chain_workflow_tasks_retry_and_catch_failures(

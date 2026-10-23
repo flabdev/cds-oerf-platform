@@ -1,6 +1,9 @@
 """Unit tests for the deterministic cold-chain workflow stub."""
 
 from domains.cold_chain_excursion.steps.workflow_stub import handler
+from oerf.platform.agent.envelope import parse_envelope
+from oerf.platform.agent.handlers import assess
+from tests.unit.agent.test_handlers import _dependencies
 
 
 def _event(step_name: str, **workflow: object) -> dict[str, object]:
@@ -61,6 +64,41 @@ def test_failure_handlers_escalate_without_side_effects() -> None:
     assert recorded["failure_recorded"] is True
     assert escalated["incident_state"] == "ESCALATED"
     assert escalated["escalated"] is True
+
+
+def test_diagnose_stub_is_an_envelope_assess_accepts() -> None:
+    dependencies = _dependencies("DIAGNOSING")
+    incident = dependencies.incidents.get("t1", "INC-000001")
+    gathered = {
+        "step": "GatherContext",
+        "tenant_id": "t1",
+        "incident_id": incident.incident_id,
+        "shipment_id": "PH-2841",
+        "workflow": {
+            "trigger": {"temperature_c": 9.2},
+            "shipment": {"product_profile_id": "PP-2-8-45"},
+            "context": {
+                "trigger": {"temperature_c": 9.2},
+                "range_c": [2, 8],
+                "allowance_minutes": 45,
+                "facilities": [{"id": "facility-1", "drive_min": 12, "capacity_available": True}],
+            },
+            "ship_time": "2026-10-20T10:00:00Z",
+        },
+        "context": {},
+        "incident_state": "DIAGNOSING",
+        "current_stage": "DIAGNOSING",
+        "last_completed_step": "GatherContext",
+    }
+    diagnosed = handler({"step_name": "Diagnose", "workflow": gathered}, None)
+
+    assert "diagnosis" not in diagnosed
+    assert diagnosed["workflow"]["diagnosis"] == {"status": "stubbed"}
+    envelope = parse_envelope({"step_name": "Assess", "workflow": diagnosed})
+    assert envelope.step == "Assess"
+    result = assess(envelope, dependencies)
+    assert result.decision is not None
+    assert "has_feasible_options" in result.decision
 
 
 def test_handler_does_not_mutate_the_incoming_workflow() -> None:

@@ -43,7 +43,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_CONTEXT_ARN__",
         "Payload": {
           "step_name": "GatherContext",
           "workflow.$": "$"
@@ -115,7 +115,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_ASSESS_ARN__",
         "Payload": {
           "step_name": "Assess",
           "workflow.$": "$"
@@ -307,7 +307,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_ACT_ARN__",
         "Payload": {
           "step_name": "Act",
           "workflow.$": "$"
@@ -343,7 +343,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_VERIFY_ARN__",
         "Payload": {
           "step_name": "Verify",
           "workflow.$": "$"
@@ -472,7 +472,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_QA_ARN__",
         "Payload": {
           "step_name": "QA",
           "workflow.$": "$"
@@ -524,7 +524,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_CLOSE_ARN__",
         "Payload": {
           "step_name": "Close",
           "workflow.$": "$"

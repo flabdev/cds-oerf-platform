@@ -37,6 +37,7 @@ from infra.constructs.waba_event_destination import WabaEventDestination
 from infra.iam_conditions import pin_source_account
 from infra.runtime_asset import runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
+from infra.step_functions import STEP_FUNCTION_NAMES, STEP_HANDLERS
 
 # Task-token APIs have no resource type in the IAM Service Authorization
 # Reference. The resource stays "*"; see docs/security/iam-exceptions.md.
@@ -86,7 +87,8 @@ class OerfComputeStack(Stack):
         # Shared asset. Packaged from the repo root so imports stay ``oerf.*``
         # and do not shadow the stdlib ``platform`` module. The allow-list is
         # ``oerf``, ``domains``, and ``sim``, which keeps the demo shipment
-        # seed data available to ``seed_demo_devices``.
+        # seed data available to ``seed_demo_devices``. The same zip vendors
+        # pydantic and jsonschema for manylinux2014 / Python 3.11.
         lambda_code = lambda_.Code.from_asset(".", **runtime_code_args())
 
         # Demo rows for t1, t2, and sbx. A normal deploy leaves the registry
@@ -661,6 +663,12 @@ class OerfComputeStack(Stack):
             )
 
         # ---------------------------------------------------------
+        # 10. Cold-chain step functions. Names are fixed so the data stack
+        # can invoke them without a cross-stack reference.
+        # ---------------------------------------------------------
+        self._step_functions(data_stack, lambda_code)
+
+        # ---------------------------------------------------------
         # Stack Outputs
         # ---------------------------------------------------------
         CfnOutput(self, "WebSocketApiUrl", value=self.ws_stage.url)
@@ -670,6 +678,58 @@ class OerfComputeStack(Stack):
         CfnOutput(self, "EvidenceAnalyzerArn", value=self.evidence_analyzer_fn.function_arn)
         CfnOutput(self, "ReportGeneratorArn", value=self.report_generator_fn.function_arn)
         pin_source_account(self)
+
+    def _step_functions(self, data_stack: OerfDataStack, code: lambda_.Code) -> None:
+        """One function and one role per cold-chain phase."""
+
+        # 30s stays under the 60s task timeout. 256 MiB covers the rules import.
+        for phase, function_name in STEP_FUNCTION_NAMES.items():
+            function = self._function(
+                f"{phase.capitalize()}Function",
+                function_name=function_name,
+                handler=STEP_HANDLERS[phase],
+                code=code,
+                timeout=Duration.seconds(30),
+                memory_size=256,
+                environment={
+                    "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
+                    "TENANT_TABLE_NAME": data_stack.tenant_table.table_name,
+                    "LOG_LEVEL": "INFO",
+                },
+            )
+            self._grant_step_data(
+                function,
+                data_stack,
+                update=phase != "qa",
+                delete=phase == "close",
+            )
+
+    def _grant_step_data(
+        self,
+        function: lambda_.Function,
+        data_stack: OerfDataStack,
+        *,
+        update: bool,
+        delete: bool,
+    ) -> None:
+        """The actions ``run_step`` actually calls. No table-wide grant helper."""
+
+        incident = data_stack.incident_table.table_arn
+        tenant = data_stack.tenant_table.table_arn
+        function.add_to_role_policy(
+            iam.PolicyStatement(actions=["dynamodb:GetItem"], resources=[incident, tenant])
+        )
+        function.add_to_role_policy(
+            iam.PolicyStatement(actions=["dynamodb:PutItem"], resources=[incident])
+        )
+        if update:
+            function.add_to_role_policy(
+                iam.PolicyStatement(actions=["dynamodb:UpdateItem"], resources=[incident])
+            )
+        if delete:
+            function.add_to_role_policy(
+                iam.PolicyStatement(actions=["dynamodb:DeleteItem"], resources=[incident])
+            )
 
     def _function(
         self,

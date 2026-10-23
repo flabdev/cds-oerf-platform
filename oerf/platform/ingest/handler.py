@@ -382,7 +382,7 @@ def handler(
                         "sequence": reading.seq,
                         "reason": decision.reason,
                     },
-                    "shipment": shipment,
+                    "shipment": _shipment_for_execution(shipment),
                     "config_version": config.version,
                     "config_snapshot": config.model_dump(mode="json"),
                 },
@@ -519,6 +519,23 @@ def _event_identity(event: Mapping[str, Any]) -> str:
         detail = detail if isinstance(detail, Mapping) else {}
         raw = f"{detail.get('device_id', '')}#{detail.get('seq', '')}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _shipment_for_execution(shipment: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy the row and expose ``product_profile`` as ``product_profile_id``.
+
+    GatherContext reads ``product_profile_id``. The PH-2841 seed stores
+    ``product_profile``. The stored row is left unchanged.
+    """
+
+    copied = dict(shipment)
+    profile_id = copied.get("product_profile_id")
+    profile = copied.get("product_profile")
+    if isinstance(profile_id, str) and profile_id.strip():
+        return copied
+    if isinstance(profile, str) and profile.strip():
+        copied["product_profile_id"] = profile.strip()
+    return copied
 
 
 def _execution_name(incident_id: str) -> str:
