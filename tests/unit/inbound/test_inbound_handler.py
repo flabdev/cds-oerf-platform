@@ -10,6 +10,8 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
+
 from oerf.platform.channels.engagement import MemoryEngagementStore
 from oerf.platform.channels.registry import MemoryPhoneRegistry
 from oerf.platform.inbound.dedupe import InboundDedupe
@@ -44,6 +46,7 @@ def _run(event: dict[str, Any], dependencies: InboundDependencies):
         configure_dependencies(None)
 
 
+@pytest.mark.security
 def test_unparseable_record_is_retried_and_logged_by_count_only(capsys) -> None:
     event = {
         "Records": [

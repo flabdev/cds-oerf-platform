@@ -3,7 +3,11 @@
 import threading
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from oerf.platform.inbound.dedupe import RETENTION, InboundDedupe
+
+pytestmark = pytest.mark.security
 
 
 def test_first_delivery_is_accepted() -> None:

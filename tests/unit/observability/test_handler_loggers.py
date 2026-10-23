@@ -57,6 +57,7 @@ def _direct_get_logger_calls(tree: ast.AST) -> list[int]:
 
 
 @pytest.mark.parametrize("module_name", _HANDLERS)
+@pytest.mark.security
 def test_handler_does_not_call_logging_getlogger(module_name: str) -> None:
     module = importlib.import_module(module_name)
     source = Path(module.__file__).read_text(encoding="utf-8")

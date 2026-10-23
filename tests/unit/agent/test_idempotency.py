@@ -63,6 +63,7 @@ def test_another_step_of_the_same_incident_is_a_separate_key() -> None:
     assert store.get(tenant_id="t1", incident_id="INC-1", step="Assess") is not None
 
 
+@pytest.mark.security
 def test_the_same_incident_id_under_another_tenant_is_a_separate_key() -> None:
     store = _store()
     store.put(

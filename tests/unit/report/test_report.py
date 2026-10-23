@@ -2,6 +2,8 @@
 
 import hashlib
 
+import pytest
+
 from oerf.platform.report.generator import handler
 from oerf.platform.report.model import SECTIONS, DecisionTrace, ReportDocument, ReportOption
 from oerf.platform.report.service import publish_report
@@ -94,6 +96,7 @@ def test_pdf_backend_without_a_renderer_still_publishes_html(monkeypatch) -> Non
     assert receipt.s3_key.endswith(".html")
 
 
+@pytest.mark.security
 def test_handler_without_a_tenant_does_not_read_or_publish(monkeypatch) -> None:
     monkeypatch.setattr(
         "oerf.platform.report.generator.get_dynamodb",

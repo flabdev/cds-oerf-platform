@@ -24,6 +24,7 @@ def _metadata() -> dict[str, object]:
     }
 
 
+@pytest.mark.security
 def test_allowed_fields_become_annotations() -> None:
     segment = _Segment()
 
@@ -49,6 +50,7 @@ def test_allowed_fields_become_annotations() -> None:
         "pii",
     ],
 )
+@pytest.mark.security
 def test_refuses_prompts_images_raw_output_and_pii(field: str) -> None:
     segment = _Segment()
     metadata = _metadata()
@@ -60,6 +62,7 @@ def test_refuses_prompts_images_raw_output_and_pii(field: str) -> None:
     assert segment.annotations == []
 
 
+@pytest.mark.security
 def test_refuses_raw_text_in_an_allowed_field() -> None:
     metadata = _metadata()
     metadata["outcome"] = "Release the shipment. Call +910000000101."

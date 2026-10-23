@@ -124,6 +124,7 @@ def test_resume_output_is_the_task_result_not_a_lambda_response_envelope(setup_i
     }
 
 
+@pytest.mark.security
 def test_duplicate_provider_message_does_not_resume_twice(setup_inbound) -> None:
     deps, _engagements, _registry, callbacks, _opened = setup_inbound
     assert process_message(_provider(), deps) == "resumed"
@@ -152,6 +153,7 @@ def test_unknown_and_late_provider_replies_are_acknowledged(setup_inbound) -> No
     assert callbacks.calls == []
 
 
+@pytest.mark.security
 def test_an_unregistered_sender_never_resumes_a_quoted_engagement(setup_inbound) -> None:
     deps, engagements, _registry, callbacks, opened = setup_inbound
     body = _provider()
@@ -163,6 +165,7 @@ def test_an_unregistered_sender_never_resumes_a_quoted_engagement(setup_inbound)
     assert waiting is not None and waiting.status == "WAITING"
 
 
+@pytest.mark.security
 def test_another_tenants_contact_cannot_resume_the_quoted_engagement(setup_inbound) -> None:
     deps, engagements, registry, callbacks, opened = setup_inbound
     registry.register_contact("other-tenant", "contact-2", "ops_manager", "+15550000002")
@@ -274,6 +277,7 @@ def test_dashboard_action_correlates_on_engagement_and_resumes(setup_inbound) ->
     }
 
 
+@pytest.mark.security
 def test_dashboard_action_is_not_resumed_for_another_tenant(setup_inbound) -> None:
     deps, _engagements, _registry, callbacks, _opened = setup_inbound
 

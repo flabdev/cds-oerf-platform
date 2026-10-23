@@ -41,6 +41,7 @@ def _assert_clean(text: str) -> None:
     assert "task_token" not in text
 
 
+@pytest.mark.security
 def test_redaction_drops_sensitive_keys_and_masks_values(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -81,6 +82,7 @@ def test_redaction_drops_sensitive_keys_and_masks_values(
     assert payload["level"] == "INFO"
 
 
+@pytest.mark.security
 def test_mock_router_sends_omit_recipient_and_message(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -110,6 +112,7 @@ def test_mock_router_sends_omit_recipient_and_message(
     assert "route_complete" in text
 
 
+@pytest.mark.security
 def test_real_router_send_omits_recipient_message_and_errors(
     capsys: pytest.CaptureFixture[str], monkeypatch
 ) -> None:
@@ -152,6 +155,7 @@ def test_real_router_send_omits_recipient_message_and_errors(
     assert "route_complete" in text
 
 
+@pytest.mark.security
 def test_vision_calls_omit_the_object_key_and_pii(
     capsys: pytest.CaptureFixture[str], monkeypatch
 ) -> None:
@@ -223,6 +227,7 @@ def test_vision_calls_omit_the_object_key_and_pii(
     assert "evidence_analyzed" in text
 
 
+@pytest.mark.security
 def test_report_run_omits_the_object_key_and_pii(
     capsys: pytest.CaptureFixture[str], monkeypatch
 ) -> None:

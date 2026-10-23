@@ -2,9 +2,13 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from oerf.platform.inbound.dedupe import RETENTION
 from oerf.platform.inbound.dynamo import DynamoMessageDedupe
 from tests.unit.support.fake_dynamo import FakeDynamoClient
+
+pytestmark = pytest.mark.security
 
 
 def test_first_delivery_stores_seven_day_expiry() -> None:
