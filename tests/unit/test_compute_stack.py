@@ -22,10 +22,6 @@ _IAM_ACTION = re.compile(r"`([a-z0-9-]+:[A-Za-z0-9*]+)`")
 _SYNTH_ENV_KEYS = ("SES_SOURCE_EMAIL", "CDK_DEFAULT_ACCOUNT")
 
 EXPECTED_FUNCTIONS = {
-    "oerf-device-seed": {
-        "handler": "oerf.platform.channels.devices.seed_handler",
-        "env": {"ROUTING_TABLE_NAME"},
-    },
     "oerf-channel-router": {
         "handler": "oerf.platform.channels.router.handler",
         "env": {
@@ -383,6 +379,11 @@ def _waba_arn() -> str:
     return f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:waba/{_WABA_ID}"
 
 
+def test_demo_device_seed_stays_out_unless_the_flag_is_set(template: Template) -> None:
+    assert "oerf-device-seed" not in functions_by_name(template)
+    assert template.find_resources("AWS::CloudFormation::CustomResource") == {}
+
+
 def test_demo_device_seed_is_opt_in() -> None:
     saved = _without_synth_env()
     try:
@@ -400,9 +401,7 @@ def test_demo_device_seed_is_opt_in() -> None:
 
 def test_waba_destination_stays_out_without_context(template: Template) -> None:
     assert "oerf-waba-event-destination" not in functions_by_name(template)
-    custom_resources = template.find_resources("AWS::CloudFormation::CustomResource")
-    assert len(custom_resources) == 1
-    assert next(iter(custom_resources.values()))["Properties"]["SeedVersion"] == "1"
+    assert template.find_resources("AWS::CloudFormation::CustomResource") == {}
     topic = next(iter(template.find_resources("AWS::SNS::Topic").values()))
     assert "KmsMasterKeyId" not in topic["Properties"]
     for policy in template.find_resources("AWS::SNS::TopicPolicy").values():
@@ -438,7 +437,7 @@ def test_waba_destination_scopes_publish_and_the_provider_role() -> None:
     }
 
     custom = enabled.find_resources("AWS::CloudFormation::CustomResource")
-    assert len(custom) == 2
+    assert len(custom) == 1
     props = next(
         resource["Properties"]
         for resource in custom.values()
