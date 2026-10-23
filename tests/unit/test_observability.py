@@ -1,6 +1,8 @@
 """Alarm topic, thresholds, and the operations dashboard. No AWS calls."""
 
 import json
+import re
+from collections import Counter
 
 import aws_cdk as cdk
 import pytest
@@ -9,7 +11,7 @@ from aws_cdk.assertions import Template
 from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
-from infra.stacks.observability import OerfObservabilityStack, lambda_functions
+from infra.stacks.observability import OerfObservabilityStack, error_alarm_id, lambda_functions
 
 ACCOUNT = "123456789012"
 REGION = "us-east-1"
@@ -85,6 +87,7 @@ def test_alarms_cover_every_dlq_machine_and_lambda(built) -> None:
     assert metrics.count("ExecutionsFailed") == len(machines)
     assert metrics.count("ExecutionsTimedOut") == len(machines)
     assert metrics.count("Errors") == len(functions)
+    _assert_unique_function_alarms_keep_their_ids(alarms, functions)
 
     topic = next(iter(template.find_resources("AWS::SNS::Topic")))
     for alarm in alarms.values():
@@ -119,6 +122,32 @@ def test_email_subscription_comes_only_from_context() -> None:
     )
 
 
+def test_waba_providers_each_get_one_errors_alarm() -> None:
+    """Two Provider framework-onEvent functions must synth as two alarms."""
+
+    template, functions, _queues, _machines, _names = _build(
+        context={"whatsapp:wabaId": "waba-0000000000000000"}
+    )
+    alarms = template.find_resources("AWS::CloudWatch::Alarm")
+    errors = {
+        logical_id: alarm
+        for logical_id, alarm in alarms.items()
+        if alarm["Properties"].get("MetricName") == "Errors"
+    }
+    assert len(errors) == len(functions)
+    assert len({_function_dimension(alarm["Properties"]) for alarm in errors.values()}) == len(
+        functions
+    )
+    framework = [fn for fn in functions if fn.node.id == "framework-onEvent"]
+    assert len(framework) == 2
+    prefixes = {
+        re.sub(r"[^A-Za-z0-9]", "", error_alarm_id(fn, functions)) for fn in framework
+    }
+    assert len(prefixes) == 2
+    for prefix in prefixes:
+        assert any(logical_id.startswith(prefix) for logical_id in errors)
+
+
 def test_dashboard_lambdas_get_error_alarms() -> None:
     _default, default_functions, _queues, _machines, _names = _build()
     template, functions, _queues, _machines, _names = _build(dashboard=True)
@@ -129,6 +158,27 @@ def test_dashboard_lambdas_get_error_alarms() -> None:
         if "MetricName" in alarm["Properties"]
     ]
     assert errors.count("Errors") == len(functions)
+
+
+def _assert_unique_function_alarms_keep_their_ids(alarms: dict, functions: list) -> None:
+    """A function whose node id is unique keeps the ``{id}Errors`` alarm."""
+
+    counts = Counter(fn.node.id for fn in functions)
+    for fn in functions:
+        if counts[fn.node.id] != 1:
+            continue
+        prefix = re.sub(r"[^A-Za-z0-9]", "", error_alarm_id(fn, functions))
+        assert any(logical_id.startswith(prefix) for logical_id in alarms), fn.node.path
+
+
+def _function_dimension(props: dict) -> str:
+    names = [
+        dimension["Value"]
+        for dimension in props.get("Dimensions", [])
+        if dimension.get("Name") == "FunctionName"
+    ]
+    assert len(names) == 1
+    return json.dumps(names[0], sort_keys=True)
 
 
 def _period(props: dict) -> int:
