@@ -9,9 +9,14 @@ import pytest
 from oerf.platform.incidents.debounce import MemoryDebounce
 from oerf.platform.incidents.repository import IncidentRepository
 from oerf.platform.ingest.handler import (
+    READING_RETENTION_SECONDS,
+    DynamoReadingStore,
     IngestDependencies,
     handler,
 )
+from oerf.platform.report.generator import handler as report_handler
+from oerf.platform.report.store import MemoryReportStore
+from oerf.platform.storage.dynamo import client_error
 from oerf.platform.tenancy.config_resolver import get_config
 
 NOW = datetime(2026, 10, 20, 10, 16, tzinfo=UTC)
@@ -54,6 +59,35 @@ class Dedupe:
         self.ids.discard(event_id)
 
 
+class Readings:
+    def __init__(self) -> None:
+        self.rows: list[dict[str, Any]] = []
+        self._keys: set[tuple[str, str]] = set()
+
+    def put(
+        self,
+        *,
+        pk: str,
+        sk: str,
+        ts: str,
+        temperature_c: float,
+        expires_at: int,
+    ) -> bool:
+        if (pk, sk) in self._keys:
+            return False
+        self._keys.add((pk, sk))
+        self.rows.append(
+            {
+                "pk": pk,
+                "sk": sk,
+                "ts": ts,
+                "temperature_c": temperature_c,
+                "expires_at": expires_at,
+            }
+        )
+        return True
+
+
 class Executions:
     def __init__(self):
         self.calls: list[dict[str, Any]] = []
@@ -78,6 +112,7 @@ def _deps(*, devices=None, shipments=None, executions=None):
         dedupe=Dedupe(),
         executions=executions or Executions(),
         state_machine_arn="arn:aws:states:us-east-1:123456789012:stateMachine:test",
+        readings=Readings(),
         clock=lambda: NOW,
     )
 
@@ -243,3 +278,160 @@ def test_reading_is_never_passed_through_as_the_return_value() -> None:
         "execution_arn",
     }
     assert "temperature_c" not in result
+
+
+def test_open_incident_stores_one_reading_and_a_retry_does_not_duplicate() -> None:
+    deps = _deps()
+    waiting = handler(_event("hot-1"), None, dependencies=deps)
+    assert waiting["status"] == "accepted"
+    assert deps.readings.rows == []
+    opened = handler(
+        _event("hot-2", temperature=12, detail={"seq": 8, "ts": "2026-10-20T10:20:00Z"}),
+        None,
+        dependencies=deps,
+    )
+
+    assert opened["status"] == "triggered"
+    row = deps.readings.rows[0]
+    incident_id = opened["incident_id"]
+    assert row == {
+        "pk": f"TENANT#t1#INC#{incident_id}",
+        "sk": "READ#2026-10-20T10:20:00Z#000008",
+        "ts": "2026-10-20T10:20:00Z",
+        "temperature_c": 12.0,
+        "expires_at": int(datetime(2026, 10, 20, 10, 20, tzinfo=UTC).timestamp())
+        + READING_RETENTION_SECONDS,
+    }
+    assert "lat" not in row
+    assert "device_id" not in row
+
+    replay = handler(
+        _event("hot-2", temperature=12, detail={"seq": 8, "ts": "2026-10-20T10:20:00Z"}),
+        None,
+        dependencies=deps,
+    )
+    assert replay["status"] == "duplicate"
+    deps.dedupe.forget(opened["event_id"])
+    retried = handler(
+        _event("hot-2", temperature=12, detail={"seq": 8, "ts": "2026-10-20T10:20:00Z"}),
+        None,
+        dependencies=deps,
+    )
+    assert retried["status"] == "triggered"
+    assert deps.readings.rows == [row]
+
+
+def test_conditional_put_keeps_a_single_reading_item() -> None:
+    client = _ConditionalClient()
+    store = DynamoReadingStore(client, "incidents")
+    item = {
+        "pk": "TENANT#t1#INC#INC-1",
+        "sk": "READ#2026-10-20T10:20:00Z#000008",
+        "ts": "2026-10-20T10:20:00Z",
+        "temperature_c": 12.0,
+        "expires_at": 1,
+    }
+
+    assert store.put(**item) is True
+    assert store.put(**item) is False
+
+    stored = next(iter(client.items.values()))
+    assert set(stored) == {"pk", "sk", "ts", "temperature_c", "expires_at"}
+    assert stored["temperature_c"] == {"N": "12"}
+    assert client.calls[0]["ConditionExpression"] == "attribute_not_exists(#pk)"
+
+
+def test_report_temperature_section_uses_stored_readings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deps = _deps()
+    handler(_event("hot-1"), None, dependencies=deps)
+    opened = handler(
+        _event("hot-2", temperature=12, detail={"seq": 8, "ts": "2026-10-20T10:20:00Z"}),
+        None,
+        dependencies=deps,
+    )
+    handler(
+        _event("safe", temperature=5, detail={"seq": 9, "ts": "2026-10-20T10:26:00Z"}),
+        None,
+        dependencies=deps,
+    )
+    handler(
+        _event("later", temperature=9.5, detail={"seq": 10, "ts": "2026-10-20T10:31:00Z"}),
+        None,
+        dependencies=deps,
+    )
+    incident = deps.incidents.get("t1", opened["incident_id"])
+    store = MemoryReportStore()
+    table = _ReportTable(incident, deps.readings.rows)
+    monkeypatch.setattr("oerf.platform.report.generator._store", lambda: store)
+    monkeypatch.setattr("oerf.platform.report.generator.INCIDENT_TABLE_NAME", "incidents")
+    monkeypatch.setattr("oerf.platform.report.generator.get_dynamodb", lambda: table)
+
+    result = report_handler({"tenant_id": "t1", "incident_id": incident.incident_id}, None)
+    html = store.objects[result["report_key"]].decode()
+    section = html.split('id="temperature_timeline"', 1)[1].split('id="state_timeline"', 1)[0]
+    points = [
+        (datetime.fromisoformat(stamp.replace("Z", "+00:00")), float(temperature))
+        for stamp, temperature, _unit in (line.split() for line in _list_items(section))
+    ]
+    limit = get_config("t1", "cold_chain_excursion").product_profile("PP-2-8-45").range_c[1]
+    minutes = sum(
+        (end - start).total_seconds() / 60
+        for (start, temperature), (end, _following) in zip(points, points[1:])
+        if temperature > limit
+    )
+
+    assert limit == 8
+    assert max(temperature for _stamp, temperature in points) == 12.0
+    assert minutes == 6
+    assert "17.4" not in section
+    assert "RF-1" not in section
+
+
+def _list_items(section: str) -> list[str]:
+    return [item.split("</li>", 1)[0] for item in section.split("<li>")[1:]]
+
+
+class _ReportTable:
+    def __init__(self, incident: Any, readings: list[dict[str, Any]]) -> None:
+        self._incident = incident
+        self._readings = readings
+
+    def Table(self, _name: str) -> "_ReportTable":
+        return self
+
+    def get_item(self, Key: dict[str, str]) -> dict[str, Any]:
+        if Key == {"pk": self._incident.pk, "sk": "META"}:
+            return {
+                "Item": {
+                    "pk": self._incident.pk,
+                    "sk": "META",
+                    "tenant_id": self._incident.tenant_id,
+                    "incident_id": self._incident.incident_id,
+                    "shipment_id": self._incident.shipment_id,
+                    "state": self._incident.state,
+                }
+            }
+        return {}
+
+    def query(self, **kwargs: object) -> dict[str, Any]:
+        values = kwargs.get("ExpressionAttributeValues")
+        prefix = values.get(":prefix") if isinstance(values, dict) else ""
+        if prefix == "READ#":
+            return {"Items": [dict(row) for row in self._readings]}
+        return {"Items": []}
+
+
+class _ConditionalClient:
+    def __init__(self) -> None:
+        self.items: dict[tuple[str, str], dict[str, Any]] = {}
+        self.calls: list[dict[str, Any]] = []
+
+    def put_item(self, **kwargs: Any) -> None:
+        self.calls.append(kwargs)
+        item = kwargs["Item"]
+        identity = (item["pk"]["S"], item["sk"]["S"])
+        if identity in self.items:
+            raise client_error("ConditionalCheckFailedException")
+        self.items[identity] = item

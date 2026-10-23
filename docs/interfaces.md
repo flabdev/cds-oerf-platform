@@ -1,9 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.18** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.19** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.19 (2026-10-23) Ingest writes one temperature row while the shipment lock is present: `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}` with `seq` six digits, attributes `ts` and `temperature_c` only, `expires_at` 90 days from the reading. A conditional put leaves an existing key unchanged. The report temperature section reads those rows. The broadcaster stream filter stays on `SK=META`, so `READ#` is not delivered.
 - v1.18 (2026-10-23) Combined with origin/main (PR #30). `DemoDeviceSeed` is created only when context `demo:seedDevices` is true; a normal deploy does not write seed rows. `DeviceSeedFunctionRole` and its X-Ray `Resource: *` exist only in that synth (`docs/security/iam-exceptions.md`). The report generator writes an S3 key only when it is absent (`IfNoneMatch`), pages through every list result, fills the temperature section from `READ#`, and the state timeline from `EVT#`. A missing tenant, a missing incident, or a META `tenant_id` that does not match the event still fails closed. The broadcaster envelope stays the v1.16 shape. The desk rejects another tenant, another incident, and a private field; this broadcaster does not send `shipment_id`, `config_version`, `latest_reading`, `from_state`, `to_state`, or `timeline`.
 - v1.17 (2026-10-23) WhatsApp media is stored by End User Messaging `GetWhatsAppMessageMedia`. The handler checks `mimeType` and `fileSize` with `metadataOnly`, then signs a presigned PUT (`headers` empty, no SSE header, 300 seconds) for `tenants/{tenant_id}/inbound/{sha256}/{uuid}{ext}`. The bucket default SSE-KMS `aws/s3` applies. Allowed types are `image/jpeg`, `image/png`, `image/webp`, and `application/pdf`. The size cap is `INBOUND_MEDIA_MAX_BYTES`, default 10 MB. The origination phone id is `WA_PHONE_NUMBER_ID_PARAM` from SSM, or `WHATSAPP_PHONE_NUMBER_ID` when that parameter name is unset. No Meta token is read.
 - v1.16 (2026-10-23) Incident-scope `INCIDENT_UPDATE` `data` is `incident_id`, `state`, `stage`, integer `version`, and `updated_at` when the image has one. `incident_id` and `version` match the envelope. `opened_at`, `recommended_option`, and `option_ids` are not sent. `INCIDENT_SUMMARY` is unchanged. The desk allowlist in `web/src/deskEvents.js` accepts this payload.
@@ -308,7 +309,7 @@ Correlation keys, agreed by the LLD and [oerf/platform/storage/dynamo.py](../oer
 
 Owner: OERF-112 for the repository (Mudita). Data-stack owner for indexes. Authoritative incident key, from the LLD and `incident_pk()`:
 
-`PK=TENANT#{tid}#INC#{iid}`, `SK=META`. Timeline rows: `SK=EVT#{iso-timestamp}#{seq}`.
+`PK=TENANT#{tid}#INC#{iid}`, `SK=META`. Timeline rows: `SK=EVT#{iso-timestamp}#{seq}`. Temperature rows, written by ingest only while `OPEN_INCIDENT` is present: `SK=READ#{ts}#{seq}` with `seq` six digits. Attributes are `ts` (`YYYY-MM-DDTHH:MM:SSZ`) and `temperature_c`. Coordinates and the device id are not stored. A second put of the same key does not replace the row.
 
 Ingest writes the authoritative key. The retired trigger route no longer writes a separate incident item.
 
@@ -335,6 +336,7 @@ Lock item (ADR-016): `PK=TENANT#{tid}#SHIP#{sid}`, `SK=OPEN_INCIDENT`, condition
 | 17 | Phone registry | routing | `PK=PHONE#{e164}` |
 | 18 | Sandbox JOIN counter | routing | `PK=SANDBOX#JOINS#{date}`, `SK=META` |
 | 19 | Platform settings | platform | `PK=SETTINGS`, `SK=PLATFORM` |
+| 20 | Temperature readings in order | incident | `SK` begins_with `READ#` |
 
 Pattern 12 is not deployed. The incident table has no GSI, and the data-stack unit test asserts that. `GET /incidents` (OERF-302) depends on it. Change request: [2026-10-18-incident-gsi1-by-status.md](change-requests/2026-10-18-incident-gsi1-by-status.md).
 
@@ -345,6 +347,7 @@ Pattern 12 is not deployed. The incident table has no GSI, and the data-stack un
 | Item | Table | Key | Retention | TTL deletes the row |
 | --- | --- | --- | --- | --- |
 | `INGEST#` | incident | `PK=INGEST#{event_id}`, `SK=META` | 7 days from accept | yes |
+| `READ#` | incident | `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}` | 90 days from the reading `ts` | yes |
 | `DEBOUNCE#` | incident | `PK=DEBOUNCE#{tid}#{shipment_id}#{device_id}`, `SK=META` | 10 minutes from the reading | yes |
 | `INMSG#` | routing | `PK=INMSG#{id}`, `SK=META` | 7 days from accept, not from `received_at` | yes |
 | `OUTMSG#` | routing | `PK=OUTMSG#{provider_msg_id}`, `SK=ENG#{tid}#{iid}#{eid}` | 90 days from registration | yes |

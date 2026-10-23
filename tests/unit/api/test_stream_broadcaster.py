@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -367,6 +368,21 @@ def test_retryable_delivery_is_a_partial_batch_failure(monkeypatch) -> None:
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "bad"}]}
     assert [item[0] for item in api.sent] == ["conn-ok"]
+
+
+def test_read_rows_are_ignored(monkeypatch) -> None:
+    items = [_sub("conn-x", "incident", "INC-X"), _sub("conn-list", "tenant")]
+    reading = {
+        "pk": "TENANT#tenant-a#INC#INC-X",
+        "sk": "READ#2026-10-18T12:00:00Z#000007",
+        "ts": "2026-10-18T12:00:00Z",
+        "temperature_c": Decimal("9.0"),
+        "expires_at": 1,
+    }
+    result, _table, api = _run(monkeypatch, items, [_record(reading)])
+
+    assert result == {"batchItemFailures": []}
+    assert api.sent == []
 
 
 def test_malformed_record_is_skipped(monkeypatch) -> None:
