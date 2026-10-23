@@ -60,6 +60,35 @@ test("an incident socket accepts only that incident's update", () => {
   );
 });
 
+test("a broadcaster envelope is accepted and a private field is not", () => {
+  const binding = { tenantId: "t1", scope: "incident", incidentId: "INC-1" };
+  const update = {
+    event_type: "INCIDENT_UPDATE",
+    tenant_id: "t1",
+    incident_id: "INC-1",
+    version: 4,
+    emitted_at: "2026-10-18T12:00:00Z",
+    scope: "incident",
+    data: {
+      incident_id: "INC-1",
+      state: "VERIFYING",
+      stage: "verify",
+      version: 4,
+      shipment_id: "PH-2841",
+    },
+  };
+  assert.equal(acceptDeskEvent(update, binding).incident.state, "VERIFYING");
+  assert.equal(
+    acceptDeskEvent(
+      { ...update, data: { ...update.data, evidence_analysis: { fault: "E17" } } },
+      binding,
+    ),
+    null,
+  );
+  assert.equal(acceptDeskEvent(update, { ...binding, tenantId: "t2" }), null);
+  assert.equal(acceptDeskEvent(update, { ...binding, incidentId: "INC-2" }), null);
+});
+
 test("an accepted summary updates the matching row and leaves the other tenant's row", () => {
   const rows = [
     { incident_id: "INC-1", state: "OPEN", shipment_id: "PH-2841" },

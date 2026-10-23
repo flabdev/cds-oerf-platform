@@ -1,11 +1,14 @@
 """Golden HTML, missing sections, reopen versioning, checksum, and privacy."""
 
 import hashlib
+import threading
+
+from botocore.exceptions import ClientError
 
 from oerf.platform.report.generator import handler
 from oerf.platform.report.model import SECTIONS, DecisionTrace, ReportDocument, ReportOption
 from oerf.platform.report.service import publish_report
-from oerf.platform.report.store import MemoryReportStore
+from oerf.platform.report.store import MemoryReportStore, S3ReportStore
 
 GENERATED = "2026-10-20T10:45:00Z"
 
@@ -128,8 +131,13 @@ def test_handler_publishes_a_versioned_html_report(monkeypatch) -> None:
     assert result["report_key"] == "reports/t1/INC-9/v1.html"
     assert result["locked"] is True
     assert result["sha256"] == hashlib.sha256(html.encode()).hexdigest()
+    temperature, states = _sections(html, "temperature_timeline", "state_timeline", "diagnosis")
     assert "PH-9" in html
-    assert "EVT#2026-10-20T10:16:00Z#0001 OPEN" in html
+    assert "2026-10-20T10:16:00Z 8.1 C" in temperature
+    assert "DIAGNOSING" not in temperature
+    assert "TEMPERATURE_EXCURSION" not in temperature
+    assert "OPEN -&gt; DIAGNOSING" in states
+    assert "8.1 C" not in states
     assert "used_minutes=3" in html
     assert "qa@example.com" not in html
     assert "+910000000101" not in html
@@ -170,6 +178,46 @@ def test_the_same_stored_incident_renders_the_same_html(monkeypatch) -> None:
     assert store.objects[first["report_key"]] == store.objects[second["report_key"]]
 
 
+def test_concurrent_saves_keep_both_bodies() -> None:
+    bucket = _RacingBucket()
+    store = S3ReportStore(bucket, "reports")
+    results: list = []
+
+    def publish(body: bytes) -> None:
+        results.append(store.save("t1", "INC-1", body, "html", GENERATED))
+
+    first = threading.Thread(target=publish, args=(b"first",))
+    second = threading.Thread(target=publish, args=(b"second",))
+    first.start()
+    second.start()
+    first.join()
+    second.join()
+
+    stored = {
+        bucket.objects["reports/t1/INC-1/v1.html"],
+        bucket.objects["reports/t1/INC-1/v2.html"],
+    }
+    assert stored == {b"first", b"second"}
+    assert {item.report_version for item in results} == {1, 2}
+
+
+def test_version_allocation_reads_every_list_page() -> None:
+    bucket = _PagedBucket()
+    store = S3ReportStore(bucket, "reports")
+
+    receipt = store.save("t1", "INC-1", b"next", "html", GENERATED)
+
+    assert receipt.s3_key == "reports/t1/INC-1/v1002.html"
+    assert bucket.objects["reports/t1/INC-1/v1.html"] == b"original"
+    assert bucket.objects["reports/t1/INC-1/v1001.html"] == b"page-two"
+
+
+def _sections(html: str, first: str, second: str, third: str) -> tuple[str, str]:
+    left = html.split(f'id="{first}"', 1)[1].split(f'id="{second}"', 1)[0]
+    right = html.split(f'id="{second}"', 1)[1].split(f'id="{third}"', 1)[0]
+    return left, right
+
+
 class _Table:
     def __init__(self, item: dict | None) -> None:
         self.item = item
@@ -186,10 +234,16 @@ class _Table:
             return {"Item": self.item}
         return {}
 
-    def query(self, **_kwargs: object) -> dict:
+    def query(self, **kwargs: object) -> dict:
         if self.item is None:
             return {"Items": []}
-        return {"Items": self.item.get("timeline_rows", [])}
+        values = kwargs.get("ExpressionAttributeValues")
+        prefix = values.get(":prefix") if isinstance(values, dict) else ""
+        if prefix == "READ#":
+            return {"Items": self.item.get("readings", [])}
+        if prefix == "EVT#":
+            return {"Items": self.item.get("timeline_rows", [])}
+        return {"Items": []}
 
 
 def _stored_incident() -> dict:
@@ -202,8 +256,20 @@ def _stored_incident() -> dict:
         "state": "CONTAINED",
         "reason": "temperature",
         "evidence": {"fault_code": "E17", "phone": "+910000000101", "task_token": "task-token"},
+        "readings": [
+            {
+                "sk": "READ#2026-10-20T10:16:00Z",
+                "ts": "2026-10-20T10:16:00Z",
+                "temperature_c": 8.1,
+            }
+        ],
         "timeline_rows": [
-            {"sk": "EVT#2026-10-20T10:16:00Z#0001", "state": "OPEN", "reason": ""},
+            {
+                "sk": "EVT#2026-10-20T10:16:00Z#0001",
+                "previous_state": "OPEN",
+                "state": "DIAGNOSING",
+                "reason": "TEMPERATURE_EXCURSION",
+            }
         ],
         "decision_trace": {
             "used_minutes": 3,
@@ -218,6 +284,56 @@ def _stored_incident() -> dict:
             "recommended": "FACILITY_A",
         },
     }
+
+
+class _RacingBucket:
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self._guard = threading.Lock()
+        self._listed = 0
+        self._barrier = threading.Barrier(2)
+
+    def list_objects_v2(self, **_kwargs: object) -> dict:
+        with self._guard:
+            self._listed += 1
+            count = self._listed
+            keys = list(self.objects)
+        if count <= 2:
+            self._barrier.wait(timeout=2)
+        return {"Contents": [{"Key": key} for key in keys], "IsTruncated": False}
+
+    def put_object(self, **kwargs: object) -> None:
+        key = str(kwargs["Key"])
+        body = kwargs["Body"]
+        with self._guard:
+            if kwargs.get("IfNoneMatch") == "*" and key in self.objects:
+                raise ClientError({"Error": {"Code": "PreconditionFailed"}}, "PutObject")
+            if isinstance(body, bytes):
+                self.objects[key] = body
+
+
+class _PagedBucket:
+    def __init__(self) -> None:
+        self.objects = {
+            "reports/t1/INC-1/v1.html": b"original",
+            "reports/t1/INC-1/v1001.html": b"page-two",
+        }
+
+    def list_objects_v2(self, **kwargs: object) -> dict:
+        if kwargs.get("ContinuationToken") == "page-2":
+            return {
+                "Contents": [{"Key": "reports/t1/INC-1/v1001.html"}],
+                "IsTruncated": False,
+            }
+        page = [{"Key": f"reports/t1/INC-1/v{index}.html"} for index in range(1, 1001)]
+        return {"Contents": page, "IsTruncated": True, "NextContinuationToken": "page-2"}
+
+    def put_object(self, **kwargs: object) -> None:
+        key = str(kwargs["Key"])
+        assert key not in self.objects
+        body = kwargs["Body"]
+        if isinstance(body, bytes):
+            self.objects[key] = body
 
 
 def _ph2841() -> ReportDocument:

@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import boto3
@@ -48,9 +50,106 @@ def deserialize_dynamodb_image(image: dict[str, Any]) -> dict[str, Any]:
     return {k: _deserializer.deserialize(v) for k, v in image.items()}
 
 
-def get_tenant_connections(tenant_id: str, incident_id: str | None = None) -> list[str]:
-    """Fetch active connection IDs subscribed to this tenant and incident."""
-    if not ROUTING_TABLE_NAME:
+def subscription_targets(items: list[dict[str, Any]], incident_id: str) -> list[tuple[str, str]]:
+    """Return ``(connection_id, scope)`` for this incident.
+
+    Tenant scope receives the summary. Incident scope receives the update only
+    when the stored incident id matches. ``ALL`` and ``*`` receive nothing.
+    """
+
+    targets: list[tuple[str, str]] = []
+    for item in items:
+        connection_id = item.get("connection_id")
+        scope = item.get("scope")
+        if not isinstance(connection_id, str) or not connection_id:
+            continue
+        if scope == "tenant" and "incident_id" not in item:
+            targets.append((connection_id, "tenant"))
+            continue
+        subscribed = item.get("incident_id")
+        if (
+            scope == "incident"
+            and isinstance(subscribed, str)
+            and subscribed not in {"", "ALL", "*"}
+            and subscribed == incident_id
+        ):
+            targets.append((connection_id, "incident"))
+    return targets
+
+
+def dashboard_envelopes(
+    item: dict[str, Any],
+    *,
+    emitted_at: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Return the summary and incident envelopes, or None when the item has no identity."""
+
+    tenant_id = item.get("tenant_id")
+    incident_id = item.get("incident_id")
+    if not isinstance(tenant_id, str) or not tenant_id.strip():
+        return None
+    if not isinstance(incident_id, str) or not incident_id.strip():
+        return None
+    tenant_id = tenant_id.strip()
+    incident_id = incident_id.strip()
+    state = _text(item.get("state")) or _text(item.get("status"))
+    if state is None:
+        return None
+    version = _version(item.get("version"))
+    stage = _text(item.get("stage")) or state
+    summary = {
+        "event_type": "INCIDENT_SUMMARY",
+        "tenant_id": tenant_id,
+        "incident_id": incident_id,
+        "version": version,
+        "emitted_at": emitted_at,
+        "scope": "tenant",
+        "data": {
+            "incident_id": incident_id,
+            "state": state,
+            "stage": stage,
+            "version": version,
+        },
+    }
+    data: dict[str, Any] = {
+        "incident_id": incident_id,
+        "state": state,
+        "stage": stage,
+        "version": version,
+    }
+    shipment_id = _text(item.get("shipment_id"))
+    if shipment_id is not None:
+        data["shipment_id"] = shipment_id
+    updated_at = _text(item.get("updated_at"))
+    if updated_at is not None:
+        data["updated_at"] = updated_at
+    config_version = _version(item.get("config_version"), default=None)
+    if config_version is not None:
+        data["config_version"] = config_version
+    reading = _reading(item.get("latest_reading"))
+    if reading is not None:
+        data["latest_reading"] = reading
+    if str(item.get("sk") or "").startswith("EVT#"):
+        previous = _text(item.get("previous_state"))
+        if previous is not None:
+            data["from_state"] = previous
+            data["to_state"] = state
+            data["timeline"] = [{"type": "state_changed", "at": emitted_at, "state": state}]
+    update = {
+        "event_type": "INCIDENT_UPDATE",
+        "tenant_id": tenant_id,
+        "incident_id": incident_id,
+        "version": version,
+        "emitted_at": emitted_at,
+        "scope": "incident",
+        "data": data,
+    }
+    return summary, update
+
+
+def get_tenant_connections(tenant_id: str, incident_id: str | None = None) -> list[tuple[str, str]]:
+    """Fetch connections whose stored scope may receive this incident."""
+    if not ROUTING_TABLE_NAME or not incident_id:
         return []
 
     table = get_dynamodb().Table(ROUTING_TABLE_NAME)
@@ -59,16 +158,7 @@ def get_tenant_connections(tenant_id: str, incident_id: str | None = None) -> li
             KeyConditionExpression="pk = :pk",
             ExpressionAttributeValues={":pk": f"WS_SUB#{tenant_id}"},
         )
-        recipients = []
-        for item in response.get("Items", []):
-            cid = item.get("connection_id")
-            if not cid:
-                continue
-            sub_incident = item.get("incident_id", "ALL")
-            # Deliver if subscribed to all incidents or specifically to this incident
-            if sub_incident in ("ALL", "*") or (incident_id and sub_incident == incident_id):
-                recipients.append(cid)
-        return recipients
+        return subscription_targets(response.get("Items", []), incident_id)
     except Exception as exc:
         logger.error("Failed to query WebSocket connections: %s", exc)
         return []
@@ -87,36 +177,27 @@ def handler(event: dict[str, Any], context: Any) -> None:
     table = get_dynamodb().Table(ROUTING_TABLE_NAME) if ROUTING_TABLE_NAME else None
 
     for record in records:
-        event_name = record.get("eventName")  # INSERT, MODIFY, REMOVE
         new_image_raw = record.get("dynamodb", {}).get("NewImage")
 
         if not new_image_raw:
             continue
 
         item = deserialize_dynamodb_image(new_image_raw)
-        tenant_id = item.get("tenant_id") or item.get("pk", "").replace("TENANT#", "")
-        incident_id = item.get("incident_id") or item.get("sk", "").replace("INCIDENT#", "")
-
-        if not tenant_id:
+        emitted_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        envelopes = dashboard_envelopes(item, emitted_at=emitted_at)
+        if envelopes is None:
             continue
+        summary, update = envelopes
+        tenant_id = summary["tenant_id"]
+        incident_id = summary["incident_id"]
 
-        broadcast_payload = json.dumps(
-            {
-                "type": "INCIDENT_UPDATE",
-                "eventName": event_name,
-                "tenant_id": tenant_id,
-                "incident_id": incident_id,
-                "status": item.get("status"),
-                "timeline": item.get("timeline", []),
-                "evidence_analysis": item.get("evidence_analysis"),
-                "updated_at": item.get("updated_at"),
-            }
-        ).encode("utf-8")
-
-        connection_ids = get_tenant_connections(tenant_id, incident_id)
-        for conn_id in connection_ids:
+        for conn_id, scope in get_tenant_connections(tenant_id, incident_id):
+            payload = summary if scope == "tenant" else update
             try:
-                apigw.post_to_connection(ConnectionId=conn_id, Data=broadcast_payload)
+                apigw.post_to_connection(
+                    ConnectionId=conn_id,
+                    Data=json.dumps(payload).encode("utf-8"),
+                )
             except ClientError as exc:
                 if exc.response.get("Error", {}).get("Code") == "GoneException":
                     logger.info("Pruning disconnected client %s", conn_id)
@@ -126,3 +207,33 @@ def handler(event: dict[str, Any], context: Any) -> None:
                         )
                 else:
                     logger.error("Failed to push to connection %s: %s", conn_id, exc)
+
+
+def _text(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip() and value.strip() not in {"ALL", "*"}:
+        return value.strip()
+    return None
+
+
+def _version(value: Any, *, default: int | None = 1) -> int | None:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, Decimal) and value == int(value):
+        return int(value)
+    return default
+
+
+def _reading(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    ts = _text(value.get("ts"))
+    temperature = value.get("temperature_c")
+    if ts is None or isinstance(temperature, bool):
+        return None
+    if not isinstance(temperature, (int, float, Decimal)):
+        return None
+    return {"ts": ts, "temperature_c": float(temperature)}
