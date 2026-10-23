@@ -1,9 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.11** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.12** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.12 (2026-10-23, OERF-308) the broadcaster envelope is `event_type`, `tenant_id`, `incident_id`, `version`, `emitted_at`, and `data`. Incident `data` is `state`, `stage`, `opened_at`, `updated_at`, `recommended_option`, and `option_ids`. Tenant-list `data` is `incident_id`, `state`, `stage`, and `version`. `timeline` and `evidence_analysis` are not sent. A subscription row with no `scope` receives nothing. `REMOVE` is not an event.
 - v1.11 (2026-10-22, ADR-019) a `cancel` action is handled by the inbound handler. It stops the `oerf-cold-chain` execution, sets the incident to `CANCELLED`, and the repository releases the lock. That handler logic is not implemented. The action handler has no task-token actions.
 - v1.10 (2026-10-22, OERF-303) the logger writes each JSON object to stdout and does not pass the record to a logging handler. A failed route sets `channel` to `none` when no channel was selected.
 - v1.9 (2026-10-22, ADR-018) records object retention. Evidence objects expire after 90 days, and noncurrent evidence versions after 30. Report objects stay. Noncurrent report versions expire after 90 days.
@@ -395,9 +396,11 @@ Connection items stay on the routing table: `PK=WS#{connection_id}` / `SK=METADA
 
 Shared by OERF-302 and OERF-308. Times are UTC `YYYY-MM-DDTHH:MM:SSZ`.
 
-`version` is the integer on incident META when that attribute exists. Until OERF-112 stores one, the broadcaster sets `version` to the count of `EVT#` rows, or `1` when there are none. `stage` is the playbook stage when the workflow has set it. Until then, `stage` equals `state`.
+`version` is the integer `version` on incident META when that attribute exists, otherwise `event_seq`, otherwise `1`. `stage` is `stage` when that attribute is set, otherwise `current_stage`, otherwise `state`. `emitted_at` is the time the broadcaster built the message.
 
-Incident scope (`event_type` `INCIDENT_UPDATE`). Sanitized projection. Allowed `data` keys are fixed; adding a key is a minor version of this contract.
+The envelope is exactly these keys. `scope` is not a field. The subscription row chooses which `data` object is sent. Adding a `data` key is a minor version of this contract.
+
+Incident scope (`event_type` `INCIDENT_UPDATE`). `data` may contain only `state`, `stage`, `opened_at`, `updated_at`, `recommended_option`, and `option_ids`. `state` and `stage` are always present. A timestamp is copied only when it is `YYYY-MM-DDTHH:MM:SSZ` or a non-negative integer epoch second. `recommended_option` is the option id string. `option_ids` is the list of option id strings, not the option objects. Absent values are omitted.
 
 ```json
 {
@@ -406,24 +409,16 @@ Incident scope (`event_type` `INCIDENT_UPDATE`). Sanitized projection. Allowed `
   "incident_id": "INC-000123",
   "version": 4,
   "emitted_at": "2026-10-18T12:00:00Z",
-  "scope": "incident",
   "data": {
-    "incident_id": "INC-000123",
     "state": "VERIFYING",
     "stage": "verify",
-    "version": 4,
-    "shipment_id": "PH-2841",
+    "opened_at": "2026-10-18T11:00:00Z",
     "updated_at": "2026-10-18T12:00:00Z",
-    "config_version": 2,
-    "from_state": "IN_TRANSIT",
-    "to_state": "VERIFYING",
-    "latest_reading": { "ts": "2026-10-18T11:59:30Z", "temperature_c": 7.4 },
-    "timeline": [{ "type": "state_changed", "at": "2026-10-18T12:00:00Z", "state": "VERIFYING" }]
+    "recommended_option": "facility-a",
+    "option_ids": ["facility-a", "continue"]
   }
 }
 ```
-
-`from_state` and `to_state` are present only on a state transition, and they match section 4.2. Timeline entries are `{type, at, state}` only.
 
 Tenant-list scope (`event_type` `INCIDENT_SUMMARY`). `data` is exactly these four fields:
 
@@ -434,7 +429,6 @@ Tenant-list scope (`event_type` `INCIDENT_SUMMARY`). `data` is exactly these fou
   "incident_id": "INC-000123",
   "version": 4,
   "emitted_at": "2026-10-18T12:00:00Z",
-  "scope": "tenant",
   "data": {
     "incident_id": "INC-000123",
     "state": "VERIFYING",
@@ -444,9 +438,7 @@ Tenant-list scope (`event_type` `INCIDENT_SUMMARY`). `data` is exactly these fou
 }
 ```
 
-Neither payload carries a raw DynamoDB image, message text, `evidence_analysis`, phone numbers, names, task tokens, prompts, images, or model output. A record with no tenant id is skipped. A connection subscribed to tenant A never receives tenant B. An incident subscription receives only that incident's `INCIDENT_UPDATE`.
-
-Deployed deviation: [oerf/platform/api/stream_broadcaster.py](../oerf/platform/api/stream_broadcaster.py) sends `type: INCIDENT_UPDATE` plus `timeline` and `evidence_analysis`, and it delivers every incident in the tenant to `ALL` and `*` subscriptions.
+Neither payload carries a raw DynamoDB image, `timeline`, `evidence_analysis`, message text, phone numbers, names, task tokens, prompts, images, or model output. A record whose key is not `TENANT#{tid}#INC#{id}` / `META`, or that has no tenant id and incident id, is skipped. `REMOVE` is skipped. This contract has no removed event. A connection subscribed to tenant A never receives tenant B. An incident subscription receives only that incident's `INCIDENT_UPDATE`. A row whose `scope` is missing, `ALL`, or `*` receives nothing. A `scope` of `tenant` is the tenant list and receives `INCIDENT_SUMMARY` only.
 
 ## 8. Handler entry points
 
