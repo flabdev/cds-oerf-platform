@@ -28,6 +28,17 @@ _PERIOD = Duration.minutes(5)
 _DELIVERY_FAILURE_OUTCOMES = ("error", "not_sent")
 
 
+def alarm_id_for(function: lambda_.IFunction) -> str:
+    """A per-function id fragment for its alarms.
+
+    ``node.id`` alone is not unique: every ``custom_resources.Provider`` names
+    its inner Lambda ``framework-onEvent``. ``node.path`` is unique. The path
+    separators are dropped so the result is a valid construct id.
+    """
+
+    return function.node.path.replace("/", "")
+
+
 def lambda_functions(*scopes: Construct) -> list[lambda_.Function]:
     """Every Lambda construct under ``scopes``, including nested ones."""
 
@@ -96,7 +107,7 @@ class OerfObservabilityStack(Stack):
             )
         )
         self.alarms.extend(
-            self._alarm(f"{fn.node.id}Errors", metric)
+            self._alarm(f"{alarm_id_for(fn)}Errors", metric)
             for fn, metric in zip(functions, error_metrics, strict=True)
         )
         for alarm in self.alarms:

@@ -115,6 +115,8 @@ def test_trigger_uses_the_token_tenant_and_ignores_the_body(monkeypatch) -> None
 
     assert response["statusCode"] == 201
     assert table.items[0]["tenant_id"] == "token-tenant"
-    assert table.items[0]["pk"] == "TENANT#token-tenant"
+    assert table.items[0]["pk"] == f"TENANT#token-tenant#INC#{table.items[0]['incident_id']}"
+    assert table.items[0]["sk"] == "META"
+    assert len(table.items) == 1
     assert "body-tenant" not in json.dumps(table.items)
     assert json.loads(executions.calls[0]["input"])["tenant_id"] == "token-tenant"

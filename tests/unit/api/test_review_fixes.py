@@ -235,13 +235,15 @@ def test_deployed_action_route_queues_the_contract_body(monkeypatch):
     monkeypatch.setattr(action_handler, "INBOUND_QUEUE_URL", "https://example/inbound")
     monkeypatch.setattr(action_handler, "get_sqs", lambda: Queue())
     event = _action_event()
-    event["rawPath"] = "/incidents/INC-1/action"
-
     queued = action_handler.handler(event, None)
+    event["rawPath"] = "/incidents/INC-1/action"
+    legacy = action_handler.handler(event, None)
+    event["rawPath"] = "/incidents/INC-1/actions"
     event["body"] = json.dumps({"action": "APPROVE"})
     rejected = action_handler.handler(event, None)
 
     assert queued["statusCode"] == 202
+    assert legacy["statusCode"] == 404
     assert rejected["statusCode"] == 400
     assert len(sent) == 1
 

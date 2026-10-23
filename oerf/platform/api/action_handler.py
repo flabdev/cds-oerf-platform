@@ -1,8 +1,13 @@
 """HTTP API for dashboard actions and incident reads.
 
-POST /incidents/{id}/action queues the inbound message from the interface
-contract. GET reads use TENANT#{tid}#INC#{iid}. This handler does not call
-states:SendTaskSuccess.
+POST /incidents/{id}/actions queues the inbound message from the interface
+contract. The singular /action path is not accepted. GET reads use
+TENANT#{tid}#INC#{iid}. This handler does not call states:SendTaskSuccess.
+
+POST /incidents/trigger stays as an authenticated demo hook. It is not the
+frozen ingest path (that is EventBridge). The tenant is the token claim. The
+write is one canonical META item, TENANT#{tenant}#INC#{id} / META, and then
+StartExecution. It does not write a second incident key.
 """
 
 from __future__ import annotations
@@ -111,15 +116,19 @@ def extract_auth_context(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_trigger_incident(tenant_id: str, body: dict[str, Any]) -> dict[str, Any]:
-    """Ingest new sensor alarm and trigger Step Functions execution."""
+    """Open one demo incident on the canonical key and start the state machine.
+
+    Body ``tenant_id`` is ignored. The caller has already taken the tenant from
+    the token. This does not replace EventBridge ingest.
+    """
     incident_id = body.get("incident_id") or f"INC-{uuid.uuid4().hex[:8].upper()}"
     shipment_id = body.get("shipment_id", "SHP-001")
     sensor_reading = body.get("sensor_reading", {"temp_c": 12.5, "alarm": "HIGH_TEMP"})
 
     now = int(time.time())
     item = {
-        "pk": f"TENANT#{tenant_id}",
-        "sk": f"INCIDENT#{incident_id}",
+        "pk": f"TENANT#{tenant_id}#INC#{incident_id}",
+        "sk": "META",
         "tenant_id": tenant_id,
         "incident_id": incident_id,
         "shipment_id": shipment_id,
@@ -246,7 +255,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return cors_response(403, {"error": "tenant_required"})
     tenant_id = str(auth["tenant_id"])
 
-    action_match = re.fullmatch(r"(?:/[^/]+)?/incidents/([^/]+)/actions?", normalized)
+    action_match = re.fullmatch(r"(?:/[^/]+)?/incidents/([^/]+)/actions", normalized)
     if http_method == "POST" and action_match:
         if auth["role"] not in _ACTION_ROLES:
             return cors_response(403, {"error": "forbidden"})
