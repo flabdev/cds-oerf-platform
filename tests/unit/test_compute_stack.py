@@ -383,6 +383,21 @@ def _waba_arn() -> str:
     return f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:waba/{_WABA_ID}"
 
 
+def test_demo_device_seed_is_opt_in() -> None:
+    saved = _without_synth_env()
+    try:
+        _stack, seeded = synthesize(context={"demo:seedDevices": "true"})
+    finally:
+        _restore_env(saved)
+
+    functions = functions_by_name(seeded)
+    assert functions["oerf-device-seed"]["Handler"] == "oerf.platform.channels.devices.seed_handler"
+    assert "ROUTING_TABLE_NAME" in functions["oerf-device-seed"]["Environment"]["Variables"]
+    custom = seeded.find_resources("AWS::CloudFormation::CustomResource")
+    assert len(custom) == 1
+    assert next(iter(custom.values()))["Properties"]["SeedVersion"] == "1"
+
+
 def test_waba_destination_stays_out_without_context(template: Template) -> None:
     assert "oerf-waba-event-destination" not in functions_by_name(template)
     custom_resources = template.find_resources("AWS::CloudFormation::CustomResource")

@@ -92,6 +92,7 @@ class OerfComputeStack(Stack):
         # ---------------------------------------------------------
         # Seed the deterministic device registry once per deployment. The
         # custom resource is idempotent (PutItem on DEVICE#{id}/META).
+        # Rows come only from sim/seed (t1, t2, sbx).
         # ---------------------------------------------------------
         self.device_seed_fn = self._function(
             "DeviceSeedFunction",
@@ -549,7 +550,7 @@ class OerfComputeStack(Stack):
             authorizer=http_authorizer,
         )
         self.http_api.add_routes(
-            path="/incidents/{id}/action",
+            path="/incidents/{id}/actions",
             methods=[apigwv2.HttpMethod.POST],
             integration=action_integration,
             authorizer=http_authorizer,
