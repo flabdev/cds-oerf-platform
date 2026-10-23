@@ -11,6 +11,7 @@ import os
 
 from aws_cdk import (
     CfnOutput,
+    CustomResource,
     Duration,
     RemovalPolicy,
     Stack,
@@ -120,7 +121,7 @@ class OerfComputeStack(Stack):
             "DeviceSeedProvider",
             on_event_handler=self.device_seed_fn,
         )
-        cr.CustomResource(
+        CustomResource(
             self,
             "DemoDeviceSeed",
             service_token=seed_provider.service_token,

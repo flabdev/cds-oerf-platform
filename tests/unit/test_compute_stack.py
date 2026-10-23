@@ -275,7 +275,8 @@ def test_inbound_media_permissions_are_limited_to_bucket_and_token_secret(
     ]
     puts = _statements_with_action(statements, "s3:PutObject")
     assert len(puts) == 1
-    assert _resource_list(puts[0]["Resource"])[0].endswith("/tenants/*/inbound/*")
+    resource = _resource_list(puts[0]["Resource"])[0]
+    assert resource["Fn::Join"][1][-1].endswith("/tenants/*/inbound/*")
 
 
 def test_send_task_success_is_on_inbound_and_the_compat_action_role(template: Template) -> None:
