@@ -446,7 +446,7 @@ Tenant-list scope (`event_type` `INCIDENT_SUMMARY`). `data` is exactly these fou
 
 Neither payload carries a raw DynamoDB image, message text, `evidence_analysis`, phone numbers, names, task tokens, prompts, images, or model output. A record with no tenant id is skipped. A connection subscribed to tenant A never receives tenant B. An incident subscription receives only that incident's `INCIDENT_UPDATE`.
 
-Deployed deviation: [oerf/platform/api/stream_broadcaster.py](../oerf/platform/api/stream_broadcaster.py) sends `type: INCIDENT_UPDATE` plus `timeline` and `evidence_analysis`, and it delivers every incident in the tenant to `ALL` and `*` subscriptions.
+The broadcaster sends `INCIDENT_SUMMARY` to a `tenant` subscription and `INCIDENT_UPDATE` to the matching `incident` subscription. It does not send `evidence_analysis`, and it does not deliver to `ALL` or `*`.
 
 ## 8. Handler entry points
 
