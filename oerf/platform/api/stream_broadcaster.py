@@ -132,6 +132,8 @@ def _deliver(record: dict[str, Any], table, apigw) -> bool:
         log(logger, logging.WARNING, "stream_record", outcome="malformed", count=1)
         return True
     tenant_id, incident_id = identity
+    if str(item.get("sk") or "").startswith("READ#"):
+        return True
     state = _text(item.get("state"))
     if state is None:
         log(

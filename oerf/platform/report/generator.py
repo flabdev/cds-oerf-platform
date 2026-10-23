@@ -12,6 +12,7 @@ import logging
 import os
 import time
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import boto3
@@ -212,7 +213,7 @@ def _reading_line(entry: dict[str, Any]) -> str:
     temperature = entry.get("temperature_c")
     if not isinstance(ts, str) or not ts.strip():
         return ""
-    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float, Decimal)):
         return ""
     return f"{ts.strip()} {temperature} C"
 

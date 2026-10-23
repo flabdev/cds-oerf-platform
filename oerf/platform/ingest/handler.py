@@ -11,6 +11,8 @@ EventBridge rule for ``sim.reefer`` / ``TemperatureReading``, the dead-letter
 queue, ``states:StartExecution`` on the cold-chain state machine, and the
 environment below. Ingest state is kept on the incident table because that is
 the only table this role may write: routing and tenant access is read-only.
+While the shipment lock is present, each accepted reading is also a ``READ#``
+row on that incident.
 
 ``TODO(OERF-301)``: no DynamoDB TTL is configured on any table, so the
 ``expires_at`` attribute on dedupe and debounce items does not delete them yet.
@@ -38,7 +40,7 @@ from oerf.platform.incidents.dynamo import DynamoIncidentStore
 from oerf.platform.incidents.repository import IncidentStore
 from oerf.platform.observability.logging import get_logger, log
 from oerf.platform.rules.trigger import TemperatureEvent, breach_reason, evaluate_trigger
-from oerf.platform.storage.dynamo import is_conditional_failure, key, n, text
+from oerf.platform.storage.dynamo import is_conditional_failure, iso_z, key, n, s, text
 from oerf.platform.tenancy.config_resolver import ResolvedConfig, get_config
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 
@@ -49,6 +51,7 @@ SOURCE = "sim.reefer"
 DETAIL_TYPE = "TemperatureReading"
 DOMAIN = "cold_chain_excursion"
 EVENT_RETENTION_SECONDS = 7 * 24 * 60 * 60
+READING_RETENTION_SECONDS = 90 * 24 * 60 * 60
 _EXECUTION_NAME = re.compile(r"[^A-Za-z0-9_-]")
 
 
@@ -110,6 +113,19 @@ class ExecutionStarter(Protocol):
         """Start one named execution; an already-running name is idempotent."""
 
 
+class ReadingStore(Protocol):
+    def put(
+        self,
+        *,
+        pk: str,
+        sk: str,
+        ts: str,
+        temperature_c: float,
+        expires_at: int,
+    ) -> bool:
+        """Write one ``READ#`` row. Return False when that key already exists."""
+
+
 @dataclass(frozen=True)
 class IngestDependencies:
     devices: DeviceResolver
@@ -120,6 +136,7 @@ class IngestDependencies:
     dedupe: ReadingDedupe
     executions: ExecutionStarter
     state_machine_arn: str
+    readings: ReadingStore | None = None
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
 
@@ -192,6 +209,41 @@ class DynamoReadingDedupe:
             TableName=self._table,
             Key=key(f"INGEST#{event_id}", "META"),
         )
+
+
+class DynamoReadingStore:
+    """Conditional ``READ#`` rows on the incident table. A present key is left as it is."""
+
+    def __init__(self, client: Any, table_name: str) -> None:
+        self._client = client
+        self._table = table_name
+
+    def put(
+        self,
+        *,
+        pk: str,
+        sk: str,
+        ts: str,
+        temperature_c: float,
+        expires_at: int,
+    ) -> bool:
+        try:
+            self._client.put_item(
+                TableName=self._table,
+                Item={
+                    **key(pk, sk),
+                    "ts": s(ts),
+                    "temperature_c": {"N": _plain_number(temperature_c)},
+                    "expires_at": n(expires_at),
+                },
+                ConditionExpression="attribute_not_exists(#pk)",
+                ExpressionAttributeNames={"#pk": "pk"},
+            )
+        except Exception as exc:
+            if is_conditional_failure(exc):
+                return False
+            raise
+        return True
 
 
 class StepFunctionsStarter:
@@ -286,6 +338,7 @@ def handler(
             consecutive_breaches=max(1, streak),
         )
         if not decision.triggered:
+            _store_reading(ports, tenant_id, shipment_id, reading)
             return {
                 "status": "accepted",
                 "reason": "debouncing" if streak else "within_range",
@@ -300,6 +353,7 @@ def handler(
             config_version=config.version,
             config_snapshot=config.model_dump(mode="json"),
         )
+        _store_reading(ports, tenant_id, shipment_id, reading, incident.incident_id)
         execution_name = _execution_name(incident.incident_id)
         if ports.incidents.get(tenant_id, incident.incident_id).state != "OPEN":
             return {
@@ -393,6 +447,7 @@ def build_dependencies() -> IngestDependencies:
         dedupe=DynamoReadingDedupe(dynamodb, incident_table),
         executions=StepFunctionsStarter(boto3.client("stepfunctions"), state_machine_arn),
         state_machine_arn=state_machine_arn,
+        readings=DynamoReadingStore(dynamodb, incident_table),
     )
 
 
@@ -408,6 +463,51 @@ class _DynamoConfigReader:
 
     def get(self, tenant_id: str, domain: str) -> ResolvedConfig:
         return get_config(tenant_id, domain, repository=self._repository)
+
+
+def _store_reading(
+    ports: IngestDependencies,
+    tenant_id: str,
+    shipment_id: str,
+    reading: Reading,
+    incident_id: str | None = None,
+) -> None:
+    """Persist the reading while the shipment lock names an incident.
+
+    The row is ``ts`` and ``temperature_c`` only. A repeated key is not an error.
+    """
+
+    if ports.readings is None:
+        return
+    resolved = incident_id or _locked_incident_id(ports, tenant_id, shipment_id)
+    if resolved is None:
+        return
+    stamp = iso_z(reading.ts)
+    ports.readings.put(
+        pk=f"TENANT#{tenant_id}#INC#{resolved}",
+        sk=f"READ#{stamp}#{reading.seq:06d}",
+        ts=stamp,
+        temperature_c=reading.temperature_c,
+        expires_at=int(reading.ts.timestamp()) + READING_RETENTION_SECONDS,
+    )
+
+
+def _locked_incident_id(ports: IngestDependencies, tenant_id: str, shipment_id: str) -> str | None:
+    lock = getattr(ports.incidents, "lock", None)
+    if lock is None:
+        return None
+    row = lock.get_lock(tenant_id, shipment_id)
+    if not isinstance(row, dict):
+        return None
+    incident_id = row.get("incident_id")
+    if not isinstance(incident_id, str) or not incident_id.strip():
+        return None
+    return incident_id
+
+
+def _plain_number(value: float) -> str:
+    rendered = format(value, "f").rstrip("0").rstrip(".")
+    return rendered or "0"
 
 
 def _event_identity(event: Mapping[str, Any]) -> str:
