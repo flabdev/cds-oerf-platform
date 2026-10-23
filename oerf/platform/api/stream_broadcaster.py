@@ -32,10 +32,9 @@ _apigw_client = None
 _deserializer = TypeDeserializer()
 _INCIDENT_PK = re.compile(r"^TENANT#([^#]+)#INC#(.+)$")
 _ISO_Z = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-_OPTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-# Incident ``data`` keys. Anything else on the image stays off the socket.
+# Incident ``data`` keys the desk accepts. Anything else on the image stays off the socket.
 _INCIDENT_DATA = frozenset(
-    {"state", "stage", "opened_at", "updated_at", "recommended_option", "option_ids"}
+    {"incident_id", "state", "stage", "updated_at", "version"}
 )
 _SUMMARY_DATA = frozenset({"incident_id", "state", "stage", "version"})
 _ENVELOPE = frozenset(
@@ -156,7 +155,7 @@ def _deliver(record: dict[str, Any], table, apigw) -> bool:
             incident_id,
             version,
             emitted_at,
-            _incident_data(item, state, stage),
+            _incident_data(item, incident_id, state, stage, version),
         ),
         "tenant": _envelope(
             "INCIDENT_SUMMARY",
@@ -348,18 +347,24 @@ def _image(record: dict[str, Any], name: str) -> dict[str, Any] | None:
     return item
 
 
-def _incident_data(item: dict[str, Any], state: str, stage: str) -> dict[str, Any]:
-    data: dict[str, Any] = {"state": state, "stage": stage}
-    for name in ("opened_at", "updated_at"):
-        stamp = _timestamp(item.get(name))
-        if stamp is not None:
-            data[name] = stamp
-    recommended = _option_id(item.get("recommended_option"))
-    if recommended is not None:
-        data["recommended_option"] = recommended
-    option_ids = _option_ids(item.get("options"))
-    if option_ids:
-        data["option_ids"] = option_ids
+def _incident_data(
+    item: dict[str, Any],
+    incident_id: str,
+    state: str,
+    stage: str,
+    version: int,
+) -> dict[str, Any]:
+    """Incident-scope ``data``. Keys match the desk allowlist in ``deskEvents.js``."""
+
+    data: dict[str, Any] = {
+        "incident_id": incident_id,
+        "state": state,
+        "stage": stage,
+        "version": version,
+    }
+    stamp = _timestamp(item.get("updated_at"))
+    if stamp is not None:
+        data["updated_at"] = stamp
     return {key: value for key, value in data.items() if key in _INCIDENT_DATA}
 
 
@@ -390,26 +395,6 @@ def _envelope(
         "data": data,
     }
     return {key: value for key, value in payload.items() if key in _ENVELOPE}
-
-
-def _option_ids(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    found: list[str] = []
-    for option in value:
-        if isinstance(option, dict):
-            option_id = _option_id(option.get("id"))
-        else:
-            option_id = _option_id(option)
-        if option_id is not None:
-            found.append(option_id)
-    return found
-
-
-def _option_id(value: Any) -> str | None:
-    if not isinstance(value, str) or not _OPTION_ID.fullmatch(value):
-        return None
-    return value
 
 
 def _stage(item: dict[str, Any], state: str) -> str:
