@@ -1,6 +1,3 @@
-# Placeholder @-handles. Replace them with the real GitHub usernames.
-# The last matching pattern wins.
-
 # Ananda
 /infra/ @fission-anand
 /docs/interfaces.md @fission-anand
@@ -15,6 +12,7 @@
 
 # Chaitanya
 /infra/ @chaitanyafl
+/.github/ @chaitanyafl
 
 # Vivek
 /domains/ @vivek-sharma-fission
