@@ -7,6 +7,7 @@ tenant and shipment on that row are the only identity a temperature event may us
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -66,3 +67,22 @@ def seed_demo_devices(client: Any, table_name: str, root: Path | None = None) ->
             )
             written.append(device)
     return written
+
+
+def seed_handler(event: dict[str, Any], _context: Any) -> dict[str, str]:
+    """CloudFormation entry point. Create and update rewrite the demo rows.
+
+    Delete does nothing, so removing the custom resource does not erase devices
+    that ingest may still be reading. A later deploy writes the same ids again.
+    """
+
+    physical_id = str(event.get("PhysicalResourceId") or "oerf-demo-device-seed")
+    if event.get("RequestType") == "Delete":
+        return {"PhysicalResourceId": physical_id}
+    table_name = os.environ.get("ROUTING_TABLE_NAME", "").strip()
+    if not table_name:
+        raise RuntimeError("ROUTING_TABLE_NAME is required")
+    import boto3
+
+    seed_demo_devices(boto3.client("dynamodb"), table_name)
+    return {"PhysicalResourceId": physical_id}

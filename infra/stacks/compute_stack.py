@@ -11,6 +11,7 @@ import os
 
 from aws_cdk import (
     CfnOutput,
+    CustomResource,
     Duration,
     RemovalPolicy,
     Stack,
@@ -26,6 +27,7 @@ from aws_cdk import (
     aws_sns as sns,
     aws_sns_subscriptions as subscriptions,
     aws_sqs as sqs,
+    custom_resources as cr,
 )
 from constructs import Construct
 
@@ -85,6 +87,31 @@ class OerfComputeStack(Stack):
         # and do not shadow the stdlib ``platform`` module. The allow-list is
         # ``oerf``, ``domains``, and ``sim``.
         lambda_code = lambda_.Code.from_asset(".", **runtime_code_args())
+
+        # Demo devices only. Off unless context demo:seedDevices is true, so a
+        # production deploy does not write t1, t2, or sbx rows. The handler
+        # rereads sim/seed and PutItem is safe to run again.
+        if _context_enabled(self, "demo:seedDevices", default=False):
+            self.device_seed_fn = self._function(
+                "DeviceSeedFunction",
+                function_name="oerf-device-seed",
+                handler="oerf.platform.channels.devices.seed_handler",
+                code=lambda_code,
+                timeout=Duration.seconds(30),
+                environment={"ROUTING_TABLE_NAME": data_stack.routing_table.table_name},
+            )
+            data_stack.routing_table.grant_write_data(self.device_seed_fn)
+            seed_provider = cr.Provider(
+                self,
+                "DeviceSeedProvider",
+                on_event_handler=self.device_seed_fn,
+            )
+            CustomResource(
+                self,
+                "DemoDeviceSeed",
+                service_token=seed_provider.service_token,
+                properties={"SeedVersion": "1"},
+            )
 
         # ---------------------------------------------------------
         # 1. Channel Router Lambda (ADR-008)
@@ -506,7 +533,7 @@ class OerfComputeStack(Stack):
             authorizer=http_authorizer,
         )
         self.http_api.add_routes(
-            path="/incidents/{id}/action",
+            path="/incidents/{id}/actions",
             methods=[apigwv2.HttpMethod.POST],
             integration=action_integration,
             authorizer=http_authorizer,
