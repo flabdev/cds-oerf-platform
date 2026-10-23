@@ -43,6 +43,7 @@ class ReportDocument(BaseModel):
     state: str | None = None
     generated_at: str
     temperature_timeline: list[str] = Field(default_factory=list)
+    state_timeline: list[str] = Field(default_factory=list)
     diagnosis: str | None = None
     evidence: dict[str, Any] = Field(default_factory=dict)
     options: list[ReportOption] = Field(default_factory=list)
@@ -69,6 +70,7 @@ SECTIONS = (
     "incident",
     "shipment",
     "temperature_timeline",
+    "state_timeline",
     "diagnosis",
     "evidence",
     "options",

@@ -36,6 +36,8 @@ def _section_body(document: ReportDocument, section: str) -> str:
         return _text(document.shipment_id)
     if section == "temperature_timeline":
         return _list(document.temperature_timeline)
+    if section == "state_timeline":
+        return _list(document.state_timeline)
     if section == "diagnosis":
         return _text(document.diagnosis)
     if section == "evidence":

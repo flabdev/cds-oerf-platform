@@ -125,7 +125,14 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return {"success": False, "error": "incident_not_found"}
 
     generated_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    document = _document(tenant_id, incident_id, incident, _timeline(table, pk), generated_at)
+    document = _document(
+        tenant_id,
+        incident_id,
+        incident,
+        _rows(table, pk, "EVT#"),
+        generated_at,
+        readings=_rows(table, pk, "READ#"),
+    )
     receipt = publish_report(document, _store())
     s3_uri = f"s3://{REPORT_BUCKET_NAME}/{receipt.s3_key}" if REPORT_BUCKET_NAME else ""
     log(
@@ -155,16 +162,26 @@ def _document(
     incident: dict[str, Any],
     timeline: list[dict[str, Any]],
     generated_at: str,
+    *,
+    readings: list[dict[str, Any]] | None = None,
 ) -> ReportDocument:
-    """Map stored attributes onto the report. Absent sections stay empty."""
+    """Map stored attributes onto the report. Absent sections stay empty.
 
+    ``READ#`` rows supply ``ts`` and ``temperature_c``. ``EVT#`` rows are state
+    transitions and stay in ``state_timeline``.
+    """
+
+    sensor_rows = readings or []
     return ReportDocument(
         tenant_id=tenant_id,
         incident_id=incident_id,
         shipment_id=_optional_text(incident.get("shipment_id")),
         state=_optional_text(incident.get("state")),
         generated_at=generated_at,
-        temperature_timeline=[_timeline_line(entry) for entry in timeline],
+        temperature_timeline=[
+            line for line in (_reading_line(entry) for entry in sensor_rows) if line
+        ],
+        state_timeline=[line for line in (_transition_line(entry) for entry in timeline) if line],
         diagnosis=_optional_text(incident.get("diagnosis") or incident.get("reason")),
         evidence=_evidence(incident.get("evidence")),
         options=_options(incident.get("options")),
@@ -177,22 +194,35 @@ def _document(
     )
 
 
-def _timeline(table: Any, pk: str) -> list[dict[str, Any]]:
+def _rows(table: Any, pk: str, prefix: str) -> list[dict[str, Any]]:
     response = table.query(
         KeyConditionExpression="pk = :pk AND begins_with(sk, :prefix)",
-        ExpressionAttributeValues={":pk": pk, ":prefix": "EVT#"},
+        ExpressionAttributeValues={":pk": pk, ":prefix": prefix},
     )
     items = response.get("Items", []) if isinstance(response, dict) else []
     return [item for item in items if isinstance(item, dict)]
 
 
-def _timeline_line(entry: dict[str, Any]) -> str:
-    parts = [
-        str(entry.get("sk") or ""),
-        str(entry.get("state") or ""),
-        str(entry.get("reason") or ""),
-    ]
-    return " ".join(part for part in parts if part).strip()
+def _reading_line(entry: dict[str, Any]) -> str:
+    """One persisted ``READ#`` row: the reading time and temperature, not a state."""
+
+    if str(entry.get("sk") or "").startswith("EVT#"):
+        return ""
+    ts = entry.get("ts") or entry.get("timestamp")
+    temperature = entry.get("temperature_c")
+    if not isinstance(ts, str) or not ts.strip():
+        return ""
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
+        return ""
+    return f"{ts.strip()} {temperature} C"
+
+
+def _transition_line(entry: dict[str, Any]) -> str:
+    previous = str(entry.get("previous_state") or "").strip()
+    state = str(entry.get("state") or "").strip()
+    reason = str(entry.get("reason") or "").strip()
+    change = f"{previous} -> {state}" if previous else state
+    return " ".join(part for part in (str(entry.get("sk") or "").strip(), change, reason) if part)
 
 
 def _evidence(value: Any) -> dict[str, Any]:
