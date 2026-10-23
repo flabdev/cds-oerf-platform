@@ -23,9 +23,10 @@ from oerf.platform.channels.engagement import EngagementStore
 from oerf.platform.channels.providers.base import MessageProvider
 from oerf.platform.channels.registry import PhoneRegistry
 from oerf.platform.channels.templates import MissingFacts, MissingTemplate, render_message
+from oerf.platform.observability.logging import get_logger, log
 from oerf.platform.sandbox.join import SANDBOX_TENANT, SandboxGate
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 # Environment variables
@@ -53,6 +54,13 @@ def get_ses():
     if _ses is None:
         _ses = boto3.client("sesv2")
     return _ses
+
+
+def _required_text(value: Any) -> str | None:
+    """Return a stripped string, or None when the value is missing or blank."""
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 def record_outbound_message(
@@ -123,7 +131,7 @@ def send_whatsapp(recipient: str, message: str) -> dict[str, Any]:
     """Send WhatsApp via AWS End User Messaging Social, simulating if configured."""
     msg_id = f"wa-{uuid.uuid4().hex[:12]}"
     if USE_MOCK_WHATSAPP:
-        logger.info("[SIMULATED WHATSAPP] To: %s | Message: %s", recipient, message)
+        log(logger, logging.INFO, "send_simulated", channel="WHATSAPP", outcome="simulated")
         return {
             "success": False,
             "message_id": msg_id,
@@ -164,7 +172,7 @@ def send_whatsapp(recipient: str, message: str) -> dict[str, Any]:
             "status": "SENT",
         }
     except Exception as exc:
-        logger.error("Failed to send WhatsApp message via socialmessaging: %s", exc)
+        log(logger, logging.ERROR, "send_failed", channel="WHATSAPP", outcome="error")
         return {"success": False, "error": str(exc), "channel": "WHATSAPP"}
 
 
@@ -172,7 +180,7 @@ def send_sms(recipient: str, message: str) -> dict[str, Any]:
     """Send SMS message via Amazon SNS or simulate if explicitly configured."""
     msg_id = f"sms-{uuid.uuid4().hex[:12]}"
     if USE_MOCK_SMS:
-        logger.info("[SIMULATED SMS] To: %s | Message: %s", recipient, message)
+        log(logger, logging.INFO, "send_simulated", channel="SMS", outcome="simulated")
         return {"success": False, "message_id": msg_id, "channel": "SMS", "status": "SIMULATED"}
 
     try:
@@ -181,7 +189,7 @@ def send_sms(recipient: str, message: str) -> dict[str, Any]:
         actual_msg_id = resp.get("MessageId") or msg_id
         return {"success": True, "message_id": actual_msg_id, "channel": "SMS", "status": "SENT"}
     except Exception as exc:
-        logger.error("Failed to send SMS via SNS: %s", exc)
+        log(logger, logging.ERROR, "send_failed", channel="SMS", outcome="error")
         return {"success": False, "error": str(exc), "channel": "SMS"}
 
 
@@ -189,7 +197,7 @@ def send_email(recipient: str, subject: str, body: str) -> dict[str, Any]:
     """Send email via Amazon SESv2, simulating only when explicitly configured."""
     msg_id = f"email-{uuid.uuid4().hex[:12]}"
     if USE_MOCK_EMAIL:
-        logger.info("[SIMULATED EMAIL] To: %s | Subject: %s", recipient, subject)
+        log(logger, logging.INFO, "send_simulated", channel="EMAIL", outcome="simulated")
         return {
             "success": False,
             "message_id": msg_id,
@@ -220,7 +228,7 @@ def send_email(recipient: str, subject: str, body: str) -> dict[str, Any]:
         )
         return {"success": True, "message_id": msg_id, "channel": "EMAIL", "status": "SENT"}
     except ClientError as exc:
-        logger.error("SES send failed: %s", exc)
+        log(logger, logging.ERROR, "send_failed", channel="EMAIL", outcome="error")
         return {"success": False, "error": str(exc), "channel": "EMAIL"}
 
 
@@ -240,11 +248,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         "channel_priority": ["WHATSAPP", "SMS", "EMAIL"]
     }
     """
-    logged_event = {key: value for key, value in event.items() if key != "task_token"}
-    logger.info("Routing notification: %s", json.dumps(logged_event))
-
-    tenant_id = event.get("tenant_id", "default")
+    tenant_id = _required_text(event.get("tenant_id"))
     incident_id = event.get("incident_id", "unknown")
+    if tenant_id is None:
+        logger.error("Rejected route: tenant_required")
+        return {"success": False, "error": "tenant_required", "attempts": []}
     recipient_phone = event.get("recipient_phone")
     recipient_email = event.get("recipient_email")
     message = event.get("message", "")
@@ -293,6 +301,25 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             )
             break
 
+    if result.get("simulated"):
+        outcome = "simulated"
+    elif result.get("success"):
+        outcome = "sent"
+    else:
+        outcome = "not_sent"
+    channel = result.get("delivered_channel") or result.get("channel") or ""
+    if not isinstance(channel, str) or not channel.strip():
+        channel = "none" if outcome in ("error", "not_sent") else ""
+    log(
+        logger,
+        logging.INFO,
+        "route_complete",
+        tenant_id=tenant_id,
+        incident_id=incident_id if isinstance(incident_id, str) else None,
+        channel=channel,
+        outcome=outcome,
+        count=len(result["attempts"]),
+    )
     return result
 
 

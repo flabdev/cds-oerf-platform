@@ -1,9 +1,13 @@
 # OERF interface contract
 
-**FROZEN v1.7** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.11** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.11 (2026-10-22, ADR-019) a `cancel` action is handled by the inbound handler. It stops the `oerf-cold-chain` execution, sets the incident to `CANCELLED`, and the repository releases the lock. That handler logic is not implemented. The action handler has no task-token actions.
+- v1.10 (2026-10-22, OERF-303) the logger writes each JSON object to stdout and does not pass the record to a logging handler. A failed route sets `channel` to `none` when no channel was selected.
+- v1.9 (2026-10-22, ADR-018) records object retention. Evidence objects expire after 90 days, and noncurrent evidence versions after 30. Report objects stay. Noncurrent report versions expire after 90 days.
+- v1.8 (2026-10-22, OERF-303) fills the logger section. A line is JSON with `ts`, `level`, `msg`, and optional `tenant_id`, `incident_id`, `engagement_id`. The placeholder keys `timestamp` and `message` are `ts` and `msg`. Sensitive keys are dropped. E.164 numbers, email addresses, and task-token values are masked.
 - v1.7 (2026-10-21, WhatsApp) documents the WABA event destination on the inbound topic. It is created only when context `whatsapp:wabaId` is set.
 - v1.6 (2026-10-21, OERF-312) documents the AgentCore placeholder: envelope, timeout, fallback, and `AGENT_RUNTIME_ARN`.
 - v1.5 (2026-10-21, OERF-310) sets `GUARDRAIL_ID` and `GUARDRAIL_VERSION` on the vision function, and documents `record_invocation`.
@@ -156,9 +160,9 @@ Queued message (tenant and user come from the token):
 
 Dedupe key: `INMSG#{action_id}` (section 5). An action whose engagement is no longer waiting is ignored and logged, without a task-token call.
 
-Deployed deviation, Mudita (208/302) to migrate: `POST /incidents/{id}/action` accepts `APPROVE`, `REJECT`, and `OVERRIDE`, and the handler calls `SendTaskSuccess` itself.
+Deployed deviation, Mudita (208/302) to migrate: `POST /incidents/{id}/action` accepts `APPROVE`, `REJECT`, and `OVERRIDE`. The handler does not call `SendTaskSuccess`.
 
-`cancel` stops the execution, stops engagements, and deletes the shipment lock (ADR-019). It still enters through this queue so one component resumes or stops workflows.
+`cancel` enters through this queue. The inbound handler stops the `oerf-cold-chain` execution (`states:StopExecution` on that machine's executions only), sets the incident to `CANCELLED`, and the repository releases the shipment lock (ADR-019). The handler logic is not implemented. The project lead owns it.
 
 ## 4. Event envelopes
 
@@ -349,6 +353,10 @@ No item writes an attribute named `ttl`. Expiry is `expires_at`, a number of epo
 
 S3 prefixes start with `tenants/{tid}/`.
 
+### 6.2 Object storage retention
+
+Evidence objects expire 90 days after they are written. A noncurrent evidence version expires 30 days after it is replaced. Report objects are the audit record and are not expired. A noncurrent report version expires 90 days after it is replaced. Both buckets keep versioning on.
+
 ## 7. API and WebSocket events
 
 Owner: Mudita (OERF-302) for routes and the subscribe message. Ananda (OERF-308) for the broadcast payload. Both sign this section.
@@ -455,7 +463,7 @@ IAM column is the target. Current wildcards are called out and are not the targe
 | `domains.cold_chain_excursion.steps.qa` | `handler` | pending (OERF-201–207) | Step Functions | Read incident and report pointer. No SES. | not deployed |
 | `domains.cold_chain_excursion.steps.close` | `handler` | pending (OERF-201–207) | Step Functions | Write `CLOSED`, delete the lock item. No messaging. | not deployed |
 | `oerf.platform.ingest.handler` | `handler` | pending (OERF-201–207) | EventBridge `sim.reefer` / `TemperatureReading` | Read routing device item and tenant config. Transact incident META plus lock. `states:StartExecution` on `STATE_MACHINE_ARN` only. | not deployed |
-| `oerf.platform.inbound.handler` | `handler` | pending (OERF-201–207) | SQS inbound queue | Read/write routing and incident. Write evidence objects. `states:SendTaskSuccess` only; section 5 keeps reply classification in Interpret, so this role sends no `states:SendTaskFailure`. No channel-send APIs. | not deployed |
+| `oerf.platform.inbound.handler` | `handler` | pending (OERF-201–207) | SQS inbound queue | Read/write routing and incident. Write evidence objects. `states:SendTaskSuccess` only; section 5 keeps reply classification in Interpret, so this role sends no `states:SendTaskFailure`. `states:StopExecution` on executions of `oerf-cold-chain` only. No channel-send APIs. | not deployed |
 | `oerf.platform.channels.router` | `handler` | Mudita | Step Functions / direct invoke | Read/write routing (`OUTMSG#`, `ADDR#`). The only role with WhatsApp, SMS, and SES send. | deployed `oerf-channel-router` |
 | `oerf.platform.report.generator` | `handler` | Mudita (OERF-117) | Step Functions | Read incident. Write `REPORT_BUCKET_NAME`. SES send is not the target (ADR-008). | deployed `oerf-report-generator` |
 | `oerf.platform.api.stream_broadcaster` | `handler` | Ananda (OERF-308) | Incident table stream | Read incident stream. Read routing subscriptions. Delete gone connections. `execute-api:ManageConnections` on this API. No Step Functions, no incident writes. | deployed `oerf-stream-broadcaster` |
@@ -470,7 +478,7 @@ Current IAM that the target replaces:
 - Channel router: `ses:SendEmail`, `sns:Publish`, `socialmessaging:*` on `*`.
 - Evidence analyzer: `bedrock:InvokeModel` on the approved foundation-model ARN. `bedrock:ApplyGuardrail` on the guardrail ARN and on `us.guardrail.v1:0` in us-east-1, us-east-2, and us-west-2.
 - Report generator: `ses:SendEmail` on `*`.
-- Action handler: `states:SendTaskSuccess` and `states:SendTaskFailure` on `*`. Removal of `SendTaskSuccess` from this role is Ananda (OERF-301). The inbound role is the one that receives it (ADR-028). `SendTaskFailure` is not the inbound role's either: a decline or an unusable reply travels through the engagement decision branch (section 5), so no role sends it.
+- Action handler: no `states:SendTaskSuccess` or `states:SendTaskFailure`. The inbound role holds `states:SendTaskSuccess` (ADR-028). A decline or an unusable reply travels through the engagement decision branch (section 5).
 
 `states:SendTaskSuccess` is not resource-scopable. The wildcard resource stays, limited to the inbound role, and is recorded in `docs/security/iam-exceptions.md` when that file exists. `states:SendTaskFailure` is not granted to the inbound role.
 
@@ -534,22 +542,24 @@ Synth: [infra/app.py](../infra/app.py) takes the account from `CDK_DEFAULT_ACCOU
 
 ## 10. Logger
 
-Owner: OERF-303. Module to add: `oerf/platform/observability/logging.py`. This section is the placeholder. OERF-303 fills the function signature and publishes it here. Handler owners adopt it in their own PRs.
+Owner: OERF-303. Module: [oerf/platform/observability/logging.py](../oerf/platform/observability/logging.py). `get_logger(name)` returns a stdlib logger with a redaction filter. `log(logger, level, msg, **fields)` writes one JSON object to stdout with `sys.stdout.write` and a flush. The filter does not pass the record to a logging handler, so the CloudWatch log event is that object. A failed channel-router line sets `channel` to `none` when the route has no channel.
 
-One JSON object per line, UTC timestamp, correlation ids when the caller has them:
+`ts` is UTC `YYYY-MM-DDTHH:MM:SSZ`. `level` and `msg` are always present. `tenant_id`, `incident_id`, and `engagement_id` are omitted when the caller does not pass them. `channel`, `outcome`, and `count` are the only other fields kept.
+
+The filter drops `task_token`, `body`, `text`, `message`, `phone`, `to`, `recipient`, `e164`, `email`, `name`, `address`, and `authorization`. It masks an E.164 number, an email address, or a task-token-shaped value inside `msg` and the fields that remain. A caller that passes a prompt, an image, raw model output, or a raw DynamoDB image gets the same treatment: the key is dropped, and the value is not written.
 
 ```json
 {
-  "timestamp": "2026-10-18T12:00:00Z",
+  "ts": "2026-10-18T12:00:00Z",
   "level": "INFO",
-  "message": "incident opened",
+  "msg": "route_complete",
   "tenant_id": "t1",
   "incident_id": "INC-000123",
   "engagement_id": "ENG-03"
 }
 ```
 
-Absent ids are omitted. The logger must not accept task tokens, message bodies, phone numbers, names, prompts, images, raw model output, or raw DynamoDB images. OERF-303 defines what happens when a caller passes those keys.
+The channel router (including mock sends), the vision handler, and the report handler use this logger. They log ids, channel, outcome, and counts.
 
 ### 10.1 Model-call trace
 
@@ -584,7 +594,7 @@ No `CODEOWNERS` file is in the repo. This map is the contract until one is added
 | `oerf/platform/api/ws_handler.py`, `ws_authorizer.py` | Mudita (OERF-302) |
 | `oerf/platform/api/stream_broadcaster.py` | Ananda (OERF-308). Stays in `api/` unless OERF-302 agrees to move it. |
 | `oerf/platform/evidence/vision.py` | OERF-207 for behaviour. Ananda (OERF-310) for model, guardrail, and IAM scope. |
-| `oerf/platform/observability/ai_trace.py` | Ananda (OERF-310). `logging.py` remains OERF-303 and is not created yet. |
+| `oerf/platform/observability/ai_trace.py` | Ananda (OERF-310). `logging.py` is OERF-303. |
 | `web/**` | Mudita (OERF-302 and the dashboard tickets) |
 | `scripts/whatsapp/` | Ananda (WhatsApp channel infrastructure) |
 | `docs/interfaces.md` | Ananda (OERF-304), then OERF-306 |

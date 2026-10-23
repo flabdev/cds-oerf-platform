@@ -244,6 +244,17 @@ def test_every_function_has_active_tracing_and_thirty_day_logs(template: Templat
     assert referenced == set(log_groups)
 
 
+def test_no_role_is_granted_kms(template: Template) -> None:
+    """Bucket and table grants do not add kms:Decrypt for aws/s3 or aws/dynamodb."""
+
+    found = []
+    for statement in iter_allow_statements(template):
+        action = statement.get("Action", [])
+        names = [action] if isinstance(action, str) else list(action)
+        found.extend(name for name in names if name.startswith("kms:"))
+    assert found == []
+
+
 def test_star_resources_are_listed_in_the_exceptions_file(template: Template) -> None:
     allowed = allowed_star_actions()
     assert allowed, f"{EXCEPTIONS} does not list any IAM actions"
@@ -261,30 +272,56 @@ def test_star_resources_are_listed_in_the_exceptions_file(template: Template) ->
     )
 
 
-def test_send_task_success_is_on_inbound_and_the_compat_action_role(template: Template) -> None:
+def test_send_task_success_is_only_on_the_inbound_role(template: Template) -> None:
     inbound = role_actions(template, "oerf-inbound")
     action = role_actions(template, "oerf-action-handler")
     assert "states:SendTaskSuccess" in inbound
-    assert "states:SendTaskFailure" in inbound
-    assert "states:SendTaskSuccess" in action
-    assert "states:SendTaskFailure" in action
+    assert "states:SendTaskFailure" not in inbound
+    assert "states:StopExecution" in inbound
+    assert "states:SendTaskSuccess" not in action
+    assert "states:SendTaskFailure" not in action
     assert "states:SendTaskSuccess" not in role_actions(template, "oerf-ingest")
     assert "sqs:SendMessage" in action
 
 
-def test_action_role_loses_task_token_when_compat_flag_is_false() -> None:
-    saved = _without_synth_env()
-    try:
-        _stack, flagged = synthesize(context={"compat:actionHandlerTaskToken": "false"})
-    finally:
-        _restore_env(saved)
+def test_inbound_can_stop_only_cold_chain_executions(template: Template) -> None:
+    inbound = functions_by_name(template)["oerf-inbound"]
+    stops = [
+        statement
+        for statement in statements_for_role(template, role_logical_id(inbound))
+        if "states:StopExecution" in _action_list(statement)
+    ]
+    assert len(stops) == 1
+    rendered = json.dumps(stops[0]["Resource"])
+    assert ":execution:" in rendered
+    assert "OerfColdChainStateMachine" in rendered
+    assert "EngageParty" not in rendered
+    assert ":stateMachine:" not in rendered
+    for name in functions_by_name(template):
+        if name == "oerf-inbound":
+            continue
+        assert "states:StopExecution" not in role_actions(template, name)
 
-    action = role_actions(flagged, "oerf-action-handler")
-    inbound = role_actions(flagged, "oerf-inbound")
-    assert "states:SendTaskSuccess" not in action
-    assert "states:SendTaskFailure" not in action
-    assert "states:SendTaskSuccess" in inbound
-    assert "sqs:SendMessage" in action
+
+def test_invokers_and_queue_allows_require_this_account(template: Template) -> None:
+    permissions = template.find_resources("AWS::Lambda::Permission")
+    assert permissions
+    for logical_id, resource in permissions.items():
+        props = resource["Properties"]
+        assert props["Principal"] in {"apigateway.amazonaws.com", "events.amazonaws.com"}
+        assert props["SourceAccount"] == ACCOUNT, logical_id
+        assert "SourceArn" in props
+
+    allows = []
+    for policy in template.find_resources("AWS::SQS::QueuePolicy").values():
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            condition = statement.get("Condition", {})
+            if "aws:SourceArn" not in condition.get("ArnEquals", {}):
+                continue
+            allows.append(statement)
+    assert len(allows) == 2
+    for statement in allows:
+        assert statement["Condition"]["StringEquals"]["aws:SourceAccount"] == ACCOUNT
 
 
 def test_inbound_topic_is_standard_and_queue_redrives_after_three(
@@ -417,9 +454,55 @@ def test_inbound_event_source_reports_batch_item_failures(template: Template) ->
         mapping["Properties"]
         for mapping in mappings.values()
         if "ReportBatchItemFailures" in mapping["Properties"].get("FunctionResponseTypes", [])
+        and "StartingPosition" not in mapping["Properties"]
     ]
     assert len(partial) == 1
-    assert "dynamodb" not in json.dumps(partial[0]).lower()
+    source = partial[0]["EventSourceArn"]
+    assert source["Fn::GetAtt"][0].startswith("InboundQueue")
+
+
+def test_queues_and_inbound_topic_deny_insecure_transport(template: Template) -> None:
+    queues = template.find_resources("AWS::SQS::Queue")
+    assert len(queues) == 4
+    for logical_id, queue in queues.items():
+        assert queue["Properties"]["SqsManagedSseEnabled"] is True, logical_id
+    policies = list(template.find_resources("AWS::SQS::QueuePolicy").values())
+    covered: set[str] = set()
+    for policy in policies:
+        props = policy["Properties"]
+        statements = props["PolicyDocument"]["Statement"]
+        assert any(_denies_insecure_transport(item) for item in statements)
+        for queue in props["Queues"]:
+            covered.add(queue["Ref"])
+    assert covered == set(queues)
+
+    topics = template.find_resources("AWS::SNS::TopicPolicy")
+    assert len(topics) == 1
+    statements = next(iter(topics.values()))["Properties"]["PolicyDocument"]["Statement"]
+    assert any(_denies_insecure_transport(item) for item in statements)
+
+
+def test_stream_broadcaster_bisects_and_fails_to_a_queue(template: Template) -> None:
+    mappings = template.find_resources("AWS::Lambda::EventSourceMapping")
+    stream = [
+        mapping["Properties"]
+        for mapping in mappings.values()
+        if mapping["Properties"].get("StartingPosition") == "LATEST"
+    ]
+    assert len(stream) == 1
+    props = stream[0]
+    assert props["BisectBatchOnFunctionError"] is True
+    assert props["MaximumRecordAgeInSeconds"] == 24 * 60 * 60
+    assert props["MaximumRetryAttempts"] == 3
+    assert "ReportBatchItemFailures" in props["FunctionResponseTypes"]
+    assert "Destination" in props["DestinationConfig"]["OnFailure"]
+
+
+def _denies_insecure_transport(statement: dict) -> bool:
+    if statement.get("Effect") != "Deny":
+        return False
+    flag = statement.get("Condition", {}).get("Bool", {}).get("aws:SecureTransport")
+    return flag in ("false", False)
 
 
 def test_temperature_rule_retries_to_a_dlq_and_limits_ingest_concurrency(
@@ -732,6 +815,24 @@ def test_agentcore_flag_scopes_the_runtime_and_the_caller() -> None:
     assert invoke_runtime[0]["Resource"]["Fn::GetAtt"][1] == "AgentRuntimeArn"
     output = enabled.to_json()["Outputs"]["AgentRuntimeArn"]
     assert output["Export"]["Name"] == "AGENT-RUNTIME-ARN"
+
+    trust = enabled.find_resources("AWS::IAM::Role")[execution]["Properties"][
+        "AssumeRolePolicyDocument"
+    ]
+    condition = trust["Statement"][0]["Condition"]
+    assert condition["StringEquals"]["aws:SourceAccount"] == ACCOUNT
+    source_arn = json.dumps(condition["ArnLike"]["aws:SourceArn"])
+    assert "bedrock-agentcore" in source_arn
+    assert ACCOUNT in source_arn
+
+    exceptions = EXCEPTIONS.read_text(encoding="utf-8")
+    assert "OerfColdChainStateMachineRole" in exceptions
+    for fragment in (
+        "log-group:*",
+        "log-group:/aws/bedrock-agentcore/runtimes/*",
+        "runtimes/*:log-stream:*",
+    ):
+        assert fragment in exceptions
 
     allowed = allowed_star_actions()
     offenders = []
