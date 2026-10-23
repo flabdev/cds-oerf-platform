@@ -356,6 +356,9 @@ class OerfComputeStack(Stack):
             enforce_ssl=True,
             retention_period=Duration.days(14),
         )
+        # Incident META is pk TENANT#{tid}#INC#{id}, sk META. Timeline is
+        # EVT#, the lock is OPEN_INCIDENT, and debounce/ingest use other
+        # pk prefixes. The handler still requires the #INC# key.
         self.stream_broadcaster_fn.add_event_source(
             event_sources.DynamoEventSource(
                 data_stack.incident_table,
@@ -366,6 +369,20 @@ class OerfComputeStack(Stack):
                 max_record_age=Duration.hours(24),
                 report_batch_item_failures=True,
                 on_failure=event_sources.SqsDlq(self.stream_dlq),
+                filters=[
+                    lambda_.FilterCriteria.filter(
+                        {
+                            "dynamodb": {
+                                "Keys": {
+                                    "pk": {
+                                        "S": lambda_.FilterRule.begins_with("TENANT#")
+                                    },
+                                    "sk": {"S": lambda_.FilterRule.is_equal("META")},
+                                }
+                            }
+                        }
+                    )
+                ],
             )
         )
 

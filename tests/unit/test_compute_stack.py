@@ -522,6 +522,13 @@ def test_stream_broadcaster_bisects_and_fails_to_a_queue(template: Template) -> 
     assert props["MaximumRetryAttempts"] == 3
     assert "ReportBatchItemFailures" in props["FunctionResponseTypes"]
     assert "Destination" in props["DestinationConfig"]["OnFailure"]
+    filters = props["FilterCriteria"]["Filters"]
+    assert len(filters) == 1
+    pattern = filters[0]["Pattern"]
+    if isinstance(pattern, str):
+        pattern = json.loads(pattern)
+    assert pattern["dynamodb"]["Keys"]["sk"]["S"] == ["META"]
+    assert pattern["dynamodb"]["Keys"]["pk"]["S"] == [{"prefix": "TENANT#"}]
 
 
 def _denies_insecure_transport(statement: dict) -> bool:

@@ -1,7 +1,8 @@
-"""DynamoDB Stream Broadcaster for Live Dashboard Updates (ADR-010).
+"""DynamoDB stream broadcaster for live dashboard updates (ADR-010).
 
-Triggered by changes to IncidentTable. Broadcasts updates to all subscribed
-WebSocket connections for the incident's tenant.
+Incident META changes go to WebSocket subscriptions for that tenant.
+Incident scope receives the sanitized incident event. Tenant-list scope
+receives the summary. A row with no scope receives nothing.
 """
 
 from __future__ import annotations
@@ -9,13 +10,18 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import boto3
 from boto3.dynamodb.types import TypeDeserializer
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
-logger = logging.getLogger(__name__)
+from oerf.platform.observability.logging import get_logger, log
+
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 ROUTING_TABLE_NAME = os.environ.get("ROUTING_TABLE_NAME", "")
@@ -24,6 +30,21 @@ WEBSOCKET_ENDPOINT = os.environ.get("WEBSOCKET_ENDPOINT", "")
 _dynamodb = None
 _apigw_client = None
 _deserializer = TypeDeserializer()
+_INCIDENT_PK = re.compile(r"^TENANT#([^#]+)#INC#(.+)$")
+_ISO_Z = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+_OPTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# Incident ``data`` keys. Anything else on the image stays off the socket.
+_INCIDENT_DATA = frozenset(
+    {"state", "stage", "opened_at", "updated_at", "recommended_option", "option_ids"}
+)
+_SUMMARY_DATA = frozenset({"incident_id", "state", "stage", "version"})
+_ENVELOPE = frozenset(
+    {"event_type", "tenant_id", "incident_id", "version", "emitted_at", "data"}
+)
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
 
 
 def get_dynamodb():
@@ -44,85 +65,409 @@ def get_apigw():
 
 
 def deserialize_dynamodb_image(image: dict[str, Any]) -> dict[str, Any]:
-    """Convert DynamoDB Stream image to standard Python dict."""
-    return {k: _deserializer.deserialize(v) for k, v in image.items()}
+    """Convert a DynamoDB Stream image to a plain dict."""
+    return {key: _deserializer.deserialize(value) for key, value in image.items()}
 
 
-def get_tenant_connections(tenant_id: str, incident_id: str | None = None) -> list[str]:
-    """Fetch active connection IDs subscribed to this tenant and incident."""
-    if not ROUTING_TABLE_NAME:
-        return []
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    """Broadcast one batch. Retryable delivery errors are partial failures."""
 
-    table = get_dynamodb().Table(ROUTING_TABLE_NAME)
-    try:
-        response = table.query(
-            KeyConditionExpression="pk = :pk",
-            ExpressionAttributeValues={":pk": f"WS_SUB#{tenant_id}"},
-        )
-        recipients = []
-        for item in response.get("Items", []):
-            cid = item.get("connection_id")
-            if not cid:
-                continue
-            sub_incident = item.get("incident_id", "ALL")
-            # Deliver if subscribed to all incidents or specifically to this incident
-            if sub_incident in ("ALL", "*") or (incident_id and sub_incident == incident_id):
-                recipients.append(cid)
-        return recipients
-    except Exception as exc:
-        logger.error("Failed to query WebSocket connections: %s", exc)
-        return []
-
-
-def handler(event: dict[str, Any], context: Any) -> None:
-    """Process DynamoDB stream records and broadcast to WebSocket clients."""
-    records = event.get("Records", [])
-    logger.info("Processing %d DynamoDB stream records", len(records))
-
+    records = event.get("Records")
+    if not isinstance(records, list):
+        records = []
+    log(logger, logging.INFO, "stream_batch", count=len(records), outcome="received")
+    failures: list[dict[str, str]] = []
     apigw = get_apigw()
-    if not apigw:
-        logger.warning("WEBSOCKET_ENDPOINT not configured, skipping broadcast")
-        return
-
-    table = get_dynamodb().Table(ROUTING_TABLE_NAME) if ROUTING_TABLE_NAME else None
+    table = _routing_table()
+    if apigw is None or table is None:
+        log(logger, logging.WARNING, "stream_batch", outcome="not_configured", count=0)
+        return {"batchItemFailures": []}
 
     for record in records:
-        event_name = record.get("eventName")  # INSERT, MODIFY, REMOVE
-        new_image_raw = record.get("dynamodb", {}).get("NewImage")
-
-        if not new_image_raw:
+        if not isinstance(record, dict):
+            log(logger, logging.WARNING, "stream_record", outcome="malformed", count=1)
             continue
-
-        item = deserialize_dynamodb_image(new_image_raw)
-        tenant_id = item.get("tenant_id") or item.get("pk", "").replace("TENANT#", "")
-        incident_id = item.get("incident_id") or item.get("sk", "").replace("INCIDENT#", "")
-
-        if not tenant_id:
+        sequence = _sequence(record)
+        try:
+            if _deliver(record, table, apigw):
+                continue
+        except (ClientError, BotoCoreError):
+            log(logger, logging.ERROR, "stream_record", outcome="query_failed", count=1)
+        if not sequence:
+            log(logger, logging.ERROR, "stream_record", outcome="malformed", count=1)
             continue
+        failures.append({"itemIdentifier": sequence})
+    return {"batchItemFailures": failures}
 
-        broadcast_payload = json.dumps(
-            {
-                "type": "INCIDENT_UPDATE",
-                "eventName": event_name,
-                "tenant_id": tenant_id,
-                "incident_id": incident_id,
-                "status": item.get("status"),
-                "timeline": item.get("timeline", []),
-                "evidence_analysis": item.get("evidence_analysis"),
-                "updated_at": item.get("updated_at"),
-            }
-        ).encode("utf-8")
 
-        connection_ids = get_tenant_connections(tenant_id, incident_id)
-        for conn_id in connection_ids:
-            try:
-                apigw.post_to_connection(ConnectionId=conn_id, Data=broadcast_payload)
-            except ClientError as exc:
-                if exc.response.get("Error", {}).get("Code") == "GoneException":
-                    logger.info("Pruning disconnected client %s", conn_id)
-                    if table:
-                        table.delete_item(
-                            Key={"pk": f"WS_SUB#{tenant_id}", "sk": f"CONN#{conn_id}"}
-                        )
-                else:
-                    logger.error("Failed to push to connection %s: %s", conn_id, exc)
+def _routing_table():
+    if not ROUTING_TABLE_NAME:
+        return None
+    return get_dynamodb().Table(ROUTING_TABLE_NAME)
+
+
+def _deliver(record: dict[str, Any], table, apigw) -> bool:
+    """Return True when the record must not be retried."""
+
+    event_name = record.get("eventName")
+    if event_name == "REMOVE":
+        identity = _identity(_image(record, "OldImage"))
+        if identity is None:
+            log(logger, logging.WARNING, "stream_record", outcome="malformed", count=1)
+        else:
+            tenant_id, incident_id = identity
+            log(
+                logger,
+                logging.INFO,
+                "stream_remove_skipped",
+                tenant_id=tenant_id,
+                incident_id=incident_id,
+                outcome="skipped",
+                count=1,
+            )
+        return True
+
+    item = _image(record, "NewImage")
+    identity = _identity(item)
+    if item is None or identity is None:
+        log(logger, logging.WARNING, "stream_record", outcome="malformed", count=1)
+        return True
+    tenant_id, incident_id = identity
+    state = _text(item.get("state"))
+    if state is None:
+        log(
+            logger,
+            logging.WARNING,
+            "stream_record",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+            outcome="malformed",
+            count=1,
+        )
+        return True
+
+    version = _version(item)
+    stage = _stage(item, state)
+    emitted_at = _now().strftime("%Y-%m-%dT%H:%M:%SZ")
+    payloads = {
+        "incident": _envelope(
+            "INCIDENT_UPDATE",
+            tenant_id,
+            incident_id,
+            version,
+            emitted_at,
+            _incident_data(item, state, stage),
+        ),
+        "tenant": _envelope(
+            "INCIDENT_SUMMARY",
+            tenant_id,
+            incident_id,
+            version,
+            emitted_at,
+            _summary_data(incident_id, state, stage, version),
+        ),
+    }
+    retry = False
+    delivered = 0
+    for subscription in _subscriptions(table, tenant_id):
+        audience = _audience(subscription, tenant_id, incident_id)
+        if audience is None:
+            continue
+        connection_id = _text(subscription.get("connection_id"))
+        if connection_id is None:
+            continue
+        posted = _post(
+            apigw,
+            table,
+            tenant_id,
+            incident_id,
+            connection_id,
+            subscription,
+            payloads[audience],
+        )
+        if posted:
+            delivered += 1
+        else:
+            retry = True
+    log(
+        logger,
+        logging.INFO,
+        "stream_broadcast",
+        tenant_id=tenant_id,
+        incident_id=incident_id,
+        outcome="sent",
+        count=delivered,
+    )
+    return not retry
+
+
+def _post(
+    apigw,
+    table,
+    tenant_id: str,
+    incident_id: str,
+    connection_id: str,
+    subscription: dict,
+    payload: dict,
+) -> bool:
+    """Return False when the post should be retried. Gone is not a failure."""
+
+    try:
+        apigw.post_to_connection(ConnectionId=connection_id, Data=_dumps(payload).encode("utf-8"))
+    except ClientError as exc:
+        if _gone(exc):
+            _forget(table, tenant_id, connection_id, subscription)
+            log(
+                logger,
+                logging.INFO,
+                "connection_gone",
+                tenant_id=tenant_id,
+                incident_id=incident_id,
+                outcome="gone",
+                count=1,
+            )
+            return True
+        log(
+            logger,
+            logging.ERROR,
+            "stream_delivery",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+            outcome="retry",
+            count=1,
+        )
+        return False
+    except BotoCoreError:
+        log(
+            logger,
+            logging.ERROR,
+            "stream_delivery",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+            outcome="retry",
+            count=1,
+        )
+        return False
+    return True
+
+
+def _forget(table, tenant_id: str, connection_id: str, subscription: dict) -> None:
+    """Drop the subscription row and the connection binding."""
+
+    sk = _text(subscription.get("sk")) or f"CONN#{connection_id}"
+    keys = (
+        {"pk": f"WS_SUB#{tenant_id}", "sk": sk},
+        {"pk": f"WS#{connection_id}", "sk": "METADATA"},
+    )
+    for key in keys:
+        try:
+            table.delete_item(Key=key)
+        except (ClientError, BotoCoreError):
+            log(
+                logger,
+                logging.ERROR,
+                "connection_gone",
+                tenant_id=tenant_id,
+                outcome="gone",
+                count=1,
+            )
+
+
+def _subscriptions(table, tenant_id: str) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    kwargs: dict[str, Any] = {
+        "KeyConditionExpression": "pk = :pk",
+        "ExpressionAttributeValues": {":pk": f"WS_SUB#{tenant_id}"},
+    }
+    while True:
+        response = table.query(**kwargs)
+        for item in response.get("Items", []):
+            if isinstance(item, dict):
+                found.append(item)
+        token = response.get("LastEvaluatedKey")
+        if not token:
+            return found
+        kwargs["ExclusiveStartKey"] = token
+
+
+def _audience(subscription: dict[str, Any], tenant_id: str, incident_id: str) -> str | None:
+    """Incident, tenant list, or nothing. Missing scope and ALL receive nothing."""
+
+    row_tenant = _text(subscription.get("tenant_id"))
+    if row_tenant is not None and row_tenant != tenant_id:
+        return None
+    scope = subscription.get("scope")
+    if scope == "incident" and _text(subscription.get("incident_id")) == incident_id:
+        return "incident"
+    if scope == "tenant":
+        return "tenant"
+    return None
+
+
+def _identity(item: dict[str, Any] | None) -> tuple[str, str] | None:
+    if not isinstance(item, dict):
+        return None
+    pk = _text(item.get("pk"))
+    if pk is None:
+        return None
+    match = _INCIDENT_PK.fullmatch(pk)
+    if match is None:
+        return None
+    tenant_id, incident_id = match.group(1), match.group(2)
+    if not tenant_id or not incident_id:
+        return None
+    declared_tenant = _text(item.get("tenant_id"))
+    declared_incident = _text(item.get("incident_id"))
+    if declared_tenant is not None and declared_tenant != tenant_id:
+        return None
+    if declared_incident is not None and declared_incident != incident_id:
+        return None
+    return tenant_id, incident_id
+
+
+def _image(record: dict[str, Any], name: str) -> dict[str, Any] | None:
+    dynamodb = record.get("dynamodb")
+    if not isinstance(dynamodb, dict):
+        return None
+    raw = dynamodb.get(name)
+    if not isinstance(raw, dict) or not raw:
+        return None
+    try:
+        item = deserialize_dynamodb_image(raw)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    keys = dynamodb.get("Keys")
+    if isinstance(keys, dict):
+        try:
+            parsed = deserialize_dynamodb_image(keys)
+        except (TypeError, ValueError, AttributeError):
+            parsed = {}
+        for field in ("pk", "sk"):
+            if field not in item and field in parsed:
+                item[field] = parsed[field]
+    return item
+
+
+def _incident_data(item: dict[str, Any], state: str, stage: str) -> dict[str, Any]:
+    data: dict[str, Any] = {"state": state, "stage": stage}
+    for name in ("opened_at", "updated_at"):
+        stamp = _timestamp(item.get(name))
+        if stamp is not None:
+            data[name] = stamp
+    recommended = _option_id(item.get("recommended_option"))
+    if recommended is not None:
+        data["recommended_option"] = recommended
+    option_ids = _option_ids(item.get("options"))
+    if option_ids:
+        data["option_ids"] = option_ids
+    return {key: value for key, value in data.items() if key in _INCIDENT_DATA}
+
+
+def _summary_data(incident_id: str, state: str, stage: str, version: int) -> dict[str, Any]:
+    data = {
+        "incident_id": incident_id,
+        "state": state,
+        "stage": stage,
+        "version": version,
+    }
+    return {key: value for key, value in data.items() if key in _SUMMARY_DATA}
+
+
+def _envelope(
+    event_type: str,
+    tenant_id: str,
+    incident_id: str,
+    version: int,
+    emitted_at: str,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {
+        "event_type": event_type,
+        "tenant_id": tenant_id,
+        "incident_id": incident_id,
+        "version": version,
+        "emitted_at": emitted_at,
+        "data": data,
+    }
+    return {key: value for key, value in payload.items() if key in _ENVELOPE}
+
+
+def _option_ids(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    found: list[str] = []
+    for option in value:
+        if isinstance(option, dict):
+            option_id = _option_id(option.get("id"))
+        else:
+            option_id = _option_id(option)
+        if option_id is not None:
+            found.append(option_id)
+    return found
+
+
+def _option_id(value: Any) -> str | None:
+    if not isinstance(value, str) or not _OPTION_ID.fullmatch(value):
+        return None
+    return value
+
+
+def _stage(item: dict[str, Any], state: str) -> str:
+    for name in ("stage", "current_stage"):
+        value = _text(item.get(name))
+        if value is not None:
+            return value
+    return state
+
+
+def _version(item: dict[str, Any]) -> int:
+    for name in ("version", "event_seq"):
+        number = _whole(item.get(name))
+        if number is not None and number >= 0:
+            return number
+    return 1
+
+
+def _timestamp(value: Any) -> str | int | None:
+    if isinstance(value, str) and _ISO_Z.fullmatch(value):
+        return value
+    number = _whole(value)
+    if number is not None and number >= 0:
+        return number
+    return None
+
+
+def _whole(value: Any) -> int | None:
+    if isinstance(value, bool) or isinstance(value, float):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, Decimal) and value == value.to_integral_value():
+        return int(value)
+    return None
+
+
+def _text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _sequence(record: dict[str, Any]) -> str | None:
+    dynamodb = record.get("dynamodb")
+    if not isinstance(dynamodb, dict):
+        return None
+    return _text(dynamodb.get("SequenceNumber"))
+
+
+def _gone(exc: ClientError) -> bool:
+    error = exc.response.get("Error", {})
+    if error.get("Code") == "GoneException":
+        return True
+    status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    return status == 410
+
+
+def _dumps(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, separators=(",", ":"))
