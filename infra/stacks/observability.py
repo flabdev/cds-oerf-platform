@@ -31,9 +31,10 @@ _DELIVERY_FAILURE_OUTCOMES = ("error", "not_sent")
 def alarm_id_for(function: lambda_.IFunction) -> str:
     """A per-function id fragment for its alarms.
 
-    ``node.id`` alone is not unique: every ``custom_resources.Provider`` names
-    its inner Lambda ``framework-onEvent``. ``node.path`` is unique. The path
-    separators are dropped so the result is a valid construct id.
+    ``node.id`` alone is not unique across stacks: every
+    ``custom_resources.Provider`` names its inner Lambda ``framework-onEvent``,
+    so two providers collide. ``node.path`` is unique, so the path separators
+    are dropped to keep a valid, readable construct id.
     """
 
     return function.node.path.replace("/", "")

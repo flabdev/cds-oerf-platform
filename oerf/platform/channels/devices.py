@@ -70,12 +70,7 @@ def seed_demo_devices(client: Any, table_name: str, root: Path | None = None) ->
 
 
 def seed_handler(event: dict[str, Any], _context: Any) -> dict[str, str]:
-    """CloudFormation entry point. Create and update rewrite the demo rows.
-
-    Delete does nothing, so removing the custom resource does not erase devices
-    that ingest may still be reading. A later deploy writes the same ids again.
-    """
-
+    """CloudFormation custom-resource entry point for demo device rows."""
     physical_id = str(event.get("PhysicalResourceId") or "oerf-demo-device-seed")
     if event.get("RequestType") == "Delete":
         return {"PhysicalResourceId": physical_id}
