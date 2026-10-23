@@ -279,6 +279,17 @@ def handler(
             consecutive_breaches=max(1, streak),
         )
         if not decision.triggered:
+            ports.incidents.record_reading(
+                tenant_id,
+                shipment_id,
+                event_id=event_id,
+                timestamp=reading.ts.isoformat(),
+                temperature_c=reading.temperature_c,
+                device_id=reading.device_id,
+                sequence=reading.seq,
+                latitude=reading.lat,
+                longitude=reading.lon,
+            )
             return {
                 "status": "accepted",
                 "reason": "debouncing" if streak else "within_range",
@@ -292,6 +303,17 @@ def handler(
             reason=decision.reason or "TEMPERATURE_EXCURSION",
             config_version=config.version,
             config_snapshot=config.model_dump(mode="json"),
+        )
+        ports.incidents.record_reading(
+            tenant_id,
+            shipment_id,
+            event_id=event_id,
+            timestamp=reading.ts.isoformat(),
+            temperature_c=reading.temperature_c,
+            device_id=reading.device_id,
+            sequence=reading.seq,
+            latitude=reading.lat,
+            longitude=reading.lon,
         )
         execution_name = _execution_name(incident.incident_id)
         if ports.incidents.get(tenant_id, incident.incident_id).state != "OPEN":

@@ -77,7 +77,10 @@ class S3ReportStore:
                     IfNoneMatch="*",
                 )
             except ClientError as exc:
-                if exc.response.get("Error", {}).get("Code") != "PreconditionFailed":
+                if exc.response.get("Error", {}).get("Code") not in {
+                    "PreconditionFailed",
+                    "ConditionalRequestConflict",
+                }:
                     raise
                 version += 1
                 continue
