@@ -100,6 +100,58 @@ def test_concurrent_creates_open_one_incident() -> None:
     assert [event.sk[-4:] for event in store.events("t1", "INC-000001")] == ["0001", "0002"]
 
 
+def test_record_reading_writes_an_idempotent_read_row_for_open_incident() -> None:
+    client = FakeDynamoClient()
+    store = DynamoIncidentStore(client, "incident", clock=_clock)
+    incident = store.create(tenant_id="t1", shipment_id="PH-2841", reason="TEMPERATURE_ABOVE_MAX")
+
+    assert store.record_reading(
+        "t1",
+        "PH-2841",
+        event_id="event-1",
+        timestamp="2026-10-20T10:16:00+00:00",
+        temperature_c=8.4,
+        device_id="RF-1",
+        sequence=7,
+        latitude=17.4,
+        longitude=78.3,
+    ) is True
+    assert store.record_reading(
+        "t1",
+        "PH-2841",
+        event_id="event-1",
+        timestamp="2026-10-20T10:16:00+00:00",
+        temperature_c=8.4,
+        device_id="RF-1",
+        sequence=7,
+        latitude=17.4,
+        longitude=78.3,
+    ) is False
+    rows = client.query(
+        TableName="incident",
+        KeyConditionExpression="pk = :pk AND begins_with(sk, :prefix)",
+        ExpressionAttributeValues={":pk": {"S": incident.pk}, ":prefix": {"S": "READ#"}},
+    )["Items"]
+    assert len(rows) == 1
+    assert rows[0]["ts"]["S"] == "2026-10-20T10:16:00+00:00"
+    assert rows[0]["temperature_c"]["N"] == "8.4"
+    assert rows[0]["device_id"]["S"] == "RF-1"
+
+
+def test_readings_without_an_open_incident_are_not_persisted() -> None:
+    store = DynamoIncidentStore(FakeDynamoClient(), "incident", clock=_clock)
+
+    assert store.record_reading(
+        "t1",
+        "PH-2841",
+        event_id="event-1",
+        timestamp="2026-10-20T10:16:00Z",
+        temperature_c=8.4,
+        device_id="RF-1",
+        sequence=7,
+    ) is False
+
+
 def test_transition_appends_the_next_sequence() -> None:
     store = DynamoIncidentStore(FakeDynamoClient(), "incident", clock=_clock)
     incident = store.create(tenant_id="t1", shipment_id="PH-2841", reason="TEMPERATURE_ABOVE_MAX")

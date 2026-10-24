@@ -338,6 +338,7 @@ def handler(
             consecutive_breaches=max(1, streak),
         )
         if not decision.triggered:
+            _record_reading(ports, tenant_id, shipment_id, reading, event_id)
             _store_reading(ports, tenant_id, shipment_id, reading)
             return {
                 "status": "accepted",
@@ -353,6 +354,7 @@ def handler(
             config_version=config.version,
             config_snapshot=config.model_dump(mode="json"),
         )
+        _record_reading(ports, tenant_id, shipment_id, reading, event_id)
         _store_reading(ports, tenant_id, shipment_id, reading, incident.incident_id)
         execution_name = _execution_name(incident.incident_id)
         if ports.incidents.get(tenant_id, incident.incident_id).state != "OPEN":
@@ -463,6 +465,28 @@ class _DynamoConfigReader:
 
     def get(self, tenant_id: str, domain: str) -> ResolvedConfig:
         return get_config(tenant_id, domain, repository=self._repository)
+
+
+def _record_reading(
+    ports: IngestDependencies,
+    tenant_id: str,
+    shipment_id: str,
+    reading: Reading,
+    event_id: str,
+) -> None:
+    """Store the reading on the open incident, including device and position."""
+
+    ports.incidents.record_reading(
+        tenant_id,
+        shipment_id,
+        event_id=event_id,
+        timestamp=reading.ts.isoformat(),
+        temperature_c=reading.temperature_c,
+        device_id=reading.device_id,
+        sequence=reading.seq,
+        latitude=reading.lat,
+        longitude=reading.lon,
+    )
 
 
 def _store_reading(
