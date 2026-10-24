@@ -2,16 +2,21 @@
 
 import hashlib
 import threading
+from datetime import UTC, datetime
 
 import pytest
+from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 
+from oerf.platform.incidents.dynamo import DynamoIncidentStore
 from oerf.platform.report.generator import handler
 from oerf.platform.report.model import SECTIONS, DecisionTrace, ReportDocument, ReportOption
 from oerf.platform.report.service import publish_report
 from oerf.platform.report.store import MemoryReportStore, S3ReportStore
+from tests.unit.support.fake_dynamo import FakeDynamoClient
 
 GENERATED = "2026-10-20T10:45:00Z"
+_DESERIALIZER = TypeDeserializer()
 
 
 def test_ph2841_html_contains_the_decision_trace_and_every_section() -> None:
@@ -203,6 +208,73 @@ def test_concurrent_saves_keep_both_bodies() -> None:
     assert {item.report_version for item in results} == {1, 2}
 
 
+def test_a_persisted_ingest_reading_reaches_the_temperature_timeline(monkeypatch) -> None:
+    """The production ``READ#`` writer and the report reader agree on the row shape."""
+
+    client = FakeDynamoClient()
+    incidents = DynamoIncidentStore(client, "incidents", clock=_clock)
+    incident = incidents.create(
+        tenant_id="t1",
+        shipment_id="PH-9",
+        reason="TEMPERATURE_EXCURSION",
+    )
+    assert incidents.record_reading(
+        "t1",
+        "PH-9",
+        event_id="evt-1",
+        timestamp="2026-10-20T10:16:00+00:00",
+        temperature_c=8.4,
+        device_id="RF-1",
+        sequence=7,
+    )
+    store = MemoryReportStore()
+    monkeypatch.setattr("oerf.platform.report.generator._store", lambda: store)
+    monkeypatch.setattr("oerf.platform.report.generator.INCIDENT_TABLE_NAME", "incidents")
+    monkeypatch.setattr(
+        "oerf.platform.report.generator.get_dynamodb",
+        lambda: _Resource(_ResourceTable(client, "incidents")),
+    )
+
+    result = handler({"tenant_id": "t1", "incident_id": incident.incident_id}, None)
+    html = store.objects[result["report_key"]].decode()
+    temperature, states = _sections(html, "temperature_timeline", "state_timeline", "diagnosis")
+
+    assert result["success"] is True
+    assert "2026-10-20T10:16:00+00:00 8.4 C" in temperature
+    assert "8.4 C" not in states
+
+
+def test_conditional_s3_conflict_reallocates_without_overwriting() -> None:
+    bucket = _ConflictingBucket()
+    store = S3ReportStore(bucket, "reports")
+
+    receipt = store.save("t1", "INC-1", b"new report", "html", GENERATED)
+
+    assert bucket.attempts == ["reports/t1/INC-1/v1.html", "reports/t1/INC-1/v2.html"]
+    assert bucket.objects["reports/t1/INC-1/v1.html"] == b"competing report"
+    assert bucket.objects[receipt.s3_key] == b"new report"
+    assert receipt.report_version == 2
+
+
+def test_report_history_queries_read_every_dynamodb_page(monkeypatch) -> None:
+    store = MemoryReportStore()
+    table = _PagedIncidentTable(_stored_incident())
+    monkeypatch.setattr("oerf.platform.report.generator._store", lambda: store)
+    monkeypatch.setattr("oerf.platform.report.generator.INCIDENT_TABLE_NAME", "incidents")
+    monkeypatch.setattr("oerf.platform.report.generator.get_dynamodb", lambda: table)
+
+    result = handler(
+        {"tenant_id": "t1", "incident_id": "INC-9"},
+        None,
+    )
+    html = store.objects[result["report_key"]].decode()
+    temperature, states = _sections(html, "temperature_timeline", "state_timeline", "diagnosis")
+
+    assert "2026-10-20T10:17:00Z 8.4 C" in temperature
+    assert "EVT#2026-10-20T10:17:00Z#0002 OPEN -&gt; DIAGNOSING" in states
+    assert table.continuations >= 2
+
+
 def test_version_allocation_reads_every_list_page() -> None:
     bucket = _PagedBucket()
     store = S3ReportStore(bucket, "reports")
@@ -314,6 +386,96 @@ class _RacingBucket:
                 self.objects[key] = body
 
 
+class _ConflictingBucket:
+    """A competing writer claims the listed version between list and put."""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.attempts: list[str] = []
+
+    def list_objects_v2(self, **_kwargs: object) -> dict:
+        return {"Contents": [{"Key": key} for key in self.objects], "IsTruncated": False}
+
+    def put_object(self, **kwargs: object) -> None:
+        key = str(kwargs["Key"])
+        self.attempts.append(key)
+        if len(self.attempts) == 1:
+            self.objects["reports/t1/INC-1/v1.html"] = b"competing report"
+            raise ClientError({"Error": {"Code": "ConditionalRequestConflict"}}, "PutObject")
+        assert key not in self.objects
+        self.objects[key] = kwargs["Body"]
+
+
+class _PagedIncidentTable(_Table):
+    def __init__(self, item: dict) -> None:
+        super().__init__(item)
+        self.continuations = 0
+
+    def query(self, **kwargs: object) -> dict:
+        prefix = kwargs["ExpressionAttributeValues"][":prefix"]
+        page_two = kwargs.get("ExclusiveStartKey") is not None
+        if page_two:
+            self.continuations += 1
+            stamp = "2026-10-20T10:17:00Z"
+            if prefix == "READ#":
+                reading = {"sk": f"READ#{stamp}#000000000008", "ts": stamp, "temperature_c": 8.4}
+                return {"Items": [reading]}
+            if prefix == "EVT#":
+                transition = {
+                    "sk": f"EVT#{stamp}#0002",
+                    "previous_state": "OPEN",
+                    "state": "DIAGNOSING",
+                }
+                return {"Items": [transition]}
+        response = super().query(**kwargs)
+        if prefix in {"READ#", "EVT#"}:
+            response["LastEvaluatedKey"] = {"pk": "TENANT#t1#INC#INC-9", "sk": f"{prefix}page-two"}
+        return response
+
+
+class _ResourceTable:
+    """A boto3-resource-shaped view over one table of the low-level fake client."""
+
+    def __init__(self, client: FakeDynamoClient, table_name: str) -> None:
+        self._client = client
+        self._table = table_name
+
+    def get_item(self, Key: dict) -> dict:
+        loaded = self._client.get_item(
+            TableName=self._table,
+            Key={name: {"S": value} for name, value in Key.items()},
+        )
+        item = loaded.get("Item")
+        return {"Item": _plain(item)} if item else {}
+
+    def query(self, **kwargs: object) -> dict:
+        expression = kwargs["KeyConditionExpression"]
+        values = kwargs["ExpressionAttributeValues"]
+        assert isinstance(expression, str) and isinstance(values, dict)
+        response = self._client.query(
+            TableName=self._table,
+            KeyConditionExpression=expression,
+            ExpressionAttributeValues={name: {"S": str(value)} for name, value in values.items()},
+        )
+        return {"Items": [_plain(item) for item in response.get("Items", [])]}
+
+
+class _Resource:
+    """The minimal ``boto3.resource("dynamodb")`` surface the report reader uses."""
+
+    def __init__(self, table: _ResourceTable) -> None:
+        self._table = table
+
+    def Table(self, _name: str) -> _ResourceTable:
+        return self._table
+
+
+def _plain(item: dict) -> dict:
+    """Deserialize one low-level row the way the boto3 resource does."""
+
+    return {name: _DESERIALIZER.deserialize(value) for name, value in item.items()}
+
+
 class _PagedBucket:
     def __init__(self) -> None:
         self.objects = {
@@ -336,6 +498,10 @@ class _PagedBucket:
         body = kwargs["Body"]
         if isinstance(body, bytes):
             self.objects[key] = body
+
+
+def _clock() -> datetime:
+    return datetime(2026, 10, 20, 10, 16, tzinfo=UTC)
 
 
 def _ph2841() -> ReportDocument:

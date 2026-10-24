@@ -34,7 +34,16 @@ _INCIDENT_PK = re.compile(r"^TENANT#([^#]+)#INC#(.+)$")
 _ISO_Z = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 # Incident ``data`` keys the desk accepts. Anything else on the image stays off the socket.
 _INCIDENT_DATA = frozenset(
-    {"incident_id", "state", "stage", "updated_at", "version"}
+    {
+        "incident_id",
+        "state",
+        "stage",
+        "updated_at",
+        "version",
+        "from_state",
+        "to_state",
+        "timeline",
+    }
 )
 _SUMMARY_DATA = frozenset({"incident_id", "state", "stage", "version"})
 _ENVELOPE = frozenset(
@@ -66,6 +75,112 @@ def get_apigw():
 def deserialize_dynamodb_image(image: dict[str, Any]) -> dict[str, Any]:
     """Convert a DynamoDB Stream image to a plain dict."""
     return {key: _deserializer.deserialize(value) for key, value in image.items()}
+
+
+def subscription_targets(items: list[dict[str, Any]], incident_id: str) -> list[tuple[str, str]]:
+    """Return ``(connection_id, scope)`` for this incident.
+
+    Tenant scope receives the summary. Incident scope receives the update only
+    when the stored incident id matches. ``ALL`` and ``*`` receive nothing.
+    """
+
+    targets: list[tuple[str, str]] = []
+    for item in items:
+        connection_id = item.get("connection_id")
+        scope = item.get("scope")
+        if not isinstance(connection_id, str) or not connection_id:
+            continue
+        if scope == "tenant" and "incident_id" not in item:
+            targets.append((connection_id, "tenant"))
+            continue
+        subscribed = item.get("incident_id")
+        if (
+            scope == "incident"
+            and isinstance(subscribed, str)
+            and subscribed not in {"", "ALL", "*"}
+            and subscribed == incident_id
+        ):
+            targets.append((connection_id, "incident"))
+    return targets
+
+
+def dashboard_envelopes(
+    item: dict[str, Any],
+    *,
+    emitted_at: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Return the summary and incident envelopes, or None when the item has no identity."""
+
+    tenant_id = item.get("tenant_id")
+    incident_id = item.get("incident_id")
+    if isinstance(item.get("sk"), str) and item["sk"].startswith("EVT#"):
+        identity = _partition_identity(item.get("pk"))
+        if identity is None:
+            return None
+        key_tenant, key_incident = identity
+        if isinstance(tenant_id, str) and tenant_id.strip() != key_tenant:
+            return None
+        tenant_id = key_tenant
+        incident_id = incident_id or key_incident
+    if not isinstance(tenant_id, str) or not tenant_id.strip():
+        return None
+    if not isinstance(incident_id, str) or not incident_id.strip():
+        return None
+    tenant_id = tenant_id.strip()
+    incident_id = incident_id.strip()
+    state = _public_text(item.get("state")) or _public_text(item.get("status"))
+    if state is None:
+        return None
+    version = _public_version(item.get("version"))
+    stage = _public_text(item.get("stage")) or state
+    summary = {
+        "event_type": "INCIDENT_SUMMARY",
+        "tenant_id": tenant_id,
+        "incident_id": incident_id,
+        "version": version,
+        "emitted_at": emitted_at,
+        "scope": "tenant",
+        "data": {
+            "incident_id": incident_id,
+            "state": state,
+            "stage": stage,
+            "version": version,
+        },
+    }
+    data: dict[str, Any] = {
+        "incident_id": incident_id,
+        "state": state,
+        "stage": stage,
+        "version": version,
+    }
+    shipment_id = _public_text(item.get("shipment_id"))
+    if shipment_id is not None:
+        data["shipment_id"] = shipment_id
+    updated_at = _public_text(item.get("updated_at"))
+    if updated_at is not None:
+        data["updated_at"] = updated_at
+    config_version = _public_version(item.get("config_version"), default=None)
+    if config_version is not None:
+        data["config_version"] = config_version
+    reading = _public_reading(item.get("latest_reading"))
+    if reading is not None:
+        data["latest_reading"] = reading
+    if str(item.get("sk") or "").startswith("EVT#"):
+        previous = _public_text(item.get("previous_state"))
+        if previous is not None:
+            data["from_state"] = previous
+            data["to_state"] = state
+            data["timeline"] = [{"type": "state_changed", "at": emitted_at, "state": state}]
+    update = {
+        "event_type": "INCIDENT_UPDATE",
+        "tenant_id": tenant_id,
+        "incident_id": incident_id,
+        "version": version,
+        "emitted_at": emitted_at,
+        "scope": "incident",
+        "data": data,
+    }
+    return summary, update
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -157,7 +272,7 @@ def _deliver(record: dict[str, Any], table, apigw) -> bool:
             incident_id,
             version,
             emitted_at,
-            _incident_data(item, incident_id, state, stage, version),
+            _incident_data(item, incident_id, state, stage, version, emitted_at),
         ),
         "tenant": _envelope(
             "INCIDENT_SUMMARY",
@@ -355,6 +470,7 @@ def _incident_data(
     state: str,
     stage: str,
     version: int,
+    emitted_at: str,
 ) -> dict[str, Any]:
     """Incident-scope ``data``. Keys match the desk allowlist in ``deskEvents.js``."""
 
@@ -367,6 +483,12 @@ def _incident_data(
     stamp = _timestamp(item.get("updated_at"))
     if stamp is not None:
         data["updated_at"] = stamp
+    if str(item.get("sk") or "").startswith("EVT#"):
+        previous = _text(item.get("previous_state"))
+        if previous is not None:
+            data["from_state"] = previous
+            data["to_state"] = state
+            data["timeline"] = [{"type": "state_changed", "at": emitted_at, "state": state}]
     return {key: value for key, value in data.items() if key in _INCIDENT_DATA}
 
 
@@ -458,3 +580,47 @@ def _gone(exc: ClientError) -> bool:
 
 def _dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, separators=(",", ":"))
+
+
+def _public_text(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip() and value.strip() not in {"ALL", "*"}:
+        return value.strip()
+    return None
+
+
+def _public_version(value: Any, *, default: int | None = 1) -> int | None:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, Decimal) and value == int(value):
+        return int(value)
+    return default
+
+
+def _public_reading(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    ts = _public_text(value.get("ts"))
+    temperature = value.get("temperature_c")
+    if ts is None or isinstance(temperature, bool):
+        return None
+    if not isinstance(temperature, (int, float, Decimal)):
+        return None
+    return {"ts": ts, "temperature_c": float(temperature)}
+
+
+def _partition_identity(value: Any) -> tuple[str, str] | None:
+    """Extract tenant and incident ids from a canonical incident partition key."""
+
+    if not isinstance(value, str):
+        return None
+    parts = value.split("#")
+    if len(parts) != 4 or parts[0] != "TENANT" or parts[2] != "INC":
+        return None
+    tenant_id, incident_id = parts[1], parts[3]
+    if not tenant_id.strip() or not incident_id.strip():
+        return None
+    return tenant_id, incident_id

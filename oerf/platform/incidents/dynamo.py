@@ -5,6 +5,7 @@ The client is injected. This module never constructs one.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -202,6 +203,56 @@ class DynamoIncidentStore:
             ExpressionAttributeValues={":pk": s(incident.pk), ":prefix": s("EVT#")},
         )
         return [_timeline(item) for item in response.get("Items", [])]
+
+    def record_reading(
+        self,
+        tenant_id: str,
+        shipment_id: str,
+        *,
+        event_id: str,
+        timestamp: str,
+        temperature_c: float,
+        device_id: str,
+        sequence: int,
+        latitude: float | None = None,
+        longitude: float | None = None,
+    ) -> bool:
+        context = TenantContext(tenant_id=tenant_id)
+        shipment = required_text(shipment_id, "shipment_id")
+        lock = self.lock.get_lock(context.tenant_id, shipment)
+        if lock is None:
+            return False
+        incident_id = str(lock["incident_id"])
+        incident = self.get(context.tenant_id, incident_id)
+        if incident.state in TERMINAL_STATES:
+            return False
+        suffix = hashlib.sha256(event_id.encode("utf-8")).hexdigest()
+        row: Item = {
+            **key(incident.pk, f"READ#{timestamp}#{sequence:012d}#{suffix}"),
+            "tenant_id": s(context.tenant_id),
+            "shipment_id": s(shipment),
+            "event_id": s(event_id),
+            "ts": s(timestamp),
+            "temperature_c": {"N": repr(temperature_c)},
+            "device_id": s(device_id),
+            "sequence": n(sequence),
+        }
+        if latitude is not None:
+            row["latitude"] = {"N": repr(latitude)}
+        if longitude is not None:
+            row["longitude"] = {"N": repr(longitude)}
+        try:
+            self._client.put_item(
+                TableName=self._table,
+                Item=row,
+                ConditionExpression="attribute_not_exists(#pk)",
+                ExpressionAttributeNames=_NAMES,
+            )
+        except Exception as exc:
+            if is_conditional_failure(exc):
+                return False
+            raise
+        return True
 
     def transition(
         self,
