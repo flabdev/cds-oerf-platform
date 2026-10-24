@@ -17,7 +17,7 @@ from pathlib import Path
 
 import aws_cdk as cdk
 
-from infra.runtime_asset import LAMBDA_PLATFORM, VENDORED_REQUIREMENTS
+from infra.runtime_asset import LAMBDA_PLATFORM, VENDORED_REQUIREMENTS, WHEELS
 from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
@@ -51,6 +51,22 @@ sys.path.insert(0, asset)
 import importlib
 importlib.import_module(module)
 """
+
+
+def test_every_pinned_package_has_a_hash() -> None:
+    names = [item.split("==", 1)[0] for item in VENDORED_REQUIREMENTS]
+    recorded = [name for name, _version, _filename, _digest in WHEELS]
+
+    assert recorded == names
+    for name, _version, filename, digest in WHEELS:
+        assert filename
+        assert len(digest) == 64
+        assert digest == digest.lower()
+        if name in {"pydantic-core", "rpds-py"}:
+            assert "cp311" in filename
+            assert "manylinux2014_x86_64" in filename
+        else:
+            assert filename.endswith("-py3-none-any.whl")
 
 
 def test_vendored_pins_match_pyproject_ranges() -> None:
