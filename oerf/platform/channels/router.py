@@ -20,6 +20,7 @@ from botocore.exceptions import ClientError
 from pydantic import BaseModel, ConfigDict, Field
 
 from oerf.platform.channels.engagement import EngagementStore
+from oerf.platform.channels.phone_id import _whatsapp_phone_number_id as _resolve_phone_number_id
 from oerf.platform.channels.providers.base import MessageProvider
 from oerf.platform.channels.registry import PhoneRegistry
 from oerf.platform.channels.templates import MissingFacts, MissingTemplate, render_message
@@ -41,9 +42,6 @@ USE_MOCK_EMAIL = os.environ.get("USE_MOCK_EMAIL", "false").lower() == "true"
 # Lazy-loaded AWS clients
 _dynamodb = None
 _ses = None
-_ssm = None
-_PHONE_UNSET = object()
-_cached_phone_number_id: object = _PHONE_UNSET
 
 
 def get_dynamodb():
@@ -60,48 +58,15 @@ def get_ses():
     return _ses
 
 
-def _ssm_client():
-    global _ssm
-    if _ssm is None:
-        _ssm = boto3.client("ssm")
-    return _ssm
-
-
 def _whatsapp_phone_number_id() -> str:
-    """Return the live WhatsApp phone-number id, resolved once per process.
+    """Return the live WhatsApp phone-number id, resolved once per process."""
 
-    ``WA_PHONE_NUMBER_ID_PARAM`` is read from SSM. ``WHATSAPP_PHONE_NUMBER_ID``
-    is used only when that name is unset. A failed or empty parameter does not
-    fall back to the env var.
-    """
-
-    global _cached_phone_number_id
-    if _cached_phone_number_id is not _PHONE_UNSET:
-        return str(_cached_phone_number_id)
-    name = WA_PHONE_NUMBER_ID_PARAM.strip()
-    value = WHATSAPP_PHONE_NUMBER_ID.strip() if not name else _read_phone_number_id(name)
-    _cached_phone_number_id = value
-    return value
-
-
-def _read_phone_number_id(name: str) -> str:
-    try:
-        response = _ssm_client().get_parameter(Name=name, WithDecryption=True)
-    except Exception:
-        log(
-            logger,
-            logging.ERROR,
-            "wa_phone_id_unreadable",
-            channel="WHATSAPP",
-            outcome="error",
-            count=1,
-        )
-        return ""
-    parameter = response.get("Parameter") if isinstance(response, dict) else None
-    raw = parameter.get("Value") if isinstance(parameter, dict) else None
-    if isinstance(raw, str) and raw.strip():
-        return raw.strip()
-    return ""
+    return _resolve_phone_number_id(
+        WA_PHONE_NUMBER_ID_PARAM,
+        WHATSAPP_PHONE_NUMBER_ID,
+        logger,
+        channel="WHATSAPP",
+    )
 
 
 def _required_text(value: Any) -> str | None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import boto3
 from botocore.stub import Stubber
 
-from oerf.platform.channels import router
+from oerf.platform.channels import phone_id, router
 
 _PARAM = "/oerf/whatsapp/phone-number-id"
 _SSM_ID = "pn-from-ssm"
@@ -26,15 +26,15 @@ def _isolate(monkeypatch) -> None:
     monkeypatch.setattr(router, "USE_MOCK_WHATSAPP", False)
     monkeypatch.setattr(router, "WA_PHONE_NUMBER_ID_PARAM", "")
     monkeypatch.setattr(router, "WHATSAPP_PHONE_NUMBER_ID", "")
-    monkeypatch.setattr(router, "_cached_phone_number_id", router._PHONE_UNSET)
-    monkeypatch.setattr(router, "_ssm", None)
+    monkeypatch.setattr(phone_id, "_cached_phone_number_id", phone_id._PHONE_UNSET)
+    monkeypatch.setattr(phone_id, "_ssm", None)
 
 
 def _ssm(monkeypatch) -> Stubber:
     client = boto3.client("ssm", region_name="us-east-1")
     stubber = Stubber(client)
     stubber.activate()
-    monkeypatch.setattr(router, "_ssm", client)
+    monkeypatch.setattr(phone_id, "_ssm", client)
     return stubber
 
 
@@ -162,7 +162,7 @@ def test_mock_path_does_not_read_ssm(monkeypatch, capsys) -> None:
 
     assert result["status"] == "SIMULATED"
     assert result["success"] is False
-    assert router._cached_phone_number_id is router._PHONE_UNSET
+    assert phone_id._cached_phone_number_id is phone_id._PHONE_UNSET
     assert "body-do-not-log" not in text
     assert _RECIPIENT not in text
     stubber.assert_no_pending_responses()

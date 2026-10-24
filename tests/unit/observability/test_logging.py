@@ -5,7 +5,7 @@ import logging
 
 import pytest
 
-from oerf.platform.channels import router
+from oerf.platform.channels import phone_id, router
 from oerf.platform.evidence import vision
 from oerf.platform.observability.logging import get_logger, log
 from oerf.platform.report import generator
@@ -119,7 +119,7 @@ def test_real_router_send_omits_recipient_message_and_errors(
     monkeypatch.setattr(router, "USE_MOCK_WHATSAPP", False)
     monkeypatch.setattr(router, "WA_PHONE_NUMBER_ID_PARAM", "")
     monkeypatch.setattr(router, "WHATSAPP_PHONE_NUMBER_ID", "phone-id-1")
-    monkeypatch.setattr(router, "_cached_phone_number_id", router._PHONE_UNSET)
+    monkeypatch.setattr(phone_id, "_cached_phone_number_id", phone_id._PHONE_UNSET)
     monkeypatch.setattr(router, "ROUTING_TABLE_NAME", "")
 
     calls = {"n": 0}
