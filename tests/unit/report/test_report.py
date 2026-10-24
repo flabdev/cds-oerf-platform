@@ -224,7 +224,6 @@ def test_a_persisted_ingest_reading_reaches_the_temperature_timeline(monkeypatch
         event_id="evt-1",
         timestamp="2026-10-20T10:16:00+00:00",
         temperature_c=8.4,
-        device_id="RF-1",
         sequence=7,
     )
     store = MemoryReportStore()
@@ -240,7 +239,7 @@ def test_a_persisted_ingest_reading_reaches_the_temperature_timeline(monkeypatch
     temperature, states = _sections(html, "temperature_timeline", "state_timeline", "diagnosis")
 
     assert result["success"] is True
-    assert "2026-10-20T10:16:00+00:00 8.4 C" in temperature
+    assert "2026-10-20T10:16:00Z 8.4 C" in temperature
     assert "8.4 C" not in states
 
 
