@@ -1,9 +1,9 @@
-"""HTTP API for dashboard actions and incident reads.
+"""HTTP API incident reads.
 
-POST /incidents/{id}/actions queues the inbound message from the interface
-contract. The singular /action path is not accepted. GET reads use
-TENANT#{tid}#INC#{iid}. This handler does not call states:SendTaskSuccess
-or states:StartExecution. Ingest starts executions.
+GET /incidents and GET /incidents/{id} read TENANT#{tid}#INC#{iid}.
+Dashboard actions are not accepted on this API. This handler does not call
+states:SendTaskSuccess, states:StartExecution, or SQS. Ingest starts
+executions. The REST API queues dashboard actions.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import re
-from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -31,21 +30,6 @@ logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 INCIDENT_TABLE_NAME = os.environ.get("INCIDENT_TABLE_NAME", "")
-INBOUND_QUEUE_URL = os.environ.get("INBOUND_QUEUE_URL") or os.environ.get("ACTION_QUEUE_URL", "")
-
-_ACTIONS = frozenset({"confirm_transfer", "pick_option", "cancel"})
-_ACTION_FIELDS = frozenset({"action", "action_id", "engagement_id", "option_id", "reason"})
-_ACTION_ROLES = frozenset({"platform_admin", "tenant_admin", "ops_user"})
-_NEEDS_ENGAGEMENT = frozenset({"confirm_transfer", "pick_option"})
-
-_sqs = None
-
-
-def get_sqs():
-    global _sqs
-    if _sqs is None:
-        _sqs = boto3.client("sqs")
-    return _sqs
 
 
 def cors_response(status_code: int, body: Any) -> dict[str, Any]:
@@ -55,7 +39,7 @@ def cors_response(status_code: int, body: Any) -> dict[str, Any]:
             "Content-Type": "application/json",
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Headers": "Content-Type,Authorization",
-            "Access-Control-Allow-Methods": "OPTIONS,POST,GET",
+            "Access-Control-Allow-Methods": "OPTIONS,GET",
         },
         "body": json.dumps(body) if not isinstance(body, str) else body,
     }
@@ -93,60 +77,6 @@ def extract_auth_context(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def handle_dashboard_action(
-    tenant_id: str,
-    incident_id: str,
-    body: dict[str, Any],
-    user_id: str | None,
-    role: str,
-) -> dict[str, Any]:
-    """Queue one dashboard action. Cancel is finished by the inbound handler."""
-
-    parsed = _action_body(body)
-    if parsed is None:
-        return cors_response(400, {"error": "invalid_body"})
-    if not INBOUND_QUEUE_URL:
-        return cors_response(503, {"error": "queue_unavailable"})
-    message = {
-        "tenant_id": tenant_id,
-        "incident_id": incident_id,
-        "engagement_id": parsed["engagement_id"],
-        "channel": "dashboard",
-        "provider_msg_id": None,
-        "context_msg_id": None,
-        "action_id": parsed["action_id"],
-        "action": parsed["action"],
-        "option_id": parsed["option_id"],
-        "user_id": user_id,
-        "role": role,
-        "type": "text",
-        "text": None,
-        "media_ref": None,
-        "received_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-    try:
-        params: dict[str, Any] = {
-            "QueueUrl": INBOUND_QUEUE_URL,
-            "MessageBody": json.dumps(message),
-        }
-        if INBOUND_QUEUE_URL.endswith(".fifo"):
-            params["MessageDeduplicationId"] = parsed["action_id"]
-            params["MessageGroupId"] = tenant_id
-        get_sqs().send_message(**params)
-    except Exception:
-        log(
-            logger,
-            logging.ERROR,
-            f"Failed to queue action {parsed['action_id']}",
-            tenant_id=tenant_id,
-            incident_id=incident_id,
-            outcome="error",
-            count=1,
-        )
-        return cors_response(503, {"error": "queue_unavailable"})
-    return cors_response(202, {"action_id": parsed["action_id"], "status": "queued"})
-
-
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """HTTP API Gateway router with Cognito authorization and tenant isolation."""
     http_context = event.get("requestContext", {}).get("http", {})
@@ -156,11 +86,6 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     if http_method == "OPTIONS":
         return cors_response(200, {})
-
-    try:
-        body = json.loads(event.get("body", "{}")) if event.get("body") else {}
-    except Exception:
-        body = {}
 
     path_params = event.get("pathParameters") or {}
 
@@ -172,14 +97,6 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if not auth["tenant_id"]:
         return cors_response(403, {"error": "tenant_required"})
     tenant_id = str(auth["tenant_id"])
-
-    action_match = re.fullmatch(r"(?:/[^/]+)?/incidents/([^/]+)/actions", normalized)
-    if http_method == "POST" and action_match:
-        if auth["role"] not in _ACTION_ROLES:
-            return cors_response(403, {"error": "forbidden"})
-        return handle_dashboard_action(
-            tenant_id, action_match.group(1), body, auth.get("sub"), str(auth["role"])
-        )
 
     if http_method == "GET" and (
         normalized.endswith("/incidents") or re.fullmatch(r"(?:/[^/]+)?/incidents", normalized)
@@ -237,32 +154,3 @@ def _get_incident(tenant_id: str, incident_id: str) -> dict[str, Any]:
     if item is None:
         return cors_response(404, {"error": "not_found"})
     return cors_response(200, item)
-
-
-def _action_body(body: dict[str, Any]) -> dict[str, Any] | None:
-    if not isinstance(body, dict) or set(body) - _ACTION_FIELDS:
-        return None
-    action = body.get("action")
-    action_id = body.get("action_id")
-    if action not in _ACTIONS or not isinstance(action_id, str) or not action_id.strip():
-        return None
-    engagement = body.get("engagement_id")
-    if action in _NEEDS_ENGAGEMENT and not _text(engagement):
-        return None
-    option = body.get("option_id")
-    if action == "pick_option" and not _text(option):
-        return None
-    if option is not None and not isinstance(option, str):
-        return None
-    if "reason" in body and not isinstance(body.get("reason"), str):
-        return None
-    return {
-        "action": action,
-        "action_id": action_id.strip(),
-        "engagement_id": engagement.strip() if _text(engagement) else None,
-        "option_id": option.strip() if _text(option) else None,
-    }
-
-
-def _text(value: Any) -> bool:
-    return isinstance(value, str) and bool(value.strip())
