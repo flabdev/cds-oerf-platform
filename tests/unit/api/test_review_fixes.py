@@ -205,38 +205,7 @@ def test_email_without_source_address_is_not_reported_as_success(monkeypatch):
     assert "SES_SOURCE_EMAIL not configured" in result["error"]
 
 
-def test_dashboard_action_is_queued_and_does_not_resume_the_workflow(monkeypatch):
-    sent = []
-
-    class Queue:
-        def send_message(self, **kwargs):
-            sent.append(kwargs)
-
-    monkeypatch.setattr(action_handler, "INBOUND_QUEUE_URL", "https://example/inbound")
-    monkeypatch.setattr(action_handler, "get_sqs", lambda: Queue())
-
-    response = action_handler.handler(_action_event(), None)
-    body = json.loads(sent[0]["MessageBody"])
-
-    assert response["statusCode"] == 202
-    assert json.loads(response["body"]) == {"action_id": "act-1", "status": "queued"}
-    assert body["action"] == "confirm_transfer"
-    assert body["tenant_id"] == "t1"
-    assert body["user_id"] == "user-1"
-    assert body["role"] == "ops_user"
-    assert body["text"] is None
-    assert "task_token" not in body
-
-
-def test_deployed_action_route_queues_the_contract_body(monkeypatch):
-    sent = []
-
-    class Queue:
-        def send_message(self, **kwargs):
-            sent.append(kwargs)
-
-    monkeypatch.setattr(action_handler, "INBOUND_QUEUE_URL", "https://example/inbound")
-    monkeypatch.setattr(action_handler, "get_sqs", lambda: Queue())
+def test_http_api_does_not_accept_a_dashboard_action():
     event = _action_event()
     queued = action_handler.handler(event, None)
     event["rawPath"] = "/incidents/INC-1/action"
@@ -245,10 +214,10 @@ def test_deployed_action_route_queues_the_contract_body(monkeypatch):
     event["body"] = json.dumps({"action": "APPROVE"})
     rejected = action_handler.handler(event, None)
 
-    assert queued["statusCode"] == 202
+    assert queued["statusCode"] == 404
     assert legacy["statusCode"] == 404
-    assert rejected["statusCode"] == 400
-    assert len(sent) == 1
+    assert rejected["statusCode"] == 404
+    assert "queued" not in queued["body"]
 
 
 def _action_event() -> dict:
