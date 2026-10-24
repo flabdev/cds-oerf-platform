@@ -11,6 +11,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 
+from oerf.platform.channels import phone_id
 from oerf.platform.channels.engagement import MemoryEngagementStore
 from oerf.platform.channels.registry import MemoryPhoneRegistry
 from oerf.platform.inbound import handler as inbound
@@ -32,9 +33,11 @@ MEDIA_ID = "media-do-not-log"
 
 @pytest.fixture(autouse=True)
 def _reset_phone_cache():
-    inbound._cached_phone_number_id = inbound._PHONE_UNSET
+    phone_id._cached_phone_number_id = phone_id._PHONE_UNSET
+    phone_id._ssm = None
     yield
-    inbound._cached_phone_number_id = inbound._PHONE_UNSET
+    phone_id._cached_phone_number_id = phone_id._PHONE_UNSET
+    phone_id._ssm = None
 
 
 class _Callbacks:
@@ -223,7 +226,7 @@ def test_phone_id_comes_from_ssm_and_does_not_fall_back(monkeypatch) -> None:
             assert kwargs["WithDecryption"] is True
             return {"Parameter": {"Value": "ssm-phone"}}
 
-    monkeypatch.setattr(inbound, "_ssm_client", lambda: _SSM())
+    monkeypatch.setattr(phone_id, "_ssm_client", lambda: _SSM())
 
     assert inbound._whatsapp_phone_number_id() == "ssm-phone"
     assert inbound._whatsapp_phone_number_id() == "ssm-phone"

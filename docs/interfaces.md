@@ -1,9 +1,11 @@
 # OERF interface contract
 
-**FROZEN v1.21** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.23** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.23 (2026-10-25) The HTTP API action route is retired. Section 3.2 places frozen `POST /incidents/{id}/actions` on the OerfApiStack REST API. Section 7.1 lists `GET /incidents` and `GET /incidents/{id}` on `oerf-http-api`. `INBOUND_QUEUE_URL` is set only on the REST dashboard action function.
+- v1.22 (2026-10-25) Dashboard `POST /incidents/{id}/actions` is served by the OerfApiStack REST API (`oerf.platform.api.dashboard.handler`). `oerf-http-api` does not expose that route. `oerf-action-handler` reads `GET /incidents` and `GET /incidents/{id}` and does not send to the inbound queue. Its role has no `sqs:SendMessage` on that queue. `INBOUND_QUEUE_URL` is set on the REST dashboard action function.
 - v1.21 (2026-10-24) The six cold-chain step functions are `oerf-step-context`, `oerf-step-assess`, `oerf-step-act`, `oerf-step-verify`, `oerf-step-qa`, and `oerf-step-close` in `OerfComputeStack`. `oerf-cold-chain` invokes them for `GatherContext`, `Assess`, `Act`, `VerifyLoop`, `QA`, and `Close`. Every other task in that machine, and every task in `oerf-engage-party`, still invokes `ColdChainWorkflowStub`. Ingest copies a shipment row's `product_profile` onto `workflow.shipment.product_profile_id` when that id is absent. The stored shipment row is unchanged.
 - v1.20 (2026-10-24) One `READ#` writer: ingest calls `IncidentStore.record_reading` while the shipment lock is present and the incident is not terminal. `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}#{sha256}` where `ts` is `YYYY-MM-DDTHH:MM:SSZ`, `seq` is twelve digits, and `sha256` is the hex SHA-256 of `event_id`. Stored attributes are `pk`, `sk`, `tenant_id`, `ts`, `temperature_c`, and `expires_at`. `expires_at` is the reading `ts` in epoch seconds plus 90 days. Incident-table TTL deletes on `expires_at`. `device_id`, `latitude`, `longitude`, `shipment_id`, and `event_id` are not stored. A conditional put leaves an existing key unchanged. The broadcaster stream filter stays `SK=META`. `EVT#` and `READ#` are not delivered. A record whose `tenant_id` contradicts `TENANT#{tid}#INC#{iid}` is dropped.
 - v1.19 (2026-10-23) Ingest writes one temperature row while the shipment lock is present: `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}` with `seq` six digits, attributes `ts` and `temperature_c` only, `expires_at` 90 days from the reading. A conditional put leaves an existing key unchanged. The report temperature section reads those rows. The broadcaster stream filter stays on `SK=META`, so `READ#` is not delivered.
@@ -116,7 +118,7 @@ ADR-013: incident open stores `config_version` and `config_snapshot` on the inci
 
 Owner: Mudita (OERF-208 implements the handler, OERF-302 owns the route).
 
-Frozen route: `POST /incidents/{id}/actions`. Cognito JWT. The body schema rejects unknown fields, so `tenant_id` is not a client field.
+Frozen route: `POST /incidents/{id}/actions` on the OerfApiStack REST API (`RestApiUrl`, `oerf.platform.api.dashboard.handler`). Cognito JWT. The body schema rejects unknown fields, so `tenant_id` is not a client field. `oerf-http-api` does not serve this route.
 
 ```json
 {
@@ -381,11 +383,10 @@ API `oerf-http-api`. Cognito JWT authorizer, identity source `Authorization`. CO
 
 | Route | Contract |
 | --- | --- |
-| `POST /incidents/{id}/actions` | Section 3.2. Frozen. |
 | `GET /incidents/{id}` | Incident META for the token tenant and path id: `incident_id`, `tenant_id`, `shipment_id`, `state`, `reason`, `opened_at`, `config_version`. `config_snapshot` is included on this authenticated read. `pk` and `sk` stay off the wire. |
 | `GET /incidents` | List for the token tenant. Blocked on GSI1 (pattern 12). Each row is the summary object in section 7.3. |
 
-Deployed and non-conformant: `POST /incidents/{id}/action`. Ingest (`sim.reefer` / `TemperatureReading`) is the only way an incident and its execution start.
+Dashboard `POST /incidents/{id}/actions` is section 3.2 on the REST API. Ingest (`sim.reefer` / `TemperatureReading`) is the only way an incident and its execution start.
 
 ### 7.2 Subscribe
 
@@ -477,7 +478,7 @@ The execution input's `workflow.shipment` is a copy of the tenant shipment row. 
 | `oerf.platform.api.stream_broadcaster` | `handler` | Ananda (OERF-308) | Incident table stream | Read incident stream. Read routing subscriptions. Delete gone connections. `execute-api:ManageConnections` on this API. No Step Functions, no incident writes. | deployed `oerf-stream-broadcaster` |
 | `oerf.platform.api.ws_handler` | `handler` | Mudita (OERF-302) | `$connect`, `$disconnect`, `subscribe` | Read/write routing connection items only. | deployed `oerf-ws-handler` |
 | `oerf.platform.api.ws_authorizer` | `handler` | Mudita (OERF-302) | WebSocket `$connect` authorizer | `cognito-idp:GetUser`. Write the connection binding. | deployed `oerf-ws-authorizer` |
-| `oerf.platform.api.action_handler` | `handler` | Mudita (OERF-208) | HTTP API | Read token claims. Send the action message to the inbound queue. Read incident for `GET`. No `states:SendTaskSuccess`. | deployed `oerf-action-handler` |
+| `oerf.platform.api.action_handler` | `handler` | Mudita (OERF-208) | HTTP API | Read token claims. Read incident for `GET`. No inbound-queue send. No `states:SendTaskSuccess`. | deployed `oerf-action-handler` |
 | `oerf.platform.evidence.vision` | `handler` | OERF-207 (behaviour, name pending). Ananda (OERF-310) for model and guardrail env. | Step Functions / async invoke | Read evidence object. Write the evidence result on the incident. `bedrock:InvokeModel` on the approved model ARN. `bedrock:ApplyGuardrail` on the guardrail ARN and on `us.guardrail.v1:0` in us-east-1, us-east-2, and us-west-2. | deployed `oerf-evidence-analyzer` |
 | AgentCore runtime | `oerf/platform/agent/agentcore/app.py` | OERF-206 behaviour. Ananda (OERF-312) for the runtime. | Invoke from Interpret | Read incident and tenant tables. `bedrock:InvokeModel` on Nova Lite. `bedrock:ApplyGuardrail` on the guardrail ARN and on `us.guardrail.v1:0` in us-east-1, us-east-2, and us-west-2. Pull the CDK asset repository. No incident writes, no channel send, no task token. | synth when context `agentcore:enabled` is true; default false |
 
@@ -510,7 +511,7 @@ This ticket does not rename variables on deployed functions. OERF-301 sets missi
 | `REPORT_BUCKET_NAME` | deployed on the report function | compute stack |
 | `EVENT_BUS_NAME` | value `oerf-events`. Required on ingest and any publisher. | OERF-301 |
 | `STATE_MACHINE_ARN` | Inbound and ingest. Ingest uses it for `StartExecution`. Inbound uses it to derive the execution ARN for `StopExecution`. | compute stack |
-| `INBOUND_QUEUE_URL` | Inbound queue URL. Set on the action handler. OERF-208 reads it to send the dashboard action. | OERF-301 |
+| `INBOUND_QUEUE_URL` | Inbound queue URL. Set on the OerfApiStack dashboard action function, which sends the dashboard action. Not set on `oerf-action-handler`. | OERF-301 |
 | `CONFIG_ROOT` | directory of domain packages inside the asset. Value `domains`. The config library currently resolves the installed `domains` package and does not read this variable. | OERF-301, when a function needs an explicit root |
 | `LOG_LEVEL` | logging level name. Default `INFO` when unset. | OERF-301 / OERF-303 |
 | `USER_POOL_ID` | deployed on the WebSocket authorizer | compute stack |

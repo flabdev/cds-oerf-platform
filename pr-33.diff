@@ -1,0 +1,1380 @@
+diff --git a/.github/workflows/deploy.yml b/.github/workflows/deploy.yml
+index 379edb4..469196c 100644
+--- a/.github/workflows/deploy.yml
++++ b/.github/workflows/deploy.yml
+@@ -6,17 +6,29 @@ on:
+       agentcore:
+         description: Deploy the AgentCore runtime (builds the ARM64 image)
+         type: boolean
+-        default: false
++        default: true
+       dashboard:
+         description: Deploy the dashboard stack
+         type: boolean
+-        default: false
++        default: true
+       channels_live:
+         description: Turn on live channel and Bedrock calls
+         type: boolean
+         default: false
+       waba_id:
+-        description: WhatsApp Business Account id (waba-...). Empty leaves the inbound topic unchanged.
++        description: WhatsApp Business Account id (waba-...). Empty uses repository variable WABA_ID.
++        type: string
++        default: ""
++      seed_demo_devices:
++        description: Write demo DEVICE rows from the seed files
++        type: boolean
++        default: true
++      phone_number_id:
++        description: WhatsApp phone number id. Empty uses repository variable WA_PHONE_NUMBER_ID.
++        type: string
++        default: ""
++      alarm_email:
++        description: Alarm topic email. Empty uses repository variable ALARM_EMAIL.
+         type: string
+         default: ""
+ 
+@@ -104,19 +116,48 @@ jobs:
+           AGENTCORE: ${{ (inputs.agentcore == true || inputs.agentcore == 'true') && 'true' || 'false' }}
+           DASHBOARD: ${{ (inputs.dashboard == true || inputs.dashboard == 'true') && 'true' || 'false' }}
+           CHANNELS_LIVE: ${{ (inputs.channels_live == true || inputs.channels_live == 'true') && 'true' || 'false' }}
++          SEED_DEMO_DEVICES: ${{ (inputs.seed_demo_devices == true || inputs.seed_demo_devices == 'true') && 'true' || 'false' }}
+           WABA_ID: ${{ inputs.waba_id }}
++          WABA_ID_VAR: ${{ vars.WABA_ID }}
++          PHONE_NUMBER_ID: ${{ inputs.phone_number_id }}
++          PHONE_NUMBER_ID_VAR: ${{ vars.WA_PHONE_NUMBER_ID }}
++          ALARM_EMAIL: ${{ inputs.alarm_email }}
++          ALARM_EMAIL_VAR: ${{ vars.ALARM_EMAIL }}
+         run: |
+           set -euo pipefail
+-          if [[ "${WABA_ID}" == *$'\n'* || "${WABA_ID}" == *$'\r'* ]]; then
+-            echo "::error::waba_id must be a single line."
+-            exit 1
+-          fi
++          resolve() {
++            local input="$1"
++            local fallback="$2"
++            if [[ -n "${input}" ]]; then
++              printf '%s' "${input}"
++            else
++              printf '%s' "${fallback}"
++            fi
++          }
++          waba_id="$(resolve "${WABA_ID}" "${WABA_ID_VAR}")"
++          phone_number_id="$(resolve "${PHONE_NUMBER_ID}" "${PHONE_NUMBER_ID_VAR}")"
++          alarm_email="$(resolve "${ALARM_EMAIL}" "${ALARM_EMAIL_VAR}")"
++          for value in "${waba_id}" "${phone_number_id}" "${alarm_email}"; do
++            if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
++              echo "::error::waba_id, phone_number_id, and alarm_email must be a single line."
++              exit 1
++            fi
++          done
+           {
+             printf '%s\n' "agentcore:enabled=${AGENTCORE}"
+             printf '%s\n' "dashboard:enabled=${DASHBOARD}"
+             printf '%s\n' "channels:live=${CHANNELS_LIVE}"
+-            if [[ -n "${WABA_ID}" ]]; then
+-              printf '%s\n' "whatsapp:wabaId=${WABA_ID}"
++            if [[ "${SEED_DEMO_DEVICES}" == "true" ]]; then
++              printf '%s\n' "demo:seedDevices=true"
++            fi
++            if [[ -n "${waba_id}" ]]; then
++              printf '%s\n' "whatsapp:wabaId=${waba_id}"
++            fi
++            if [[ -n "${phone_number_id}" ]]; then
++              printf '%s\n' "whatsapp:phoneNumberId=${phone_number_id}"
++            fi
++            if [[ -n "${alarm_email}" ]]; then
++              printf '%s\n' "alarms:email=${alarm_email}"
+             fi
+           } > "${RUNNER_TEMP}/cdk-context-args"
+ 
+diff --git a/docs/interfaces.md b/docs/interfaces.md
+index df70445..ffe0c54 100644
+--- a/docs/interfaces.md
++++ b/docs/interfaces.md
+@@ -1,9 +1,10 @@
+ # OERF interface contract
+ 
+-**FROZEN v1.20** — authored 2026-10-18 by OERF-304 (Ananda).
++**FROZEN v1.21** — authored 2026-10-18 by OERF-304 (Ananda).
+ 
+ Change log:
+ 
++- v1.21 (2026-10-24) The six cold-chain step functions are `oerf-step-context`, `oerf-step-assess`, `oerf-step-act`, `oerf-step-verify`, `oerf-step-qa`, and `oerf-step-close` in `OerfComputeStack`. `oerf-cold-chain` invokes them for `GatherContext`, `Assess`, `Act`, `VerifyLoop`, `QA`, and `Close`. Every other task in that machine, and every task in `oerf-engage-party`, still invokes `ColdChainWorkflowStub`. Ingest copies a shipment row's `product_profile` onto `workflow.shipment.product_profile_id` when that id is absent. The stored shipment row is unchanged.
+ - v1.20 (2026-10-24) One `READ#` writer: ingest calls `IncidentStore.record_reading` while the shipment lock is present and the incident is not terminal. `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}#{sha256}` where `ts` is `YYYY-MM-DDTHH:MM:SSZ`, `seq` is twelve digits, and `sha256` is the hex SHA-256 of `event_id`. Stored attributes are `pk`, `sk`, `tenant_id`, `ts`, `temperature_c`, and `expires_at`. `expires_at` is the reading `ts` in epoch seconds plus 90 days. Incident-table TTL deletes on `expires_at`. `device_id`, `latitude`, `longitude`, `shipment_id`, and `event_id` are not stored. A conditional put leaves an existing key unchanged. The broadcaster stream filter stays `SK=META`. `EVT#` and `READ#` are not delivered. A record whose `tenant_id` contradicts `TENANT#{tid}#INC#{iid}` is dropped.
+ - v1.19 (2026-10-23) Ingest writes one temperature row while the shipment lock is present: `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}` with `seq` six digits, attributes `ts` and `temperature_c` only, `expires_at` 90 days from the reading. A conditional put leaves an existing key unchanged. The report temperature section reads those rows. The broadcaster stream filter stays on `SK=META`, so `READ#` is not delivered.
+ - v1.18 (2026-10-23) Combined with origin/main (PR #30). `DemoDeviceSeed` is created only when context `demo:seedDevices` is true; a normal deploy does not write seed rows. `DeviceSeedFunctionRole` and its X-Ray `Resource: *` exist only in that synth (`docs/security/iam-exceptions.md`). The report generator writes an S3 key only when it is absent (`IfNoneMatch`), pages through every list result, fills the temperature section from `READ#`, and the state timeline from `EVT#`. A missing tenant, a missing incident, or a META `tenant_id` that does not match the event still fails closed. The broadcaster envelope stays the v1.16 shape. The desk rejects another tenant, another incident, and a private field; this broadcaster does not send `shipment_id`, `config_version`, `latest_reading`, `from_state`, `to_state`, or `timeline`.
+@@ -459,13 +460,17 @@ IAM column is the target. Current wildcards are called out and are not the targe
+ 
+ | Module | Function | Owner | Trigger | IAM target | Status |
+ | --- | --- | --- | --- | --- | --- |
+-| `domains.cold_chain_excursion.steps.context` | `handler` | pending (OERF-201–207) | Step Functions | Read tenant and incident for the execution's tenant. No messaging, no task token. | not deployed |
+-| `domains.cold_chain_excursion.steps.assess` | `handler` | pending (OERF-201–207) | Step Functions | Read incident and config snapshot. Write `OPTION#` items. No messaging. | not deployed |
+-| `domains.cold_chain_excursion.steps.act` | `handler` | pending (OERF-201–207) | Step Functions | Read/write incident state for act transitions. Sends go through the router, not from this role. | not deployed |
+-| `domains.cold_chain_excursion.steps.verify` | `handler` | pending (OERF-201–207) | Step Functions | Read incident and readings. Write containment state. | not deployed |
+-| `domains.cold_chain_excursion.steps.qa` | `handler` | pending (OERF-201–207) | Step Functions | Read incident and report pointer. No SES. | not deployed |
+-| `domains.cold_chain_excursion.steps.close` | `handler` | pending (OERF-201–207) | Step Functions | Write `CLOSED`, delete the lock item. No messaging. | not deployed |
++| `domains.cold_chain_excursion.steps.context` | `handler` | pending (OERF-201–207) | Step Functions `GatherContext` | Read tenant and incident for the execution's tenant. No messaging, no task token. | `oerf-step-context` |
++| `domains.cold_chain_excursion.steps.assess` | `handler` | pending (OERF-201–207) | Step Functions `Assess` | Read incident and config snapshot. Write `OPTION#` items. No messaging. | `oerf-step-assess` |
++| `domains.cold_chain_excursion.steps.act` | `handler` | pending (OERF-201–207) | Step Functions `Act` | Read/write incident state for act transitions. Sends go through the router, not from this role. | `oerf-step-act` |
++| `domains.cold_chain_excursion.steps.verify` | `handler` | pending (OERF-201–207) | Step Functions `VerifyLoop` | Read incident and readings. Write containment state. | `oerf-step-verify` |
++| `domains.cold_chain_excursion.steps.qa` | `handler` | pending (OERF-201–207) | Step Functions `QA` | Read incident and report pointer. No SES. | `oerf-step-qa` |
++| `domains.cold_chain_excursion.steps.close` | `handler` | pending (OERF-201–207) | Step Functions `Close` | Write `CLOSED`, delete the lock item. No messaging. | `oerf-step-close` |
+ | `oerf.platform.ingest.handler` | `handler` | pending (OERF-201–207) | EventBridge `sim.reefer` / `TemperatureReading` | Read routing device item and tenant config. Transact incident META plus lock. `states:StartExecution` on `STATE_MACHINE_ARN` only. | not deployed |
++
++`oerf-cold-chain` invokes the six functions above by fixed name: `GatherContext`, `Assess`, `Act`, `VerifyLoop` (payload step `Verify`), `QA`, and `Close`. The data stack writes `arn:aws:lambda:{region}:{account}:function:{name}` into the definition and does not reference `OerfComputeStack`. Every other task in `oerf-cold-chain`, and every task in `oerf-engage-party`, still invokes `ColdChainWorkflowStub`.
++
++The execution input's `workflow.shipment` is a copy of the tenant shipment row. When that row has `product_profile` and no `product_profile_id`, ingest sets `product_profile_id` to the profile value. `PH-2841` stores `product_profile` `PP-2-8-45`, so GatherContext receives `product_profile_id` `PP-2-8-45`. The stored row is not rewritten.
+ | `oerf.platform.inbound.handler` | `handler` | pending (OERF-201–207) | SQS inbound queue | Read/write routing and incident. Write evidence objects. `states:SendTaskSuccess` only; section 5 keeps reply classification in Interpret, so this role sends no `states:SendTaskFailure`. `states:StopExecution` on executions of `oerf-cold-chain` only. No channel-send APIs. | not deployed |
+ | `oerf.platform.channels.router` | `handler` | Mudita | Step Functions / direct invoke | Read/write routing (`OUTMSG#`, `ADDR#`). The only role with WhatsApp, SMS, and SES send. | deployed `oerf-channel-router` |
+ | `oerf.platform.report.generator` | `handler` | Mudita (OERF-117) | Step Functions | Read incident META, `EVT#`, and `READ#`. Write `REPORT_BUCKET_NAME` only when the key is absent. SES send is not the target (ADR-008). | deployed `oerf-report-generator` |
+diff --git a/docs/runbook-deploy.md b/docs/runbook-deploy.md
+index af34664..0a30b5d 100644
+--- a/docs/runbook-deploy.md
++++ b/docs/runbook-deploy.md
+@@ -23,11 +23,27 @@ The `*` also matches `cdk-hnb659fds-cfn-exec-role-<account>-us-east-1`. That rol
+ 
+ The account must already be bootstrapped (`CDKToolkit` in `us-east-1`). This role cannot create the bootstrap stack.
+ 
++## Demo deploy inputs
++
++**Deploy CDK Infrastructure** is `workflow_dispatch` on `main`. CDK context defaults in code stay off. CI synth does not pass these inputs.
++
++| Input | Default | Passed as |
++| --- | --- | --- |
++| `agentcore` | true | `agentcore:enabled` |
++| `dashboard` | true | `dashboard:enabled` |
++| `channels_live` | false | `channels:live` |
++| `seed_demo_devices` | true | `demo:seedDevices=true` only when true |
++| `waba_id` | empty | `whatsapp:wabaId` when the resolved value is not empty |
++| `phone_number_id` | empty | `whatsapp:phoneNumberId` when the resolved value is not empty |
++| `alarm_email` | empty | `alarms:email` when the resolved value is not empty |
++
++An empty `waba_id`, `phone_number_id`, or `alarm_email` uses repository variables `WABA_ID`, `WA_PHONE_NUMBER_ID`, and `ALARM_EMAIL`. If that variable is also empty, the context key is omitted. AgentCore's default builds the ARM64 image.
++
+ ## Demo device seed
+ 
+ `seed_demo_devices` writes `DEVICE#{device_id}` / `META` on the routing table from `sim/seed/*/shipments.json`. The row carries `tenant_id`, `shipment_id`, and `asset_id` (`truck`). Ingest only reads that row and still drops an unknown device. The files are the demo tenants `t1`, `t2`, and `sbx`. A second run replaces the same ids.
+ 
+-A normal `OerfComputeStack` deploy does not write those rows. Pass CDK context `demo:seedDevices=true` to add `oerf-device-seed` and the custom resource `DemoDeviceSeed` (`SeedVersion` `1`). On GitHub, that is not one of the workflow checkboxes; a deploy from `main` stays unseeded unless the workflow is changed to pass the context. Delete of the resource does not remove the rows.
++A normal `OerfComputeStack` deploy does not write those rows. Pass CDK context `demo:seedDevices=true` to add `oerf-device-seed` and the custom resource `DemoDeviceSeed` (`SeedVersion` `1`). The code default is off, so `cdk synth` and CI stay unseeded. On GitHub, **Deploy CDK Infrastructure** defaults `seed_demo_devices` to true and then passes `-c demo:seedDevices=true`. Set that input to false to leave the table unseeded. Delete of the resource does not remove the rows.
+ 
+ Unit tests do not prove the deployed table. After a deploy with `demo:seedDevices=true`, confirm `RF-7781` resolves to tenant `t1` and shipment `PH-2841`, and that an id that is not in the seed files does not resolve.
+ 
+@@ -41,7 +57,7 @@ Do this once, from `main`, before any later deploy uses the narrowed role.
+ 
+ 1. Merge the SEC-1 commit to `main`.
+ 2. Confirm the live role still has `AdministratorAccess`. If it does not, use the restore steps below before trying again.
+-3. In GitHub, run **Deploy CDK Infrastructure** on `main`. Leave `agentcore`, `dashboard`, and `channels_live` off, and leave `waba_id` empty, unless this release is meant to turn one of those on.
++3. In GitHub, run **Deploy CDK Infrastructure** on `main`. The defaults turn AgentCore, the dashboard, and demo device seeding on, and leave live channels off. `waba_id`, `phone_number_id`, and `alarm_email` are empty unless this release sets them; an empty input uses repository variables `WABA_ID`, `WA_PHONE_NUMBER_ID`, and `ALARM_EMAIL`. A variable that is also empty omits that context key. CDK context defaults in code stay off, so a local synth does not turn these on.
+ 4. Read the `cdk diff` step. The data stack change replaces `AdministratorAccess` with the bootstrap `AssumeRole` statement and tightens the trust.
+ 5. Wait until the deploy finishes. A second run waits on the concurrency group `cdk-deploy-us-east-1`.
+ 
+diff --git a/docs/security/iam-exceptions.md b/docs/security/iam-exceptions.md
+index b49826c..8134b54 100644
+--- a/docs/security/iam-exceptions.md
++++ b/docs/security/iam-exceptions.md
+@@ -5,7 +5,8 @@ Actions below cannot be scoped to a resource ARN, or are waiting on a later tick
+ | Action | Role | Why |
+ | --- | --- | --- |
+ | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `PreTokenFunctionRole`, `TenantIdAttributeFunctionRole` | X-Ray rejects resource-level permissions. `tracing=ACTIVE` on those functions adds both actions with `Resource: *`. |
+-| `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `ChannelRouterFunctionRole`, `DeviceSeedFunctionRole`, `EvidenceAnalyzerFunctionRole`, `ReportGeneratorFunctionRole`, `WsHandlerFunctionRole`, `WsAuthorizerFunctionRole`, `StreamBroadcasterFunctionRole`, `ActionHandlerFunctionRole`, `InboundFunctionRole`, `IngestFunctionRole` | `tracing=ACTIVE` on every compute function adds both actions with `Resource: *`. X-Ray rejects a resource ARN. `DeviceSeedFunctionRole` is present only when context `demo:seedDevices` is true. |
++| `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `ChannelRouterFunctionRole`, `DeviceSeedFunctionRole`, `EvidenceAnalyzerFunctionRole`, `ReportGeneratorFunctionRole`, `WsHandlerFunctionRole`, `WsAuthorizerFunctionRole`, `StreamBroadcasterFunctionRole`, `ActionHandlerFunctionRole`, `InboundFunctionRole`, `IngestFunctionRole`, `ContextFunctionRole`, `AssessFunctionRole`, `ActFunctionRole`, `VerifyFunctionRole`, `QaFunctionRole`, `CloseFunctionRole` | `tracing=ACTIVE` on every compute function adds both actions with `Resource: *`. X-Ray rejects a resource ARN. `DeviceSeedFunctionRole` is present only when context `demo:seedDevices` is true. The six step roles are `oerf-step-context`, `oerf-step-assess`, `oerf-step-act`, `oerf-step-verify`, `oerf-step-qa`, and `oerf-step-close`. |
++| lambda InvokeFunction qualifier | `OerfColdChainStateMachineRole`, `EngagePartyStateMachineRole` | Each invoke resource is a function ARN plus that ARN with a version qualifier suffix. The suffix wildcard is the qualifier, not every function. The cold-chain role lists the six step functions and `ColdChainWorkflowStub`. The engagement role lists only the stub. Neither statement uses Resource `*`. |
+ | `s3:PutObject` | `InboundFunctionRole` | Resource is the evidence bucket ARN plus `tenants/*/inbound/*`. The `*` is the tenant id and the object name under `inbound/`. The role signs a presigned PUT for keys it builds as `tenants/{tenant_id}/inbound/{sha256}/{uuid}`. It does not set encryption on that request. The bucket default is SSE-KMS `aws/s3`. |
+ | `social-messaging:GetWhatsAppMessageMedia` | `InboundFunctionRole` | When context `whatsapp:phoneNumberId` is unset, no phone-number-id ARN exists at synth, so the resource stays `*`. When the id is set, the statement is `arn:aws:social-messaging:{region}:{account}:phone-number-id/{id}` and this row does not apply. |
+ | `states:SendTaskSuccess` | `InboundFunctionRole` | Task-token APIs have no resource type. The action handler does not call them. This role does not send `SendTaskFailure`. |
+diff --git a/domains/cold_chain_excursion/statemachine.asl.json b/domains/cold_chain_excursion/statemachine.asl.json
+index 73c8e2c..1a94422 100644
+--- a/domains/cold_chain_excursion/statemachine.asl.json
++++ b/domains/cold_chain_excursion/statemachine.asl.json
+@@ -43,7 +43,7 @@
+       "Type": "Task",
+       "Resource": "arn:aws:states:::lambda:invoke",
+       "Parameters": {
+-        "FunctionName": "__STUB_ARN__",
++        "FunctionName": "__STEP_CONTEXT_ARN__",
+         "Payload": {
+           "step_name": "GatherContext",
+           "workflow.$": "$"
+@@ -115,7 +115,7 @@
+       "Type": "Task",
+       "Resource": "arn:aws:states:::lambda:invoke",
+       "Parameters": {
+-        "FunctionName": "__STUB_ARN__",
++        "FunctionName": "__STEP_ASSESS_ARN__",
+         "Payload": {
+           "step_name": "Assess",
+           "workflow.$": "$"
+@@ -307,7 +307,7 @@
+       "Type": "Task",
+       "Resource": "arn:aws:states:::lambda:invoke",
+       "Parameters": {
+-        "FunctionName": "__STUB_ARN__",
++        "FunctionName": "__STEP_ACT_ARN__",
+         "Payload": {
+           "step_name": "Act",
+           "workflow.$": "$"
+@@ -343,7 +343,7 @@
+       "Type": "Task",
+       "Resource": "arn:aws:states:::lambda:invoke",
+       "Parameters": {
+-        "FunctionName": "__STUB_ARN__",
++        "FunctionName": "__STEP_VERIFY_ARN__",
+         "Payload": {
+           "step_name": "Verify",
+           "workflow.$": "$"
+@@ -472,7 +472,7 @@
+       "Type": "Task",
+       "Resource": "arn:aws:states:::lambda:invoke",
+       "Parameters": {
+-        "FunctionName": "__STUB_ARN__",
++        "FunctionName": "__STEP_QA_ARN__",
+         "Payload": {
+           "step_name": "QA",
+           "workflow.$": "$"
+@@ -524,7 +524,7 @@
+       "Type": "Task",
+       "Resource": "arn:aws:states:::lambda:invoke",
+       "Parameters": {
+-        "FunctionName": "__STUB_ARN__",
++        "FunctionName": "__STEP_CLOSE_ARN__",
+         "Payload": {
+           "step_name": "Close",
+           "workflow.$": "$"
+diff --git a/domains/cold_chain_excursion/steps/workflow_stub.py b/domains/cold_chain_excursion/steps/workflow_stub.py
+index 122731b..948c93d 100644
+--- a/domains/cold_chain_excursion/steps/workflow_stub.py
++++ b/domains/cold_chain_excursion/steps/workflow_stub.py
+@@ -45,7 +45,14 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
+         workflow["context"] = {"status": "stubbed"}
+     elif step_name == "Diagnose":
+         workflow["incident_state"] = "ASSESSING"
+-        workflow["diagnosis"] = {"status": "stubbed"}
++        # diagnosis is not a StepEnvelope field. Keep it inside workflow so Assess
++        # can parse this state. The root stays free of unknown keys.
++        nested = workflow.get("workflow")
++        diagnosis = {"status": "stubbed"}
++        if isinstance(nested, dict):
++            nested["diagnosis"] = diagnosis
++        else:
++            workflow["workflow"] = {"diagnosis": diagnosis}
+     elif step_name == "Assess":
+         needs_approval = bool(workflow.get("decision", {}).get("needs_approval", False))
+         workflow["decision"] = {
+diff --git a/infra/runtime_asset.py b/infra/runtime_asset.py
+index 622389b..959a805 100644
+--- a/infra/runtime_asset.py
++++ b/infra/runtime_asset.py
+@@ -9,14 +9,51 @@
+ ``.cursor``, ``.venv``, ``cdk.out``, and ``node_modules``. Inside the three
+ packages, a basename that starts with ``.`` is dropped, as are ``*.env``,
+ ``.demo-numbers*``, ``__pycache__``, and ``*.pyc``.
++
++Synth then installs the third-party closure into that same directory. The
++Lambda Python 3.11 runtime supplies the standard library and boto3, and does
++not supply pydantic or jsonschema. Wheels are downloaded for
++``manylinux2014_x86_64`` and CPython 3.11, which is the default Lambda
++architecture: no function in the compute, data, or API stacks sets
++``Architecture``. One shared zip cannot carry a second architecture.
+ """
+ 
+ from __future__ import annotations
+ 
+-from aws_cdk import IgnoreMode
++import hashlib
++import shutil
++import subprocess
++import sys
++import tempfile
++from pathlib import Path
++
++import jsii
++from aws_cdk import BundlingOptions, IgnoreMode, ILocalBundling, aws_lambda as lambda_
+ 
++_ROOT = Path(__file__).resolve().parents[1]
+ _PACKAGES = ("oerf", "domains", "sim")
+ 
++#: Default Lambda architecture. ``Architecture`` is unset on every function.
++LAMBDA_PLATFORM = "manylinux2014_x86_64"
++#: Matches ``lambda_.Runtime.PYTHON_3_11`` on every function.
++LAMBDA_PYTHON = "3.11"
++
++#: Pins that satisfy ``pyproject.toml`` (``pydantic>=2``, ``jsonschema>=4``)
++#: plus the import closure those two pull in at these versions. ``attr`` is
++#: shipped by the ``attrs`` distribution.
++VENDORED_REQUIREMENTS = (
++    "pydantic==2.14.1",
++    "pydantic-core==2.50.1",
++    "annotated-types==0.8.0",
++    "typing-extensions==4.16.0",
++    "typing-inspection==0.4.4",
++    "jsonschema==4.26.0",
++    "attrs==26.1.0",
++    "jsonschema-specifications==2025.9.1",
++    "referencing==0.37.0",
++    "rpds-py==2026.9.1",
++)
++
+ RUNTIME_ASSET_EXCLUDE = [
+     "*",
+     *[pattern for name in _PACKAGES for pattern in (f"!{name}", f"!{name}/**")],
+@@ -34,4 +71,136 @@
+ def runtime_code_args() -> dict[str, object]:
+     """Keyword arguments for ``Code.from_asset`` on the shared runtime zip."""
+ 
+-    return {"exclude": RUNTIME_ASSET_EXCLUDE, "ignore_mode": IgnoreMode.GIT}
++    return {
++        "exclude": RUNTIME_ASSET_EXCLUDE,
++        "ignore_mode": IgnoreMode.GIT,
++        "bundling": BundlingOptions(
++            image=lambda_.Runtime.PYTHON_3_11.bundling_image,
++            command=[
++                "python",
++                "-c",
++                "raise SystemExit('runtime dependencies are installed without Docker')",
++            ],
++            local=_BundleRuntime(),
++        ),
++    }
++
++
++def stage_runtime_asset(output_dir: Path) -> None:
++    """Copy the allow-listed sources and the vendored wheels into ``output_dir``."""
++
++    output_dir.mkdir(parents=True, exist_ok=True)
++    for name in _PACKAGES:
++        shutil.copytree(
++            _ROOT / name,
++            output_dir / name,
++            ignore=_ignore_source,
++            dirs_exist_ok=True,
++        )
++    for child in _vendored_tree().iterdir():
++        if child.name.startswith("."):
++            continue
++        target = output_dir / child.name
++        if child.is_dir():
++            shutil.copytree(child, target, dirs_exist_ok=True)
++        else:
++            shutil.copy2(child, target)
++
++
++@jsii.implements(ILocalBundling)
++class _BundleRuntime:
++    """Install Linux wheels at synth time. Docker is not the bundler."""
++
++    def try_bundle(self, output_dir: str, *, image: object, **_kwargs: object) -> bool:
++        _ = image
++        stage_runtime_asset(Path(output_dir))
++        return True
++
++
++def _ignore_source(_directory: str, names: list[str]) -> set[str]:
++    """Drop dotfiles, env files, and bytecode. Matches ``RUNTIME_ASSET_EXCLUDE``."""
++
++    ignored: set[str] = set()
++    for name in names:
++        if (
++            name.startswith(".")
++            or name == "__pycache__"
++            or name.endswith((".pyc", ".pyo", ".env"))
++            or ".demo-numbers" in name
++        ):
++            ignored.add(name)
++    return ignored
++
++
++def _cache_key() -> str:
++    material = "\n".join((LAMBDA_PLATFORM, LAMBDA_PYTHON, *VENDORED_REQUIREMENTS))
++    return hashlib.sha256(material.encode("utf-8")).hexdigest()
++
++
++def _vendored_tree() -> Path:
++    """Download the pinned wheels once per machine, then reuse the directory."""
++
++    base = Path(tempfile.gettempdir()) / "oerf-lambda-vendor"
++    cache = base / _cache_key()
++    ready = (cache / "pydantic" / "__init__.py").is_file()
++    if ready and (cache / "pydantic_core").is_dir():
++        return cache
++    partial = base / f"{_cache_key()}.partial"
++    if partial.exists():
++        shutil.rmtree(partial)
++    partial.mkdir(parents=True)
++    _pip_install(partial)
++    _prune_vendor(partial)
++    if cache.exists():
++        shutil.rmtree(cache)
++    partial.rename(cache)
++    return cache
++
++
++def _pip_install(target: Path) -> None:
++    command = [
++        sys.executable,
++        "-m",
++        "pip",
++        "install",
++        "--disable-pip-version-check",
++        "--no-compile",
++        "--only-binary=:all:",
++        "--platform",
++        LAMBDA_PLATFORM,
++        "--implementation",
++        "cp",
++        "--python-version",
++        LAMBDA_PYTHON,
++        "--target",
++        str(target),
++        *VENDORED_REQUIREMENTS,
++    ]
++    result = subprocess.run(command, capture_output=True, text=True, check=False)
++    if result.returncode != 0:
++        detail = (result.stderr or result.stdout).strip()
++        raise RuntimeError(f"failed to vendor Lambda dependencies: {detail}")
++
++
++def _prune_vendor(root: Path) -> None:
++    """Drop installer metadata and bytecode. Keep importable packages."""
++
++    removed: list[Path] = []
++    for path in root.rglob("*"):
++        name = path.name
++        if path.is_dir() and (
++            name == "__pycache__" or name.endswith(".dist-info") or name.endswith(".egg-info")
++        ):
++            removed.append(path)
++        elif path.is_file() and name.endswith((".pyc", ".pyo")):
++            removed.append(path)
++    for path in removed:
++        if not path.exists():
++            continue
++        if path.is_dir():
++            shutil.rmtree(path)
++        else:
++            path.unlink()
++    scripts = root / "bin"
++    if scripts.exists():
++        shutil.rmtree(scripts)
+diff --git a/infra/stacks/compute_stack.py b/infra/stacks/compute_stack.py
+index 501a229..2e45298 100644
+--- a/infra/stacks/compute_stack.py
++++ b/infra/stacks/compute_stack.py
+@@ -37,6 +37,7 @@
+ from infra.iam_conditions import pin_source_account
+ from infra.runtime_asset import runtime_code_args
+ from infra.stacks.data_stack import OerfDataStack
++from infra.step_functions import STEP_FUNCTION_NAMES, STEP_HANDLERS
+ 
+ # Task-token APIs have no resource type in the IAM Service Authorization
+ # Reference. The resource stays "*"; see docs/security/iam-exceptions.md.
+@@ -86,7 +87,8 @@ def __init__(
+         # Shared asset. Packaged from the repo root so imports stay ``oerf.*``
+         # and do not shadow the stdlib ``platform`` module. The allow-list is
+         # ``oerf``, ``domains``, and ``sim``, which keeps the demo shipment
+-        # seed data available to ``seed_demo_devices``.
++        # seed data available to ``seed_demo_devices``. The same zip vendors
++        # pydantic and jsonschema for manylinux2014 / Python 3.11.
+         lambda_code = lambda_.Code.from_asset(".", **runtime_code_args())
+ 
+         # Demo rows for t1, t2, and sbx. A normal deploy leaves the registry
+@@ -660,6 +662,12 @@ def __init__(
+                 export_name="AGENT-RUNTIME-ARN",
+             )
+ 
++        # ---------------------------------------------------------
++        # 10. Cold-chain step functions. Names are fixed so the data stack
++        # can invoke them without a cross-stack reference.
++        # ---------------------------------------------------------
++        self._step_functions(data_stack, lambda_code)
++
+         # ---------------------------------------------------------
+         # Stack Outputs
+         # ---------------------------------------------------------
+@@ -671,6 +679,58 @@ def __init__(
+         CfnOutput(self, "ReportGeneratorArn", value=self.report_generator_fn.function_arn)
+         pin_source_account(self)
+ 
++    def _step_functions(self, data_stack: OerfDataStack, code: lambda_.Code) -> None:
++        """One function and one role per cold-chain phase."""
++
++        # 30s stays under the 60s task timeout. 256 MiB covers the rules import.
++        for phase, function_name in STEP_FUNCTION_NAMES.items():
++            function = self._function(
++                f"{phase.capitalize()}Function",
++                function_name=function_name,
++                handler=STEP_HANDLERS[phase],
++                code=code,
++                timeout=Duration.seconds(30),
++                memory_size=256,
++                environment={
++                    "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
++                    "TENANT_TABLE_NAME": data_stack.tenant_table.table_name,
++                    "LOG_LEVEL": "INFO",
++                },
++            )
++            self._grant_step_data(
++                function,
++                data_stack,
++                update=phase != "qa",
++                delete=phase == "close",
++            )
++
++    def _grant_step_data(
++        self,
++        function: lambda_.Function,
++        data_stack: OerfDataStack,
++        *,
++        update: bool,
++        delete: bool,
++    ) -> None:
++        """The actions ``run_step`` actually calls. No table-wide grant helper."""
++
++        incident = data_stack.incident_table.table_arn
++        tenant = data_stack.tenant_table.table_arn
++        function.add_to_role_policy(
++            iam.PolicyStatement(actions=["dynamodb:GetItem"], resources=[incident, tenant])
++        )
++        function.add_to_role_policy(
++            iam.PolicyStatement(actions=["dynamodb:PutItem"], resources=[incident])
++        )
++        if update:
++            function.add_to_role_policy(
++                iam.PolicyStatement(actions=["dynamodb:UpdateItem"], resources=[incident])
++            )
++        if delete:
++            function.add_to_role_policy(
++                iam.PolicyStatement(actions=["dynamodb:DeleteItem"], resources=[incident])
++            )
++
+     def _function(
+         self,
+         construct_id: str,
+diff --git a/infra/stacks/data_stack.py b/infra/stacks/data_stack.py
+index f342628..1c8d08a 100644
+--- a/infra/stacks/data_stack.py
++++ b/infra/stacks/data_stack.py
+@@ -18,6 +18,8 @@
+ )
+ from constructs import Construct
+ 
++from infra.step_functions import ASL_STEP_PLACEHOLDERS, STEP_FUNCTION_NAMES, function_arn
++
+ # PITR is enabled on all four DynamoDB tables (see guide section 21).
+ # The installed aws-cdk-lib deprecates the boolean ``point_in_time_recovery``
+ # property in favour of ``point_in_time_recovery_specification``.
+@@ -262,10 +264,17 @@ def __init__(
+             assumed_by=iam.ServicePrincipal("states.amazonaws.com"),
+             description="Execution role for the OERF cold-chain state machine",
+         )
++        # Literal ARNs. A CDK reference would make this stack depend on compute.
++        step_arns = [
++            function_arn(self.region, self.account, name) for name in STEP_FUNCTION_NAMES.values()
++        ]
++        invoke_resources = [workflow_stub.function_arn, f"{workflow_stub.function_arn}:*"]
++        for arn in step_arns:
++            invoke_resources.extend([arn, f"{arn}:*"])
+         workflow_role.add_to_policy(
+             iam.PolicyStatement(
+                 actions=["lambda:InvokeFunction"],
+-                resources=[workflow_stub.function_arn, f"{workflow_stub.function_arn}:*"],
++                resources=invoke_resources,
+             )
+         )
+         asl_path = (
+@@ -274,9 +283,13 @@ def __init__(
+             / "cold_chain_excursion"
+             / "statemachine.asl.json"
+         )
+-        definition = asl_path.read_text(encoding="utf-8").replace(
+-            "__STUB_ARN__", workflow_stub.function_arn
+-        )
++        definition = asl_path.read_text(encoding="utf-8")
++        for placeholder, phase in ASL_STEP_PLACEHOLDERS.items():
++            definition = definition.replace(
++                placeholder,
++                function_arn(self.region, self.account, STEP_FUNCTION_NAMES[phase]),
++            )
++        definition = definition.replace("__STUB_ARN__", workflow_stub.function_arn)
+         engagement_asl_path = (
+             Path(__file__).resolve().parents[2]
+             / "domains"
+diff --git a/infra/step_functions.py b/infra/step_functions.py
+new file mode 100644
+index 0000000..9b3b690
+--- /dev/null
++++ b/infra/step_functions.py
+@@ -0,0 +1,55 @@
++"""Fixed names for the six cold-chain step functions.
++
++``OerfDataStack`` writes these names into ``oerf-cold-chain`` as literal Lambda
++ARNs. It does not reference ``OerfComputeStack``. ``OerfComputeStack`` creates
++the functions with the same names.
++"""
++
++from __future__ import annotations
++
++#: Phase name to the deployed function name.
++STEP_FUNCTION_NAMES = {
++    "context": "oerf-step-context",
++    "assess": "oerf-step-assess",
++    "act": "oerf-step-act",
++    "verify": "oerf-step-verify",
++    "qa": "oerf-step-qa",
++    "close": "oerf-step-close",
++}
++
++#: Phase name to the frozen handler path in ``docs/interfaces.md`` section 8.
++STEP_HANDLERS = {
++    "context": "domains.cold_chain_excursion.steps.context.handler",
++    "assess": "domains.cold_chain_excursion.steps.assess.handler",
++    "act": "domains.cold_chain_excursion.steps.act.handler",
++    "verify": "domains.cold_chain_excursion.steps.verify.handler",
++    "qa": "domains.cold_chain_excursion.steps.qa.handler",
++    "close": "domains.cold_chain_excursion.steps.close.handler",
++}
++
++#: ASL placeholder to the phase whose function replaces it.
++ASL_STEP_PLACEHOLDERS = {
++    "__STEP_CONTEXT_ARN__": "context",
++    "__STEP_ASSESS_ARN__": "assess",
++    "__STEP_ACT_ARN__": "act",
++    "__STEP_VERIFY_ARN__": "verify",
++    "__STEP_QA_ARN__": "qa",
++    "__STEP_CLOSE_ARN__": "close",
++}
++
++#: Cold-chain state name to the phase that serves it. ``VerifyLoop`` calls the
++#: verify handler; its payload step name stays ``Verify``.
++WIRED_STATES = {
++    "GatherContext": "context",
++    "Assess": "assess",
++    "Act": "act",
++    "VerifyLoop": "verify",
++    "QA": "qa",
++    "Close": "close",
++}
++
++
++def function_arn(region: str, account: str, name: str) -> str:
++    """Unqualified Lambda ARN for a fixed function name."""
++
++    return f"arn:aws:lambda:{region}:{account}:function:{name}"
+diff --git a/oerf/platform/ingest/handler.py b/oerf/platform/ingest/handler.py
+index ad76ee2..3db9701 100644
+--- a/oerf/platform/ingest/handler.py
++++ b/oerf/platform/ingest/handler.py
+@@ -332,7 +332,7 @@ def handler(
+                         "sequence": reading.seq,
+                         "reason": decision.reason,
+                     },
+-                    "shipment": shipment,
++                    "shipment": _shipment_for_execution(shipment),
+                     "config_version": config.version,
+                     "config_snapshot": config.model_dump(mode="json"),
+                 },
+@@ -444,6 +444,23 @@ def _event_identity(event: Mapping[str, Any]) -> str:
+     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+ 
+ 
++def _shipment_for_execution(shipment: Mapping[str, Any]) -> dict[str, Any]:
++    """Copy the row and expose ``product_profile`` as ``product_profile_id``.
++
++    GatherContext reads ``product_profile_id``. The PH-2841 seed stores
++    ``product_profile``. The stored row is left unchanged.
++    """
++
++    copied = dict(shipment)
++    profile_id = copied.get("product_profile_id")
++    profile = copied.get("product_profile")
++    if isinstance(profile_id, str) and profile_id.strip():
++        return copied
++    if isinstance(profile, str) and profile.strip():
++        copied["product_profile_id"] = profile.strip()
++    return copied
++
++
+ def _execution_name(incident_id: str) -> str:
+     cleaned = _EXECUTION_NAME.sub("-", incident_id)
+     return cleaned[:70] or "cold-chain"
+diff --git a/tests/unit/ingest/test_ingest_handler.py b/tests/unit/ingest/test_ingest_handler.py
+index 661a8e1..0f2c608 100644
+--- a/tests/unit/ingest/test_ingest_handler.py
++++ b/tests/unit/ingest/test_ingest_handler.py
+@@ -1,12 +1,18 @@
+ """EventBridge ingest validation, debounce, and start-execution contract."""
+ 
+ import hashlib
++import json
+ import threading
+ from datetime import UTC, datetime
++from pathlib import Path
+ from typing import Any
+ 
+ import pytest
+ 
++from oerf.platform.agent.context import StepDependencies
++from oerf.platform.agent.envelope import StepEnvelope
++from oerf.platform.agent.handlers import gather_context
++from oerf.platform.agent.idempotency import MemoryStepResultStore
+ from oerf.platform.incidents.debounce import MemoryDebounce
+ from oerf.platform.incidents.repository import IncidentRepository
+ from oerf.platform.ingest.handler import IngestDependencies, handler
+@@ -157,6 +163,59 @@ def test_first_breach_waits_for_configured_threshold_and_second_starts_once() ->
+     }
+ 
+ 
++def test_ph2841_seed_profile_reaches_gather_context() -> None:
++    seed_path = (
++        Path(__file__).resolve().parents[3] / "sim" / "seed" / "t1" / "shipments.json"
++    )
++    row = next(
++        item
++        for item in json.loads(seed_path.read_text(encoding="utf-8"))
++        if item["shipment_id"] == "PH-2841"
++    )
++    assert row["product_profile"] == "PP-2-8-45"
++    assert "product_profile_id" not in row
++
++    class SeedShipments:
++        def get(self, tenant_id: str, shipment_id: str):
++            assert tenant_id == "t1"
++            assert shipment_id == "PH-2841"
++            return row
++
++    deps = _deps(
++        devices=Devices({"RF-7781": ("t1", "PH-2841")}),
++        shipments=SeedShipments(),
++    )
++    detail = {"device_id": "RF-7781", "shipment_id": "PH-2841"}
++    handler(_event("hot-1", detail=detail), None, dependencies=deps)
++    started = handler(
++        _event("hot-2", detail={**detail, "seq": 8}),
++        None,
++        dependencies=deps,
++    )
++
++    start_input = deps.executions.calls[0]["input"]
++    shipment = start_input["workflow"]["shipment"]
++    assert shipment["product_profile"] == "PP-2-8-45"
++    assert shipment["product_profile_id"] == "PP-2-8-45"
++    assert row.get("product_profile_id") is None
++    gathered = gather_context(
++        StepEnvelope(
++            step="GatherContext",
++            tenant_id=start_input["tenant_id"],
++            incident_id=started["incident_id"],
++            shipment_id="PH-2841",
++            workflow=start_input["workflow"],
++            context=start_input["context"],
++        ),
++        StepDependencies(
++            incidents=deps.incidents,
++            results=MemoryStepResultStore(clock=lambda: NOW),
++            clock=lambda: NOW,
++        ),
++    )
++    assert gathered.context["product_profile_id"] == "PP-2-8-45"
++
++
+ def test_safe_reading_clears_streak_before_breach_restarts_it() -> None:
+     deps = _deps()
+     handler(_event("hot-1"), None, dependencies=deps)
+diff --git a/tests/unit/test_compute_stack.py b/tests/unit/test_compute_stack.py
+index e532588..8c42b2a 100644
+--- a/tests/unit/test_compute_stack.py
++++ b/tests/unit/test_compute_stack.py
+@@ -94,6 +94,30 @@
+             "LOG_LEVEL",
+         },
+     },
++    "oerf-step-context": {
++        "handler": "domains.cold_chain_excursion.steps.context.handler",
++        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
++    },
++    "oerf-step-assess": {
++        "handler": "domains.cold_chain_excursion.steps.assess.handler",
++        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
++    },
++    "oerf-step-act": {
++        "handler": "domains.cold_chain_excursion.steps.act.handler",
++        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
++    },
++    "oerf-step-verify": {
++        "handler": "domains.cold_chain_excursion.steps.verify.handler",
++        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
++    },
++    "oerf-step-qa": {
++        "handler": "domains.cold_chain_excursion.steps.qa.handler",
++        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
++    },
++    "oerf-step-close": {
++        "handler": "domains.cold_chain_excursion.steps.close.handler",
++        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
++    },
+ }
+ 
+ 
+@@ -245,6 +269,63 @@ def test_every_function_has_active_tracing_and_thirty_day_logs(template: Templat
+         assert log_groups[logical_id]["Properties"]["RetentionInDays"] == 30
+ 
+ 
++_STEP_DYNAMO = {
++    "oerf-step-context": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
++    "oerf-step-assess": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
++    "oerf-step-act": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
++    "oerf-step-verify": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
++    "oerf-step-qa": {"dynamodb:GetItem", "dynamodb:PutItem"},
++    "oerf-step-close": {
++        "dynamodb:GetItem",
++        "dynamodb:PutItem",
++        "dynamodb:UpdateItem",
++        "dynamodb:DeleteItem",
++    },
++}
++_XRAY_STAR = {"xray:PutTraceSegments", "xray:PutTelemetryRecords"}
++
++
++def _action_list(statement: dict) -> list[str]:
++    action = statement.get("Action", [])
++    return [action] if isinstance(action, str) else list(action)
++
++
++def _resource_count(statement: dict) -> int:
++    resource = statement["Resource"]
++    return len(resource) if isinstance(resource, list) else 1
++
++
++@pytest.mark.security
++def test_step_roles_have_only_the_handler_actions(template: Template) -> None:
++    """Each step role matches the DynamoDB calls in its handler. X-Ray * is listed."""
++
++    for name, expected in _STEP_DYNAMO.items():
++        props = functions_by_name(template)[name]
++        assert props["Timeout"] == 30
++        assert props["MemorySize"] == 256
++        statements = statements_for_role(template, role_logical_id(props))
++        dynamo = {
++            action
++            for statement in statements
++            for action in _action_list(statement)
++            if action.startswith("dynamodb:")
++        }
++        assert dynamo == expected, name
++        for statement in statements:
++            actions = _action_list(statement)
++            if "dynamodb:GetItem" in actions:
++                assert _resource_count(statement) == 2, name
++            elif any(action.startswith("dynamodb:") for action in actions):
++                assert _resource_count(statement) == 1, name
++            if resource_is_star(statement.get("Resource")):
++                assert set(actions) <= _XRAY_STAR, name
++        forbidden = role_actions(template, name)
++        assert "states:SendTaskSuccess" not in forbidden
++        assert "lambda:InvokeFunction" not in forbidden
++        assert "bedrock:InvokeModel" not in forbidden
++        assert "ses:SendEmail" not in forbidden
++
++
+ @pytest.mark.security
+ def test_no_role_is_granted_kms(template: Template) -> None:
+     """Bucket and table grants do not add kms:Decrypt for aws/s3 or aws/dynamodb."""
+diff --git a/tests/unit/test_data_stack.py b/tests/unit/test_data_stack.py
+index 38679d1..6f0ee79 100644
+--- a/tests/unit/test_data_stack.py
++++ b/tests/unit/test_data_stack.py
+@@ -13,6 +13,7 @@
+ from aws_cdk.assertions import Template
+ 
+ from infra.stacks.data_stack import OerfDataStack
++from infra.step_functions import STEP_FUNCTION_NAMES, WIRED_STATES, function_arn
+ 
+ ACCOUNT = "123456789012"
+ REGION = "us-east-1"
+@@ -141,7 +142,7 @@ def test_cold_chain_workflow_has_a_stub_lambda(template: Template) -> None:
+     assert functions[next(iter(functions))]["Properties"]["Runtime"] == "python3.11"
+ 
+ 
+-def test_cold_chain_state_machine_wires_every_task_to_the_stub(
++def test_cold_chain_state_machine_wires_real_steps_and_keeps_the_stub(
+     template: Template,
+ ) -> None:
+     machines = template.find_resources("AWS::StepFunctions::StateMachine")
+@@ -153,7 +154,10 @@ def test_cold_chain_state_machine_wires_every_task_to_the_stub(
+     definition_string = json.dumps(definition)
+ 
+     assert "__STUB_ARN__" not in definition_string
++    assert "__STEP_" not in definition_string
+     assert "cold_chain_excursion_v1" in definition_string
++    for name in STEP_FUNCTION_NAMES.values():
++        assert function_arn(REGION, ACCOUNT, name) in definition_string
+     for state in (
+         "OPEN",
+         "GatherContext",
+@@ -173,6 +177,51 @@ def test_cold_chain_state_machine_wires_every_task_to_the_stub(
+         "Escalate",
+     ):
+         assert state in definition_string, state
++    for state in WIRED_STATES:
++        assert function_arn(REGION, ACCOUNT, STEP_FUNCTION_NAMES[WIRED_STATES[state]]) in (
++            definition_string
++        )
++
++
++def _invoke_resources(template: Template, role_prefix: str) -> list:
++    resources: list = []
++    for policy in template.find_resources("AWS::IAM::Policy").values():
++        roles = json.dumps(policy["Properties"].get("Roles", []))
++        if role_prefix not in roles:
++            continue
++        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
++            action = statement.get("Action", [])
++            names = [action] if isinstance(action, str) else list(action)
++            if "lambda:InvokeFunction" not in names:
++                continue
++            found = statement["Resource"]
++            resources.extend(found if isinstance(found, list) else [found])
++    return resources
++
++
++@pytest.mark.security
++def test_cold_chain_role_invokes_only_the_six_steps_and_the_stub(template: Template) -> None:
++    """InvokeFunction stays on the six fixed names plus the stub. No Resource *."""
++
++    expected = set()
++    for name in STEP_FUNCTION_NAMES.values():
++        arn = function_arn(REGION, ACCOUNT, name)
++        expected.add(arn)
++        expected.add(f"{arn}:*")
++    resources = _invoke_resources(template, "OerfColdChainStateMachineRole")
++    strings = {item for item in resources if isinstance(item, str)}
++    assert strings == expected
++    assert "*" not in strings
++    assert len(resources) == len(expected) + 2
++    rendered = json.dumps(resources)
++    assert "ColdChainWorkflowStub" in rendered
++    assert rendered.count(":*") == len(STEP_FUNCTION_NAMES) + 1
++
++    engagement = json.dumps(_invoke_resources(template, "EngagePartyStateMachineRole"))
++    assert "oerf-step-" not in engagement
++    assert "ColdChainWorkflowStub" in engagement
++    assert "*" not in engagement or '":*"' in engagement
++    assert '"*"' not in engagement
+ 
+ 
+ def test_cold_chain_workflow_tasks_retry_and_catch_failures(
+diff --git a/tests/unit/test_lambda_runtime_imports.py b/tests/unit/test_lambda_runtime_imports.py
+new file mode 100644
+index 0000000..1e618d1
+--- /dev/null
++++ b/tests/unit/test_lambda_runtime_imports.py
+@@ -0,0 +1,182 @@
++"""Each Python Lambda imports from the asset it is deployed with.
++
++The Lambda runtime provides the standard library and boto3. The subprocess
++loads those first, then drops site-packages and the repository from ``sys.path``
++so pydantic and jsonschema resolve only from the staged asset. A Linux wheel
++cannot be executed on macOS; that failure is accepted when the binary file is
++present. A missing pure-Python package still fails the import.
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import subprocess
++import sys
++from pathlib import Path
++
++import aws_cdk as cdk
++
++from infra.runtime_asset import LAMBDA_PLATFORM, VENDORED_REQUIREMENTS
++from infra.stacks.api_stack import OerfApiStack
++from infra.stacks.compute_stack import OerfComputeStack
++from infra.stacks.data_stack import OerfDataStack
++
++_ACCOUNT = "123456789012"
++_REGION = "us-east-1"
++_ROOT = Path(__file__).resolve().parents[2]
++_PURE_PACKAGES = (
++    "pydantic",
++    "annotated_types",
++    "typing_inspection",
++    "jsonschema",
++    "jsonschema_specifications",
++    "referencing",
++    "attrs",
++    "attr",
++)
++_IMPORT = """
++import sys
++repo, asset, module = sys.argv[1:]
++import boto3
++import boto3.dynamodb.types
++import botocore
++import botocore.exceptions
++sys.path = [
++    entry
++    for entry in sys.path
++    if entry and "site-packages" not in entry and not entry.startswith(repo)
++]
++sys.path.insert(0, asset)
++import importlib
++importlib.import_module(module)
++"""
++
++
++def test_vendored_pins_match_pyproject_ranges() -> None:
++    text = (_ROOT / "pyproject.toml").read_text(encoding="utf-8")
++    pins = dict(item.split("==") for item in VENDORED_REQUIREMENTS)
++
++    assert "pydantic>=2" in text
++    assert "jsonschema>=4" in text
++    assert _version(pins["pydantic"]) >= (2,)
++    assert _version(pins["jsonschema"]) >= (4,)
++    assert LAMBDA_PLATFORM == "manylinux2014_x86_64"
++
++
++def test_each_python_lambda_imports_from_its_asset(tmp_path: Path) -> None:
++    app = cdk.App(
++        outdir=str(tmp_path),
++        context={
++            "whatsapp:wabaId": "waba-0000000000000000",
++            "demo:seedDevices": "true",
++        },
++    )
++    env = cdk.Environment(account=_ACCOUNT, region=_REGION)
++    data = OerfDataStack(app, "OerfDataStack", env=env)
++    compute = OerfComputeStack(app, "OerfComputeStack", data_stack=data, env=env)
++    OerfApiStack(
++        app,
++        "OerfApiStack",
++        data_stack=data,
++        inbound_queue=compute.inbound_queue,
++        websocket_url="https://example.execute-api.us-east-1.amazonaws.com/prod",
++        env=env,
++    )
++    app.synth()
++
++    functions = _python_functions(tmp_path)
++    assert functions, "synth produced no Python Lambda functions"
++    shared = [
++        asset
++        for _handler, asset in functions
++        if (asset / "oerf").is_dir() and (asset / "pydantic").is_dir()
++    ]
++    assert shared, "the shared runtime asset is missing vendored pydantic"
++    for asset in dict.fromkeys(shared):
++        _assert_vendored(asset)
++
++    seen: set[tuple[str, Path]] = set()
++    for handler, asset in functions:
++        module = handler.rsplit(".", 1)[0]
++        key = (module, asset)
++        if key in seen:
++            continue
++        seen.add(key)
++        _import_module(module, asset, tmp_path)
++
++
++def _version(text: str) -> tuple[int, ...]:
++    return tuple(int(part) for part in text.split("."))
++
++
++def _python_functions(outdir: Path) -> list[tuple[str, Path]]:
++    found: list[tuple[str, Path]] = []
++    for template in outdir.glob("*.template.json"):
++        resources = json.loads(template.read_text(encoding="utf-8"))["Resources"]
++        for resource in resources.values():
++            if resource.get("Type") != "AWS::Lambda::Function":
++                continue
++            props = resource["Properties"]
++            runtime = str(props.get("Runtime", ""))
++            if not runtime.startswith("python"):
++                continue
++            architectures = props.get("Architectures")
++            assert architectures in (None, ["x86_64"]), architectures
++            handler = str(props["Handler"])
++            key = str(props["Code"]["S3Key"])
++            asset = outdir / f"asset.{key.removesuffix('.zip')}"
++            assert asset.is_dir(), handler
++            found.append((handler, asset))
++    return found
++
++
++def _assert_vendored(asset: Path) -> None:
++    for name in _PURE_PACKAGES:
++        assert (asset / name).is_dir(), name
++    assert (asset / "typing_extensions.py").is_file()
++    cores = list((asset / "pydantic_core").glob("_pydantic_core*.so"))
++    assert cores, "pydantic_core binary is missing from the runtime asset"
++    assert any("cpython-311" in path.name and "x86_64" in path.name for path in cores)
++    assert list((asset / "rpds").glob("*.so")), "rpds binary is missing"
++    assert not list(asset.rglob("*.dist-info"))
++    assert not (asset / "bin").exists()
++    assert not list(asset.rglob("__pycache__"))
++
++
++def _import_module(module: str, asset: Path, work: Path) -> None:
++    env = os.environ.copy()
++    env["PYTHONPATH"] = str(asset)
++    env["PYTHONDONTWRITEBYTECODE"] = "1"
++    env["PYTHONNOUSERSITE"] = "1"
++    result = subprocess.run(
++        [sys.executable, "-c", _IMPORT, str(_ROOT), str(asset), module],
++        cwd=work,
++        env=env,
++        capture_output=True,
++        text=True,
++        check=False,
++    )
++    if result.returncode == 0:
++        return
++    binary = _platform_binary_error(result.stderr)
++    cores = list((asset / "pydantic_core").glob("_pydantic_core*.so"))
++    if binary and cores:
++        return
++    raise AssertionError(f"import {module} failed:\n{result.stderr}")
++
++
++def _platform_binary_error(stderr: str) -> bool:
++    """True when the import died loading a Linux extension on this machine."""
++
++    lowered = stderr.lower()
++    if any(
++        token in lowered
++        for token in ("mach-o", "incompatible architecture", "wrong elf", "invalid elf")
++    ):
++        return True
++    last = lowered.strip().splitlines()[-1] if lowered.strip() else ""
++    if last.startswith("modulenotfounderror"):
++        missing_extension = "_pydantic_core" in last or "named 'rpds" in last
++        return missing_extension
++    return "_pydantic_core" in lowered or ("rpds" in last and "importerror" in last)
+diff --git a/tests/unit/test_observability.py b/tests/unit/test_observability.py
+index e4f1aa0..6047189 100644
+--- a/tests/unit/test_observability.py
++++ b/tests/unit/test_observability.py
+@@ -27,6 +27,12 @@
+     "oerf-ingest",
+     "oerf-pre-token",
+     "oerf-tenant-attribute",
++    "oerf-step-context",
++    "oerf-step-assess",
++    "oerf-step-act",
++    "oerf-step-verify",
++    "oerf-step-qa",
++    "oerf-step-close",
+ }
+ 
+ 
+@@ -88,6 +94,22 @@ def test_alarms_cover_every_dlq_machine_and_lambda(built) -> None:
+     assert metrics.count("ExecutionsTimedOut") == len(machines)
+     assert metrics.count("Errors") == len(functions)
+     _assert_unique_function_alarms_keep_their_ids(alarms, functions)
++    for prefix in (
++        "ChannelRouterFunctionErrors",
++        "EvidenceAnalyzerFunctionErrors",
++        "ReportGeneratorFunctionErrors",
++        "InboundFunctionErrors",
++        "IngestFunctionErrors",
++        "ActionHandlerFunctionErrors",
++        "ColdChainWorkflowStubErrors",
++        "ContextFunctionErrors",
++        "AssessFunctionErrors",
++        "ActFunctionErrors",
++        "VerifyFunctionErrors",
++        "QaFunctionErrors",
++        "CloseFunctionErrors",
++    ):
++        assert any(logical_id.startswith(prefix) for logical_id in alarms), prefix
+ 
+     topic = next(iter(template.find_resources("AWS::SNS::Topic")))
+     for alarm in alarms.values():
+diff --git a/tests/unit/test_statemachine_definition.py b/tests/unit/test_statemachine_definition.py
+index 5fbad89..632c453 100644
+--- a/tests/unit/test_statemachine_definition.py
++++ b/tests/unit/test_statemachine_definition.py
+@@ -8,6 +8,12 @@
+ from pathlib import Path
+ 
+ from domains.cold_chain_excursion.steps.workflow_stub import handler
++from infra.step_functions import (
++    ASL_STEP_PLACEHOLDERS,
++    STEP_FUNCTION_NAMES,
++    WIRED_STATES,
++    function_arn,
++)
+ from oerf.platform.incidents.repository import TRANSITIONS
+ 
+ ASL_PATH = (
+@@ -17,6 +23,43 @@
+     / "statemachine.asl.json"
+ )
+ STUB_PLACEHOLDER = "__STUB_ARN__"
++REAL_PLACEHOLDERS = {
++    "GatherContext": "__STEP_CONTEXT_ARN__",
++    "Assess": "__STEP_ASSESS_ARN__",
++    "Act": "__STEP_ACT_ARN__",
++    "VerifyLoop": "__STEP_VERIFY_ARN__",
++    "QA": "__STEP_QA_ARN__",
++    "Close": "__STEP_CLOSE_ARN__",
++}
++STUB_COLD_CHAIN_TASKS = frozenset(
++    {
++        "OPEN",
++        "Diagnose",
++        "Approval",
++        "SecureFacility",
++        "HandleReopen",
++        "GenerateReport",
++        "RecordFailure",
++        "Escalate",
++        "NoResponse",
++        "Cancel",
++        "RecordContainment",
++        "BeginDisposition",
++    }
++)
++STUB_ENGAGEMENT_TASKS = frozenset(
++    {
++        "ComputeNextRung",
++        "SendOneWay",
++        "SendViaRouter",
++        "Interpret",
++        "HandleCallback",
++        "AdvanceRung",
++        "ResetLadder",
++        "SendFinalQuestion",
++        "ApplyExhaustAction",
++    }
++)
+ 
+ 
+ def load_definition() -> dict:
+@@ -42,6 +85,55 @@ def task_states() -> dict:
+     }
+ 
+ 
++def test_real_and_stub_tasks_are_listed() -> None:
++    """The six wired tasks are explicit. Everything else stays on the stub."""
++
++    cold = task_states()
++    engagement = {
++        name: state
++        for name, state in json.loads(
++            (ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8")
++        )["States"].items()
++        if state["Type"] == "Task"
++    }
++    real = {name for name, state in cold.items() if name in REAL_PLACEHOLDERS}
++    stub = {
++        name
++        for name, state in cold.items()
++        if state.get("Resource", "").startswith("arn:aws:states:::lambda:")
++        and state["Parameters"]["FunctionName"] == STUB_PLACEHOLDER
++    }
++    engagement_stub = {
++        name
++        for name, state in engagement.items()
++        if state["Parameters"]["FunctionName"] == "__ENGAGEMENT_STUB_ARN__"
++    }
++
++    assert real == frozenset(REAL_PLACEHOLDERS)
++    assert stub == STUB_COLD_CHAIN_TASKS
++    assert engagement_stub == STUB_ENGAGEMENT_TASKS
++    assert "EngageDriverDiagnosis" not in real
++    assert "EngageDriverDiagnosis" not in stub
++    assert cold["EngageDriverDiagnosis"]["Resource"].endswith("startExecution.sync:2")
++
++
++def test_wired_tasks_resolve_to_their_function_arns() -> None:
++    text = ASL_PATH.read_text(encoding="utf-8")
++    for placeholder, phase in ASL_STEP_PLACEHOLDERS.items():
++        text = text.replace(
++            placeholder,
++            function_arn("us-east-1", "000000000000", STEP_FUNCTION_NAMES[phase]),
++        )
++    text = text.replace("__STUB_ARN__", "arn:aws:lambda:us-east-1:000000000000:function:stub")
++    states = json.loads(text)["States"]
++
++    for state, phase in WIRED_STATES.items():
++        expected = function_arn("us-east-1", "000000000000", STEP_FUNCTION_NAMES[phase])
++        assert states[state]["Parameters"]["FunctionName"] == expected, state
++    for name in STUB_COLD_CHAIN_TASKS:
++        assert states[name]["Parameters"]["FunctionName"].endswith(":function:stub"), name
++
++
+ def test_every_transition_points_to_a_declared_state() -> None:
+     definition = load_definition()
+     states = definition["States"]
+@@ -67,7 +159,9 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
+             else "arn:aws:states:::lambda:invoke"
+         )
+         assert state["Resource"] == expected_resource, name
+-        assert state["Parameters"]["FunctionName"] == STUB_PLACEHOLDER, name
++        assert state["Parameters"]["FunctionName"] == REAL_PLACEHOLDERS.get(
++            name, STUB_PLACEHOLDER
++        ), name
+         assert state["OutputPath"] == "$.Payload", name
+         assert state["Retry"][0]["MaxAttempts"] == 3, name
+         assert state["TimeoutSeconds"] == (1800 if name == "Approval" else 60), name
+diff --git a/tests/unit/test_workflow_stub.py b/tests/unit/test_workflow_stub.py
+index a66a5e3..40a75b8 100644
+--- a/tests/unit/test_workflow_stub.py
++++ b/tests/unit/test_workflow_stub.py
+@@ -1,6 +1,9 @@
+ """Unit tests for the deterministic cold-chain workflow stub."""
+ 
+ from domains.cold_chain_excursion.steps.workflow_stub import handler
++from oerf.platform.agent.envelope import parse_envelope
++from oerf.platform.agent.handlers import assess
++from tests.unit.agent.test_handlers import _dependencies
+ 
+ 
+ def _event(step_name: str, **workflow: object) -> dict[str, object]:
+@@ -63,6 +66,41 @@ def test_failure_handlers_escalate_without_side_effects() -> None:
+     assert escalated["escalated"] is True
+ 
+ 
++def test_diagnose_stub_is_an_envelope_assess_accepts() -> None:
++    dependencies = _dependencies("DIAGNOSING")
++    incident = dependencies.incidents.get("t1", "INC-000001")
++    gathered = {
++        "step": "GatherContext",
++        "tenant_id": "t1",
++        "incident_id": incident.incident_id,
++        "shipment_id": "PH-2841",
++        "workflow": {
++            "trigger": {"temperature_c": 9.2},
++            "shipment": {"product_profile_id": "PP-2-8-45"},
++            "context": {
++                "trigger": {"temperature_c": 9.2},
++                "range_c": [2, 8],
++                "allowance_minutes": 45,
++                "facilities": [{"id": "facility-1", "drive_min": 12, "capacity_available": True}],
++            },
++            "ship_time": "2026-10-20T10:00:00Z",
++        },
++        "context": {},
++        "incident_state": "DIAGNOSING",
++        "current_stage": "DIAGNOSING",
++        "last_completed_step": "GatherContext",
++    }
++    diagnosed = handler({"step_name": "Diagnose", "workflow": gathered}, None)
++
++    assert "diagnosis" not in diagnosed
++    assert diagnosed["workflow"]["diagnosis"] == {"status": "stubbed"}
++    envelope = parse_envelope({"step_name": "Assess", "workflow": diagnosed})
++    assert envelope.step == "Assess"
++    result = assess(envelope, dependencies)
++    assert result.decision is not None
++    assert "has_feasible_options" in result.decision
++
++
+ def test_handler_does_not_mutate_the_incoming_workflow() -> None:
+     event = _event("Act", nested={"kept": True})
+ 
