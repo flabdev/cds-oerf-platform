@@ -5,7 +5,6 @@ The client is injected. This module never constructs one.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -21,6 +20,7 @@ from oerf.platform.incidents.repository import (
     TimelineEvent,
     TransitionResult,
     ensure_transition,
+    reading_item,
 )
 from oerf.platform.storage.dynamo import (
     Item,
@@ -212,10 +212,7 @@ class DynamoIncidentStore:
         event_id: str,
         timestamp: str,
         temperature_c: float,
-        device_id: str,
         sequence: int,
-        latitude: float | None = None,
-        longitude: float | None = None,
     ) -> bool:
         context = TenantContext(tenant_id=tenant_id)
         shipment = required_text(shipment_id, "shipment_id")
@@ -226,21 +223,21 @@ class DynamoIncidentStore:
         incident = self.get(context.tenant_id, incident_id)
         if incident.state in TERMINAL_STATES:
             return False
-        suffix = hashlib.sha256(event_id.encode("utf-8")).hexdigest()
+        plain = reading_item(
+            pk=incident.pk,
+            tenant_id=context.tenant_id,
+            event_id=event_id,
+            timestamp=timestamp,
+            temperature_c=temperature_c,
+            sequence=sequence,
+        )
         row: Item = {
-            **key(incident.pk, f"READ#{timestamp}#{sequence:012d}#{suffix}"),
-            "tenant_id": s(context.tenant_id),
-            "shipment_id": s(shipment),
-            "event_id": s(event_id),
-            "ts": s(timestamp),
-            "temperature_c": {"N": repr(temperature_c)},
-            "device_id": s(device_id),
-            "sequence": n(sequence),
+            **key(plain["pk"], plain["sk"]),
+            "tenant_id": s(plain["tenant_id"]),
+            "ts": s(plain["ts"]),
+            "temperature_c": {"N": _plain_temperature(plain["temperature_c"])},
+            "expires_at": n(plain["expires_at"]),
         }
-        if latitude is not None:
-            row["latitude"] = {"N": repr(latitude)}
-        if longitude is not None:
-            row["longitude"] = {"N": repr(longitude)}
         try:
             self._client.put_item(
                 TableName=self._table,
@@ -482,6 +479,11 @@ def _optional_json(item: Item, name: str) -> dict[str, Any] | None:
         return None
     parsed = json.loads(text(item[name]))
     return parsed if isinstance(parsed, dict) else None
+
+
+def _plain_temperature(value: float) -> str:
+    rendered = format(value, "f").rstrip("0").rstrip(".")
+    return rendered or "0"
 
 
 def _timeline(item: Item) -> TimelineEvent:

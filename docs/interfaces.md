@@ -1,9 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.19** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.20** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.20 (2026-10-24) One `READ#` writer: ingest calls `IncidentStore.record_reading` while the shipment lock is present and the incident is not terminal. `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}#{sha256}` where `ts` is `YYYY-MM-DDTHH:MM:SSZ`, `seq` is twelve digits, and `sha256` is the hex SHA-256 of `event_id`. Stored attributes are `pk`, `sk`, `tenant_id`, `ts`, `temperature_c`, and `expires_at`. `expires_at` is the reading `ts` in epoch seconds plus 90 days. Incident-table TTL deletes on `expires_at`. `device_id`, `latitude`, `longitude`, `shipment_id`, and `event_id` are not stored. A conditional put leaves an existing key unchanged. The broadcaster stream filter stays `SK=META`. `EVT#` and `READ#` are not delivered. A record whose `tenant_id` contradicts `TENANT#{tid}#INC#{iid}` is dropped.
 - v1.19 (2026-10-23) Ingest writes one temperature row while the shipment lock is present: `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}` with `seq` six digits, attributes `ts` and `temperature_c` only, `expires_at` 90 days from the reading. A conditional put leaves an existing key unchanged. The report temperature section reads those rows. The broadcaster stream filter stays on `SK=META`, so `READ#` is not delivered.
 - v1.18 (2026-10-23) Combined with origin/main (PR #30). `DemoDeviceSeed` is created only when context `demo:seedDevices` is true; a normal deploy does not write seed rows. `DeviceSeedFunctionRole` and its X-Ray `Resource: *` exist only in that synth (`docs/security/iam-exceptions.md`). The report generator writes an S3 key only when it is absent (`IfNoneMatch`), pages through every list result, fills the temperature section from `READ#`, and the state timeline from `EVT#`. A missing tenant, a missing incident, or a META `tenant_id` that does not match the event still fails closed. The broadcaster envelope stays the v1.16 shape. The desk rejects another tenant, another incident, and a private field; this broadcaster does not send `shipment_id`, `config_version`, `latest_reading`, `from_state`, `to_state`, or `timeline`.
 - v1.17 (2026-10-23) WhatsApp media is stored by End User Messaging `GetWhatsAppMessageMedia`. The handler checks `mimeType` and `fileSize` with `metadataOnly`, then signs a presigned PUT (`headers` empty, no SSE header, 300 seconds) for `tenants/{tenant_id}/inbound/{sha256}/{uuid}{ext}`. The bucket default SSE-KMS `aws/s3` applies. Allowed types are `image/jpeg`, `image/png`, `image/webp`, and `application/pdf`. The size cap is `INBOUND_MEDIA_MAX_BYTES`, default 10 MB. The origination phone id is `WA_PHONE_NUMBER_ID_PARAM` from SSM, or `WHATSAPP_PHONE_NUMBER_ID` when that parameter name is unset. No Meta token is read.
@@ -309,7 +310,7 @@ Correlation keys, agreed by the LLD and [oerf/platform/storage/dynamo.py](../oer
 
 Owner: OERF-112 for the repository (Mudita). Data-stack owner for indexes. Authoritative incident key, from the LLD and `incident_pk()`:
 
-`PK=TENANT#{tid}#INC#{iid}`, `SK=META`. Timeline rows: `SK=EVT#{iso-timestamp}#{seq}`. Temperature rows, written by ingest only while `OPEN_INCIDENT` is present: `SK=READ#{ts}#{seq}` with `seq` six digits. Attributes are `ts` (`YYYY-MM-DDTHH:MM:SSZ`) and `temperature_c`. Coordinates and the device id are not stored. A second put of the same key does not replace the row.
+`PK=TENANT#{tid}#INC#{iid}`, `SK=META`. Timeline rows: `SK=EVT#{iso-timestamp}#{seq}`. Temperature rows, written by `IncidentStore.record_reading` only while `OPEN_INCIDENT` is present and the incident is not terminal: `SK=READ#{ts}#{seq}#{sha256}`. `ts` is `YYYY-MM-DDTHH:MM:SSZ`. `seq` is twelve digits. `sha256` is the hex SHA-256 of `event_id`. Stored attributes are `pk`, `sk`, `tenant_id`, `ts`, `temperature_c`, and `expires_at` (epoch seconds of `ts` plus 90 days). `device_id`, coordinates, `shipment_id`, and `event_id` are not attributes. A second put of the same key does not replace the row.
 
 Ingest writes the authoritative key. The retired trigger route no longer writes a separate incident item.
 
@@ -347,7 +348,7 @@ Pattern 12 is not deployed. The incident table has no GSI, and the data-stack un
 | Item | Table | Key | Retention | TTL deletes the row |
 | --- | --- | --- | --- | --- |
 | `INGEST#` | incident | `PK=INGEST#{event_id}`, `SK=META` | 7 days from accept | yes |
-| `READ#` | incident | `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}` | 90 days from the reading `ts` | yes |
+| `READ#` | incident | `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}#{sha256}` | 90 days from the reading `ts`. `expires_at` is epoch seconds of `ts` plus 90 days. Attributes: `pk`, `sk`, `tenant_id`, `ts`, `temperature_c`, `expires_at`. | yes |
 | `DEBOUNCE#` | incident | `PK=DEBOUNCE#{tid}#{shipment_id}#{device_id}`, `SK=META` | 10 minutes from the reading | yes |
 | `INMSG#` | routing | `PK=INMSG#{id}`, `SK=META` | 7 days from accept, not from `received_at` | yes |
 | `OUTMSG#` | routing | `PK=OUTMSG#{provider_msg_id}`, `SK=ENG#{tid}#{iid}#{eid}` | 90 days from registration | yes |
