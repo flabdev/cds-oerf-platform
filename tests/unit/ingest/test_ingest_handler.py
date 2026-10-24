@@ -185,6 +185,10 @@ def test_first_breach_waits_for_configured_threshold_and_second_starts_once() ->
     assert start_input["workflow"]["trigger"]["temperature_c"] == 9
     incident = deps.incidents.get("t1", second["incident_id"])
     assert incident.config_snapshot["tenant_id"] == "t1"
+    readings = deps.incidents.readings("t1", incident.incident_id)
+    assert len(readings) == 1
+    assert readings[0]["temperature_c"] == 9
+    assert readings[0]["device_id"] == "RF-1"
 
 
 def test_ph2841_seed_profile_reaches_gather_context() -> None:

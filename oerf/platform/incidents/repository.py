@@ -108,6 +108,21 @@ class IncidentStore(Protocol):
     def events(self, tenant_id: str, incident_id: str) -> list[TimelineEvent]:
         """Return timeline rows in sort-key order."""
 
+    def record_reading(
+        self,
+        tenant_id: str,
+        shipment_id: str,
+        *,
+        event_id: str,
+        timestamp: str,
+        temperature_c: float,
+        device_id: str,
+        sequence: int,
+        latitude: float | None = None,
+        longitude: float | None = None,
+    ) -> bool:
+        """Persist a sensor reading when the shipment currently has an open incident."""
+
     def transition(
         self,
         tenant_id: str,
@@ -145,6 +160,7 @@ class IncidentRepository:
         self._next_id = next_id or (lambda: f"INC-{next(self._ids):06d}")
         self._incidents: dict[tuple[str, str], Incident] = {}
         self._events: dict[tuple[str, str], list[TimelineEvent]] = {}
+        self._readings: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
         self._event_seq: dict[tuple[str, str], int] = {}
         self._guard = threading.Lock()
 
@@ -186,6 +202,7 @@ class IncidentRepository:
             key = (pk, "META")
             self._incidents[key] = incident
             self._events[key] = []
+            self._readings[key] = {}
             self._event_seq[key] = 0
             return incident
 
@@ -203,6 +220,46 @@ class IncidentRepository:
         key = (incident.pk, incident.sk)
         with self._guard:
             return list(self._events.get(key, []))
+
+    def record_reading(
+        self,
+        tenant_id: str,
+        shipment_id: str,
+        *,
+        event_id: str,
+        timestamp: str,
+        temperature_c: float,
+        device_id: str,
+        sequence: int,
+        latitude: float | None = None,
+        longitude: float | None = None,
+    ) -> bool:
+        context = TenantContext(tenant_id=tenant_id)
+        with self._guard:
+            lock = self.lock.get_lock(context.tenant_id, _required(shipment_id, "shipment_id"))
+            if lock is None:
+                return False
+            incident_id = str(lock["incident_id"])
+            key = _meta_key(context.tenant_id, incident_id)
+            incident = self._incidents.get(key)
+            if incident is None or incident.state in TERMINAL_STATES:
+                return False
+            self._readings[key][event_id] = {
+                "sk": f"READ#{timestamp}#{sequence:012d}",
+                "ts": timestamp,
+                "temperature_c": temperature_c,
+                "device_id": device_id,
+                "sequence": sequence,
+                "latitude": latitude,
+                "longitude": longitude,
+            }
+            return True
+
+    def readings(self, tenant_id: str, incident_id: str) -> list[dict[str, Any]]:
+        incident = self.get(tenant_id, incident_id)
+        key = (incident.pk, incident.sk)
+        with self._guard:
+            return list(self._readings.get(key, {}).values())
 
     def transition(
         self,

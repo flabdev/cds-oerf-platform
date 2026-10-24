@@ -196,16 +196,30 @@ def _document(
 
 
 def _rows(table: Any, pk: str, prefix: str) -> list[dict[str, Any]]:
-    response = table.query(
-        KeyConditionExpression="pk = :pk AND begins_with(sk, :prefix)",
-        ExpressionAttributeValues={":pk": pk, ":prefix": prefix},
-    )
-    items = response.get("Items", []) if isinstance(response, dict) else []
-    return [item for item in items if isinstance(item, dict)]
+    items: list[dict[str, Any]] = []
+    exclusive_start_key = None
+    while True:
+        args: dict[str, Any] = {
+            "KeyConditionExpression": "pk = :pk AND begins_with(sk, :prefix)",
+            "ExpressionAttributeValues": {":pk": pk, ":prefix": prefix},
+        }
+        if exclusive_start_key is not None:
+            args["ExclusiveStartKey"] = exclusive_start_key
+        response = table.query(**args)
+        if not isinstance(response, dict):
+            return items
+        items.extend(item for item in response.get("Items", []) if isinstance(item, dict))
+        exclusive_start_key = response.get("LastEvaluatedKey")
+        if not exclusive_start_key:
+            return items
 
 
 def _reading_line(entry: dict[str, Any]) -> str:
-    """One persisted ``READ#`` row: the reading time and temperature, not a state."""
+    """One persisted ``READ#`` row: the reading time and temperature, not a state.
+
+    The boto3 resource deserializes DynamoDB numbers to ``Decimal``, so the
+    temperature check must accept it alongside ``int`` and ``float``.
+    """
 
     if str(entry.get("sk") or "").startswith("EVT#"):
         return ""
