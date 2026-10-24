@@ -534,12 +534,10 @@ class OerfComputeStack(Stack):
             environment={
                 "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
                 "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
-                "INBOUND_QUEUE_URL": self.inbound_queue.queue_url,
             },
         )
         data_stack.incident_table.grant_read_write_data(self.action_handler_fn)
         data_stack.routing_table.grant_read_write_data(self.action_handler_fn)
-        self.inbound_queue.grant_send_messages(self.action_handler_fn)
 
         self.http_api = apigwv2.HttpApi(
             self,
@@ -549,7 +547,6 @@ class OerfComputeStack(Stack):
                 allow_headers=["Content-Type", "Authorization"],
                 allow_methods=[
                     apigwv2.CorsHttpMethod.GET,
-                    apigwv2.CorsHttpMethod.POST,
                     apigwv2.CorsHttpMethod.OPTIONS,
                 ],
                 allow_origins=["*"],
@@ -569,12 +566,6 @@ class OerfComputeStack(Stack):
         self.http_api.add_routes(
             path="/incidents",
             methods=[apigwv2.HttpMethod.GET],
-            integration=action_integration,
-            authorizer=http_authorizer,
-        )
-        self.http_api.add_routes(
-            path="/incidents/{id}/actions",
-            methods=[apigwv2.HttpMethod.POST],
             integration=action_integration,
             authorizer=http_authorizer,
         )
