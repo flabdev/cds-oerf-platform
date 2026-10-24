@@ -15,7 +15,11 @@ Lambda Python 3.11 runtime supplies the standard library and boto3, and does
 not supply pydantic or jsonschema. Wheels are downloaded for
 ``manylinux2014_x86_64`` and CPython 3.11, which is the default Lambda
 architecture: no function in the compute, data, or API stacks sets
-``Architecture``. One shared zip cannot carry a second architecture.
+``Architecture``. One shared zip cannot carry a second architecture. Each
+wheel is pinned by the sha256 of the exact file: ``cp311`` /
+``manylinux2014_x86_64`` where the project publishes one, and the
+``py3-none-any`` wheel otherwise. ``pip install --require-hashes`` checks
+that file. Docker is not used.
 """
 
 from __future__ import annotations
@@ -38,21 +42,76 @@ LAMBDA_PLATFORM = "manylinux2014_x86_64"
 #: Matches ``lambda_.Runtime.PYTHON_3_11`` on every function.
 LAMBDA_PYTHON = "3.11"
 
-#: Pins that satisfy ``pyproject.toml`` (``pydantic>=2``, ``jsonschema>=4``)
-#: plus the import closure those two pull in at these versions. ``attr`` is
-#: shipped by the ``attrs`` distribution.
-VENDORED_REQUIREMENTS = (
-    "pydantic==2.14.1",
-    "pydantic-core==2.50.1",
-    "annotated-types==0.8.0",
-    "typing-extensions==4.16.0",
-    "typing-inspection==0.4.4",
-    "jsonschema==4.26.0",
-    "attrs==26.1.0",
-    "jsonschema-specifications==2025.9.1",
-    "referencing==0.37.0",
-    "rpds-py==2026.9.1",
+#: Name, version, wheel filename, and sha256 from the PyPI JSON API.
+#: ``pydantic-core`` and ``rpds-py`` are the cp311 manylinux2014_x86_64 wheels.
+#: The other projects publish a py3-none-any wheel, which is the file pip
+#: selects for this platform. ``attr`` is shipped by the ``attrs`` distribution.
+WHEELS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "pydantic",
+        "2.14.1",
+        "pydantic-2.14.1-py3-none-any.whl",
+        "9195d967ec791692a04438115466764fb8b9a27b31f14a760437694f40d6b454",
+    ),
+    (
+        "pydantic-core",
+        "2.50.1",
+        "pydantic_core-2.50.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "8812592c85d0edf423f10eadcef42716d71e8219085ad9e85b775057b7306133",
+    ),
+    (
+        "annotated-types",
+        "0.8.0",
+        "annotated_types-0.8.0-py3-none-any.whl",
+        "f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0",
+    ),
+    (
+        "typing-extensions",
+        "4.16.0",
+        "typing_extensions-4.16.0-py3-none-any.whl",
+        "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+    ),
+    (
+        "typing-inspection",
+        "0.4.4",
+        "typing_inspection-0.4.4-py3-none-any.whl",
+        "65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147",
+    ),
+    (
+        "jsonschema",
+        "4.26.0",
+        "jsonschema-4.26.0-py3-none-any.whl",
+        "d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce",
+    ),
+    (
+        "attrs",
+        "26.1.0",
+        "attrs-26.1.0-py3-none-any.whl",
+        "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309",
+    ),
+    (
+        "jsonschema-specifications",
+        "2025.9.1",
+        "jsonschema_specifications-2025.9.1-py3-none-any.whl",
+        "98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe",
+    ),
+    (
+        "referencing",
+        "0.37.0",
+        "referencing-0.37.0-py3-none-any.whl",
+        "381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231",
+    ),
+    (
+        "rpds-py",
+        "2026.9.1",
+        "rpds_py-2026.9.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "136a1c3fe4402b7008bc81cb62ee538481795b61a7e83df88dff3b3f02b726ff",
+    ),
 )
+
+#: Pins that satisfy ``pyproject.toml`` (``pydantic>=2``, ``jsonschema>=4``)
+#: plus the import closure those two pull in at these versions.
+VENDORED_REQUIREMENTS = tuple(f"{name}=={version}" for name, version, _filename, _digest in WHEELS)
 
 RUNTIME_ASSET_EXCLUDE = [
     "*",
@@ -133,7 +192,11 @@ def _ignore_source(_directory: str, names: list[str]) -> set[str]:
 
 
 def _cache_key() -> str:
-    material = "\n".join((LAMBDA_PLATFORM, LAMBDA_PYTHON, *VENDORED_REQUIREMENTS))
+    rows = [
+        f"{name}=={version} {filename} {digest}"
+        for name, version, filename, digest in WHEELS
+    ]
+    material = "\n".join((LAMBDA_PLATFORM, LAMBDA_PYTHON, *rows))
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
@@ -157,7 +220,17 @@ def _vendored_tree() -> Path:
     return cache
 
 
+def _hashed_requirements() -> str:
+    lines = [
+        f"# {filename}\n{name}=={version} --hash=sha256:{digest}"
+        for name, version, filename, digest in WHEELS
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def _pip_install(target: Path) -> None:
+    requirements = target.with_name(f"{target.name}.requirements.txt")
+    requirements.write_text(_hashed_requirements(), encoding="utf-8")
     command = [
         sys.executable,
         "-m",
@@ -166,6 +239,8 @@ def _pip_install(target: Path) -> None:
         "--disable-pip-version-check",
         "--no-compile",
         "--only-binary=:all:",
+        "--require-hashes",
+        "--no-deps",
         "--platform",
         LAMBDA_PLATFORM,
         "--implementation",
@@ -174,9 +249,13 @@ def _pip_install(target: Path) -> None:
         LAMBDA_PYTHON,
         "--target",
         str(target),
-        *VENDORED_REQUIREMENTS,
+        "-r",
+        str(requirements),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+    finally:
+        requirements.unlink(missing_ok=True)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()
         raise RuntimeError(f"failed to vendor Lambda dependencies: {detail}")
