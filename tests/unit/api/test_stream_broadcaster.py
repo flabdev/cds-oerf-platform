@@ -12,9 +12,11 @@ from boto3.dynamodb.types import TypeSerializer
 from botocore.exceptions import ClientError
 
 from oerf.platform.api import stream_broadcaster as broadcaster
-from oerf.platform.api.stream_broadcaster import subscription_targets
+from oerf.platform.api.stream_broadcaster import dashboard_envelopes, subscription_targets
 
 PHONE = "+910000000101"
+WEB = Path(__file__).resolve().parents[3] / "web"
+EMITTED = "2026-10-18T12:00:00Z"
 TOKEN = "T" * 40
 _SECRET = "SECRET-TIMELINE"
 _WHEN = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
@@ -442,3 +444,56 @@ def test_item_tenant_that_contradicts_the_incident_key_is_dropped(monkeypatch) -
 
     assert result == {"batchItemFailures": []}
     assert api.sent == []
+
+
+def test_the_desk_accepts_the_broadcaster_event_and_rejects_private_fields() -> None:
+    envelopes = dashboard_envelopes(
+        {
+            "tenant_id": "t1",
+            "incident_id": "INC-1",
+            "state": "VERIFYING",
+            "stage": "verify",
+            "version": 4,
+            "shipment_id": "PH-2841",
+            "sk": "META",
+            "evidence_analysis": {"phone": "+910000000101"},
+        },
+        emitted_at=EMITTED,
+    )
+    assert envelopes is not None
+    summary, update = envelopes
+    encoded = json.dumps({"summary": summary, "update": update})
+    assert "evidence_analysis" not in encoded
+    assert "+910000000101" not in encoded
+
+    script = """
+import { acceptDeskEvent } from "./src/deskEvents.js";
+const payload = JSON.parse(process.env.OERF_EVENT);
+const incident = { tenantId: "t1", scope: "incident", incidentId: "INC-1" };
+const accepted = acceptDeskEvent(payload.update, incident);
+const summary = acceptDeskEvent(payload.summary, {
+  tenantId: "t1",
+  scope: "tenant",
+  incidentId: "",
+});
+const otherTenant = acceptDeskEvent(payload.update, { ...incident, tenantId: "t2" });
+const otherIncident = acceptDeskEvent(payload.update, { ...incident, incidentId: "INC-2" });
+const leaked = acceptDeskEvent(
+  { ...payload.update, data: { ...payload.update.data, evidence_analysis: { fault: "E17" } } },
+  incident,
+);
+if (!accepted || accepted.incident.state !== "VERIFYING") process.exit(2);
+if (!summary || summary.kind !== "summary") process.exit(3);
+if (otherTenant || otherIncident || leaked) process.exit(4);
+"""
+    env = os.environ.copy()
+    env["OERF_EVENT"] = encoded
+    result = subprocess.run(
+        ["node", "--input-type=module", "--eval", script],
+        cwd=WEB,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
