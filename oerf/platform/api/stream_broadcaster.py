@@ -40,9 +40,6 @@ _INCIDENT_DATA = frozenset(
         "stage",
         "updated_at",
         "version",
-        "from_state",
-        "to_state",
-        "timeline",
     }
 )
 _SUMMARY_DATA = frozenset({"incident_id", "state", "stage", "version"})
@@ -113,15 +110,6 @@ def dashboard_envelopes(
 
     tenant_id = item.get("tenant_id")
     incident_id = item.get("incident_id")
-    if isinstance(item.get("sk"), str) and item["sk"].startswith("EVT#"):
-        identity = _partition_identity(item.get("pk"))
-        if identity is None:
-            return None
-        key_tenant, key_incident = identity
-        if isinstance(tenant_id, str) and tenant_id.strip() != key_tenant:
-            return None
-        tenant_id = key_tenant
-        incident_id = incident_id or key_incident
     if not isinstance(tenant_id, str) or not tenant_id.strip():
         return None
     if not isinstance(incident_id, str) or not incident_id.strip():
@@ -165,12 +153,6 @@ def dashboard_envelopes(
     reading = _public_reading(item.get("latest_reading"))
     if reading is not None:
         data["latest_reading"] = reading
-    if str(item.get("sk") or "").startswith("EVT#"):
-        previous = _public_text(item.get("previous_state"))
-        if previous is not None:
-            data["from_state"] = previous
-            data["to_state"] = state
-            data["timeline"] = [{"type": "state_changed", "at": emitted_at, "state": state}]
     update = {
         "event_type": "INCIDENT_UPDATE",
         "tenant_id": tenant_id,
@@ -247,7 +229,8 @@ def _deliver(record: dict[str, Any], table, apigw) -> bool:
         log(logger, logging.WARNING, "stream_record", outcome="malformed", count=1)
         return True
     tenant_id, incident_id = identity
-    if str(item.get("sk") or "").startswith("READ#"):
+    sk = str(item.get("sk") or "")
+    if sk.startswith("EVT#") or sk.startswith("READ#"):
         return True
     state = _text(item.get("state"))
     if state is None:
@@ -272,7 +255,7 @@ def _deliver(record: dict[str, Any], table, apigw) -> bool:
             incident_id,
             version,
             emitted_at,
-            _incident_data(item, incident_id, state, stage, version, emitted_at),
+            _incident_data(item, incident_id, state, stage, version),
         ),
         "tenant": _envelope(
             "INCIDENT_SUMMARY",
@@ -470,7 +453,6 @@ def _incident_data(
     state: str,
     stage: str,
     version: int,
-    emitted_at: str,
 ) -> dict[str, Any]:
     """Incident-scope ``data``. Keys match the desk allowlist in ``deskEvents.js``."""
 
@@ -483,12 +465,6 @@ def _incident_data(
     stamp = _timestamp(item.get("updated_at"))
     if stamp is not None:
         data["updated_at"] = stamp
-    if str(item.get("sk") or "").startswith("EVT#"):
-        previous = _text(item.get("previous_state"))
-        if previous is not None:
-            data["from_state"] = previous
-            data["to_state"] = state
-            data["timeline"] = [{"type": "state_changed", "at": emitted_at, "state": state}]
     return {key: value for key, value in data.items() if key in _INCIDENT_DATA}
 
 
@@ -610,17 +586,3 @@ def _public_reading(value: Any) -> dict[str, Any] | None:
     if not isinstance(temperature, (int, float, Decimal)):
         return None
     return {"ts": ts, "temperature_c": float(temperature)}
-
-
-def _partition_identity(value: Any) -> tuple[str, str] | None:
-    """Extract tenant and incident ids from a canonical incident partition key."""
-
-    if not isinstance(value, str):
-        return None
-    parts = value.split("#")
-    if len(parts) != 4 or parts[0] != "TENANT" or parts[2] != "INC":
-        return None
-    tenant_id, incident_id = parts[1], parts[3]
-    if not tenant_id.strip() or not incident_id.strip():
-        return None
-    return tenant_id, incident_id
