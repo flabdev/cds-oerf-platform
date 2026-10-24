@@ -543,7 +543,7 @@ The image is published to the CDK asset repository. The execution role pulls tha
 
 Provider secrets stay in Secrets Manager, referenced by name or ARN. They are not environment variables.
 
-Synth: [infra/app.py](../infra/app.py) takes the account from context `account`, then `CDK_DEFAULT_ACCOUNT`, then the placeholder `000000000000`. A CloudFormation rule rejects a deploy of that placeholder. Region defaults to `us-east-1`.
+Synth: [infra/app.py](../infra/app.py) takes the account from `CDK_DEFAULT_ACCOUNT`, then context `account`, then the placeholder `000000000000`. A CloudFormation rule rejects a deploy of that placeholder. Region defaults to `us-east-1`.
 
 ## 10. Logger
 
