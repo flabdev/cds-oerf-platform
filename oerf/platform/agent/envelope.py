@@ -48,6 +48,7 @@ QA = "QA"
 CLOSE = "Close"
 RECORD_FAILURE = "RecordFailure"
 ESCALATE = "Escalate"
+CANCEL = "Cancel"
 
 IDENTIFIERS = ("tenant_id", "incident_id", "shipment_id")
 
@@ -75,6 +76,31 @@ STEPS = frozenset(
         CLOSE,
         RECORD_FAILURE,
         ESCALATE,
+        CANCEL,
+    }
+)
+
+#: Keys a task event may carry into ``parse_envelope``. Catch results such as
+#: ``failure`` and stub flags such as ``no_response`` are dropped so
+#: ``extra=forbid`` still rejects a misspelled identifier.
+TASK_EVENT_KEYS = frozenset(
+    {
+        "step",
+        "step_name",
+        "tenant_id",
+        "incident_id",
+        "shipment_id",
+        "workflow",
+        "context",
+        "incident_state",
+        "current_stage",
+        "last_completed_step",
+        "decision",
+        "approval",
+        "facility",
+        "containment",
+        "qa",
+        "task_token",
     }
 )
 
@@ -126,6 +152,25 @@ class StepEnvelope(BaseModel):
         rather than a null one.
         """
         return self.model_dump(exclude_none=True)
+
+
+def narrow_task_event(event: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop keys ``StepEnvelope`` does not declare.
+
+    The state machine wraps the whole state as ``workflow``. A ``Catch`` adds
+    ``failure`` on that state. Filtering the wrapper, and the nested state when
+    the identifiers are inside it, leaves the accumulator ``workflow`` intact.
+    """
+
+    if not isinstance(event, Mapping):
+        raise EnvelopeError(f"event must be a mapping, not {type(event).__name__}")
+    narrowed = {key: value for key, value in event.items() if key in TASK_EVENT_KEYS}
+    nested = narrowed.get("workflow")
+    if isinstance(nested, Mapping) and not any(name in narrowed for name in IDENTIFIERS):
+        narrowed["workflow"] = {
+            key: value for key, value in nested.items() if key in TASK_EVENT_KEYS
+        }
+    return narrowed
 
 
 def parse_envelope(event: Mapping[str, Any]) -> StepEnvelope:

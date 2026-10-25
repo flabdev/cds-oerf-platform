@@ -51,6 +51,21 @@ Unit tests do not prove the deployed table. After a deploy with `demo:seedDevice
 
 `POST /incidents/trigger` is retired (interfaces v1.14). The action handler does not call `StartExecution`. Ingest (`sim.reefer` / `TemperatureReading` on EventBridge) is the only start of an incident and its execution. Dashboard actions are `POST /incidents/{id}/actions` and do not write incident state.
 
+Simulator readings must be published with `aws events put-events` (a new EventBridge id per event). A direct Lambda invoke of the same JSON is deduped by `INGEST#` for 7 days, and reset does not clear those rows.
+
+## Demo reset
+
+`python -m scripts.reset` clears one demo tenant so the cold-chain walk can be run again. It is an operator tool. It is not a Lambda and it is not part of CI. `--profile` is required. `--tenant` is `t1`, `t2`, or `sbx`. `--tenant all` is refused, including on a dry run, unless `--yes-all` is also set, and that refusal happens before any AWS call. The default is a dry run. `--yes` deletes. `--reseed` rewrites that tenant's demo devices and, when `PP-2-8-45` is not 45 minutes, publishes the seed cold-chain config for that tenant only.
+
+The command stops that tenant's `RUNNING` executions of `oerf-engage-party` and then `oerf-cold-chain`. An execution is selected by `tenant_id` in its input. It deletes that tenant's incident items, shipment locks (including `ESCALATED`), debounce rows, and the routing rows tied to its engagements. Evidence under `tenants/{tid}/` is deleted. `reports/{tid}/` is the audit record and is kept. The tenant-table counter `TENANT#{tid}` / `COUNTER#INCIDENT` is kept, so the next incident id continues. Tenant config, live websocket rows, `INGEST#` dedupe rows, and the platform table are kept.
+
+```text
+make reset-test TENANT=t1 PROFILE=cds-oerf-poc
+make reset-demo TENANT=t1 PROFILE=cds-oerf-poc
+```
+
+`reset-test` is the dry run. `reset-demo` applies and reseeds. A second apply reports zero for every kind.
+
 ## First deploy from main
 
 Do this once, from `main`, before any later deploy uses the narrowed role.

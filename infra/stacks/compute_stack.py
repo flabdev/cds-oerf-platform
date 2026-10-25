@@ -599,6 +599,14 @@ class OerfComputeStack(Stack):
             },
         )
         data_stack.tenant_table.grant_read_data(self.ingest_fn)
+        # Incident ids are ADD on TENANT#{tid} / COUNTER#INCIDENT. This is the
+        # only write on the tenant table. IAM cannot restrict the sort key.
+        self.ingest_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["dynamodb:UpdateItem"],
+                resources=[data_stack.tenant_table.table_arn],
+            )
+        )
         data_stack.routing_table.grant_read_data(self.ingest_fn)
         data_stack.incident_table.grant_read_write_data(self.ingest_fn)
         # Ingest is the only caller of StartExecution. Cancel rebuilds this name.
@@ -674,26 +682,53 @@ class OerfComputeStack(Stack):
         """One function and one role per cold-chain phase."""
 
         # 30s stays under the 60s task timeout. 256 MiB covers the rules import.
+        # Failure handlers do not read tenant config. Explicit construct ids
+        # keep the error alarms named RecordFailureFunctionErrors,
+        # EscalateFunctionErrors, and CancelFunctionErrors.
+        failure_ids = {
+            "record_failure": "RecordFailureFunction",
+            "escalate": "EscalateFunction",
+            "cancel": "CancelFunction",
+        }
+        failure_grants = {
+            "record_failure": (False, False),
+            "escalate": (True, False),
+            "cancel": (True, True),
+        }
         for phase, function_name in STEP_FUNCTION_NAMES.items():
+            failure = phase in failure_grants
+            construct_id = failure_ids.get(phase, f"{phase.capitalize()}Function")
+            environment = {
+                "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
+                "LOG_LEVEL": "INFO",
+            }
+            if not failure:
+                environment["TENANT_TABLE_NAME"] = data_stack.tenant_table.table_name
             function = self._function(
-                f"{phase.capitalize()}Function",
+                construct_id,
                 function_name=function_name,
                 handler=STEP_HANDLERS[phase],
                 code=code,
                 timeout=Duration.seconds(30),
                 memory_size=256,
-                environment={
-                    "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
-                    "TENANT_TABLE_NAME": data_stack.tenant_table.table_name,
-                    "LOG_LEVEL": "INFO",
-                },
+                environment=environment,
             )
-            self._grant_step_data(
-                function,
-                data_stack,
-                update=phase != "qa",
-                delete=phase == "close",
-            )
+            if failure:
+                update, delete = failure_grants[phase]
+                self._grant_step_data(
+                    function,
+                    data_stack,
+                    update=update,
+                    delete=delete,
+                    tenant=False,
+                )
+            else:
+                self._grant_step_data(
+                    function,
+                    data_stack,
+                    update=phase != "qa",
+                    delete=phase == "close",
+                )
 
     def _grant_step_data(
         self,
@@ -702,13 +737,16 @@ class OerfComputeStack(Stack):
         *,
         update: bool,
         delete: bool,
+        tenant: bool = True,
     ) -> None:
         """The actions ``run_step`` actually calls. No table-wide grant helper."""
 
         incident = data_stack.incident_table.table_arn
-        tenant = data_stack.tenant_table.table_arn
+        reads = [incident]
+        if tenant:
+            reads.append(data_stack.tenant_table.table_arn)
         function.add_to_role_policy(
-            iam.PolicyStatement(actions=["dynamodb:GetItem"], resources=[incident, tenant])
+            iam.PolicyStatement(actions=["dynamodb:GetItem"], resources=reads)
         )
         function.add_to_role_policy(
             iam.PolicyStatement(actions=["dynamodb:PutItem"], resources=[incident])

@@ -123,7 +123,11 @@ class FakeDynamoClient:
         if not _condition_holds(body, current):
             raise client_error("ConditionalCheckFailedException")
         item = _copy(current) if current is not None else _copy(key)
-        updated = _apply_set(body, item)
+        expression = body["UpdateExpression"]
+        if expression.startswith("ADD "):
+            updated = _apply_add(body, item)
+        else:
+            updated = _apply_set(body, item)
         self._items[storage_key] = item
         self.writes += 1
         if body.get("ReturnValues") == "UPDATED_NEW":
@@ -221,6 +225,22 @@ def _compare(left: object, right: object, operator: str) -> bool:
     if operator == ">=":
         return left >= right
     return left <= right
+
+
+def _apply_add(body: dict[str, Any], item: Item) -> Item:
+    """DynamoDB ``ADD`` on a number. A missing attribute starts at zero."""
+
+    names = body.get("ExpressionAttributeNames") or {}
+    values = body.get("ExpressionAttributeValues") or {}
+    updated: Item = {}
+    expression = body["UpdateExpression"].removeprefix("ADD ")
+    for assignment in _split_top(expression, ","):
+        target, raw = assignment.strip().split(None, 1)
+        name = names.get(target, target)
+        current = int(item[name]["N"]) if name in item else 0
+        item[name] = {"N": str(current + int(values[raw.strip()]["N"]))}
+        updated[name] = dict(item[name])
+    return updated
 
 
 def _apply_set(body: dict[str, Any], item: Item) -> Item:

@@ -74,6 +74,9 @@ PHASES: dict[str, str] = {
     "verify": "Verify",
     "qa": "QA",
     "close": "Close",
+    "record_failure": "RecordFailure",
+    "escalate": "Escalate",
+    "cancel": "Cancel",
 }
 
 #: Phase name to the module path ``docs/interfaces.md`` freezes for it.
@@ -153,7 +156,12 @@ def build_dependencies(
     if resolved.tenant_table:
         config = DynamoConfigRepository(dynamo, resolved.tenant_table)
     return StepDependencies(
-        incidents=DynamoIncidentStore(dynamo, resolved.incident_table, clock=moment),
+        incidents=DynamoIncidentStore(
+            dynamo,
+            resolved.incident_table,
+            tenant_table=resolved.tenant_table or None,
+            clock=moment,
+        ),
         results=DynamoStepResultStore(dynamo, resolved.incident_table, clock=moment),
         config=config,
         clock=moment,
