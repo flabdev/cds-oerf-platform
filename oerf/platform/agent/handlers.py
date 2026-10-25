@@ -33,6 +33,7 @@ from oerf.platform.agent.carriers import (
     apply,
     decision,
     field,
+    finish,
     mapping,
     text,
 )
@@ -42,10 +43,17 @@ from oerf.platform.agent.context import (
     StepError,
     incident_for,
     pinned_config,
+    stage_for,
 )
 from oerf.platform.agent.envelope import StepEnvelope
 from oerf.platform.agent.idempotency import StepRecord
 from oerf.platform.cadence.policy import DurationError, parse_duration
+from oerf.platform.incidents.repository import (
+    TERMINAL_STATES,
+    TRANSITIONS,
+    IllegalTransition,
+    StaleIncidentUpdate,
+)
 from oerf.platform.rules.allowance import calculate_allowance
 from oerf.platform.rules.options import (
     AssessmentContext,
@@ -834,3 +842,150 @@ def close(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelop
         envelope,
         dependencies,
     )
+
+
+def _remember(
+    envelope: StepEnvelope,
+    dependencies: StepDependencies,
+    output: StepEnvelope,
+    *,
+    result: dict[str, Any],
+) -> StepEnvelope:
+    """Store the step outcome without moving the incident."""
+
+    dependencies.results.put(
+        tenant_id=envelope.tenant_id,
+        incident_id=envelope.incident_id,
+        step=envelope.step,
+        result=result,
+        step_output=output.to_event(),
+    )
+    return output
+
+
+def _kept(
+    envelope: StepEnvelope,
+    *,
+    incident_state: str | None,
+    current_stage: str | None,
+) -> StepEnvelope:
+    """A replacement envelope that keeps the workflow and the given state."""
+
+    return finish(
+        WorkflowStep(
+            step=envelope.step,
+            workflow=dict(envelope.workflow),
+            incident_state=incident_state,
+            current_stage=current_stage,
+        ),
+        envelope,
+    )
+
+
+def _one_hop(
+    envelope: StepEnvelope, dependencies: StepDependencies, target: str
+) -> tuple[str, bool]:
+    """Move the stored incident one legal edge, or report that it was not moved.
+
+    Returns ``(state, wrote)``. A terminal incident, or one already at
+    ``target``, is not written. Any other state without a direct edge to
+    ``target`` is an error: this does not walk a path of several hops.
+    """
+
+    incident = incident_for(envelope, dependencies)
+    if incident.state in TERMINAL_STATES or incident.state == target:
+        return incident.state, False
+    if target not in TRANSITIONS.get(incident.state, frozenset()):
+        raise StepError(
+            f"incident {incident.incident_id} is {incident.state}; "
+            f"{envelope.step} cannot move it to {target}"
+        )
+    try:
+        moved = dependencies.incidents.transition(
+            envelope.tenant_id,
+            envelope.incident_id,
+            from_state=incident.state,
+            to_state=target,
+        )
+    except IllegalTransition as exc:
+        raise StepError(str(exc)) from exc
+    except StaleIncidentUpdate:
+        latest = incident_for(envelope, dependencies)
+        if latest.state == target or latest.state in TERMINAL_STATES:
+            return latest.state, False
+        raise StepError(
+            f"incident {incident.incident_id} is {latest.state}; "
+            f"{envelope.step} cannot move it to {target}"
+        ) from None
+    return moved.state, True
+
+
+def _apply_hop(
+    envelope: StepEnvelope, dependencies: StepDependencies, target: str
+) -> StepEnvelope:
+    """Apply one hop and remember it, unless the incident was already terminal."""
+
+    state, wrote = _one_hop(envelope, dependencies, target)
+    output = _kept(envelope, incident_state=state, current_stage=state)
+    if not wrote and state in TERMINAL_STATES:
+        return output
+    return _remember(
+        envelope,
+        dependencies,
+        output,
+        result={"incident_state": state, "transitioned": wrote},
+    )
+
+
+@handles("RecordFailure")
+def record_failure(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
+    """Remember that a step failed, without moving the incident.
+
+    ``FailureRoute`` reads ``incident_state`` from this response, so the value
+    that arrived is the value that leaves. No timeline event is written and the
+    shipment lock is left as it was.
+    """
+
+    replay = _replay(envelope, dependencies)
+    if replay is not None:
+        return replay
+    output = _kept(
+        envelope,
+        incident_state=envelope.incident_state,
+        current_stage=envelope.current_stage or stage_for(envelope.step),
+    )
+    return _remember(
+        envelope,
+        dependencies,
+        output,
+        result={"incident_state": envelope.incident_state, "transitioned": False},
+    )
+
+
+@handles("Escalate")
+def escalate(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
+    """Move the incident to ``ESCALATED`` and keep the shipment lock.
+
+    Assess may already have walked here. A second call does not write another
+    timeline event. ``CLOSED`` and ``CANCELLED`` succeed with no write. Any
+    other state that has no direct edge to ``ESCALATED`` fails.
+    """
+
+    replay = _replay(envelope, dependencies)
+    if replay is not None:
+        return replay
+    return _apply_hop(envelope, dependencies, "ESCALATED")
+
+
+@handles("Cancel")
+def cancel(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
+    """Move the incident to ``CANCELLED`` and release the shipment lock.
+
+    ``CLOSED`` and ``CANCELLED`` succeed with no write. Every other stored
+    state has a direct edge to ``CANCELLED``.
+    """
+
+    replay = _replay(envelope, dependencies)
+    if replay is not None:
+        return replay
+    return _apply_hop(envelope, dependencies, "CANCELLED")

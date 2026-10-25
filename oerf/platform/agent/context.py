@@ -49,6 +49,7 @@ STAGE_BY_STEP: dict[str, str] = {
     "Close": "CLOSED",
     "RecordFailure": "ESCALATED",
     "Escalate": "ESCALATED",
+    "Cancel": "CANCELLED",
 }
 
 

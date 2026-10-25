@@ -30,6 +30,9 @@ REAL_PLACEHOLDERS = {
     "VerifyLoop": "__STEP_VERIFY_ARN__",
     "QA": "__STEP_QA_ARN__",
     "Close": "__STEP_CLOSE_ARN__",
+    "RecordFailure": "__STEP_RECORD_FAILURE_ARN__",
+    "Escalate": "__STEP_ESCALATE_ARN__",
+    "Cancel": "__STEP_CANCEL_ARN__",
 }
 STUB_COLD_CHAIN_TASKS = frozenset(
     {
@@ -39,10 +42,7 @@ STUB_COLD_CHAIN_TASKS = frozenset(
         "SecureFacility",
         "HandleReopen",
         "GenerateReport",
-        "RecordFailure",
-        "Escalate",
         "NoResponse",
-        "Cancel",
         "RecordContainment",
         "BeginDisposition",
     }

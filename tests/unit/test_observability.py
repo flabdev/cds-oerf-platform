@@ -33,6 +33,9 @@ _NAMED_FUNCTIONS = {
     "oerf-step-verify",
     "oerf-step-qa",
     "oerf-step-close",
+    "oerf-step-record-failure",
+    "oerf-step-escalate",
+    "oerf-step-cancel",
 }
 
 
@@ -108,6 +111,9 @@ def test_alarms_cover_every_dlq_machine_and_lambda(built) -> None:
         "VerifyFunctionErrors",
         "QaFunctionErrors",
         "CloseFunctionErrors",
+        "RecordFailureFunctionErrors",
+        "EscalateFunctionErrors",
+        "CancelFunctionErrors",
     ):
         assert any(logical_id.startswith(prefix) for logical_id in alarms), prefix
 
