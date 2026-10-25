@@ -29,6 +29,7 @@ from oerf.platform.incidents.repository import (
 )
 from oerf.platform.tenancy.config_resolver import ConfigError, ResolvedConfig, get_config
 from oerf.platform.tenancy.context import TenantContext
+from oerf.platform.tenancy.facilities import FacilityCatalog
 
 DOMAIN = "cold_chain_excursion"
 
@@ -208,6 +209,7 @@ class StepDependencies:
     incidents: IncidentStore
     results: StepResultPort
     config: ConfigReader | None = None
+    facilities: FacilityCatalog | None = None
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
 
     def now(self) -> datetime:

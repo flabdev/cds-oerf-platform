@@ -18,7 +18,14 @@ from aws_cdk import (
 )
 from constructs import Construct
 
-from infra.step_functions import ASL_STEP_PLACEHOLDERS, STEP_FUNCTION_NAMES, function_arn
+from infra.step_functions import (
+    ASL_ENGAGE_PLACEHOLDERS,
+    ASL_STEP_PLACEHOLDERS,
+    CHANNEL_ROUTER_NAME,
+    ENGAGE_FUNCTION_NAMES,
+    STEP_FUNCTION_NAMES,
+    function_arn,
+)
 
 # PITR is enabled on all four DynamoDB tables (see guide section 21).
 # The installed aws-cdk-lib deprecates the boolean ``point_in_time_recovery``
@@ -27,6 +34,17 @@ PITR_ENABLED = dynamodb.PointInTimeRecoverySpecification(
     point_in_time_recovery_enabled=True,
 )
 _AUTH_ASSET = Path(__file__).resolve().parents[2] / "oerf" / "platform" / "auth"
+
+
+def _engage_invoke_resources(region: str, account: str, stub_arn: str) -> list[str]:
+    """The stub, the cadence and interpret functions, and the channel router."""
+
+    resources = [stub_arn, f"{stub_arn}:*"]
+    names = [*ENGAGE_FUNCTION_NAMES.values(), CHANNEL_ROUTER_NAME]
+    for name in names:
+        arn = function_arn(region, account, name)
+        resources.extend([arn, f"{arn}:*"])
+    return resources
 
 
 def _auth_lambda(
@@ -299,6 +317,15 @@ class OerfDataStack(Stack):
         engagement_definition = engagement_asl_path.read_text(encoding="utf-8").replace(
             "__ENGAGEMENT_STUB_ARN__", workflow_stub.function_arn
         )
+        for placeholder, phase in ASL_ENGAGE_PLACEHOLDERS.items():
+            engagement_definition = engagement_definition.replace(
+                placeholder,
+                function_arn(self.region, self.account, ENGAGE_FUNCTION_NAMES[phase]),
+            )
+        engagement_definition = engagement_definition.replace(
+            "__CHANNEL_ROUTER_ARN__",
+            function_arn(self.region, self.account, CHANNEL_ROUTER_NAME),
+        )
         engagement_role = iam.Role(
             self,
             "EngagePartyStateMachineRole",
@@ -308,7 +335,9 @@ class OerfDataStack(Stack):
         engagement_role.add_to_policy(
             iam.PolicyStatement(
                 actions=["lambda:InvokeFunction"],
-                resources=[workflow_stub.function_arn, f"{workflow_stub.function_arn}:*"],
+                resources=_engage_invoke_resources(
+                    self.region, self.account, workflow_stub.function_arn
+                ),
             )
         )
         # ERROR only. Execution data can carry phone numbers and message text.

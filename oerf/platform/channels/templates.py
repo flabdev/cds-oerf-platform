@@ -37,3 +37,20 @@ def render_message(
         raise MissingFacts(f"template {template_id!r} is missing facts: {joined}")
     values = {name: facts[name] for name in names}
     return body.format(**values)
+
+
+def parameter_values(
+    messages: dict[str, Any], template_id: str, channel: str, facts: dict[str, Any]
+) -> list[str]:
+    """Fact values in the order the channel body names them.
+
+    Live WhatsApp sends these as template parameters ``{{1}}``, ``{{2}}``, and
+    so on. The mocked send renders the same body instead.
+    """
+
+    library = messages.get("messages", messages)
+    entry = library.get(template_id) if isinstance(library, dict) else None
+    body = entry.get(channel) if isinstance(entry, dict) else None
+    if not isinstance(body, str):
+        return []
+    return [str(facts[name]) for name in _PLACEHOLDER.findall(body)]
