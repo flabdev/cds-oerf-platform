@@ -101,70 +101,6 @@ def subscription_targets(items: list[dict[str, Any]], incident_id: str) -> list[
     return targets
 
 
-def dashboard_envelopes(
-    item: dict[str, Any],
-    *,
-    emitted_at: str,
-) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    """Return the summary and incident envelopes, or None when the item has no identity."""
-
-    tenant_id = item.get("tenant_id")
-    incident_id = item.get("incident_id")
-    if not isinstance(tenant_id, str) or not tenant_id.strip():
-        return None
-    if not isinstance(incident_id, str) or not incident_id.strip():
-        return None
-    tenant_id = tenant_id.strip()
-    incident_id = incident_id.strip()
-    state = _public_text(item.get("state")) or _public_text(item.get("status"))
-    if state is None:
-        return None
-    version = _public_version(item.get("version"))
-    stage = _public_text(item.get("stage")) or state
-    summary = {
-        "event_type": "INCIDENT_SUMMARY",
-        "tenant_id": tenant_id,
-        "incident_id": incident_id,
-        "version": version,
-        "emitted_at": emitted_at,
-        "scope": "tenant",
-        "data": {
-            "incident_id": incident_id,
-            "state": state,
-            "stage": stage,
-            "version": version,
-        },
-    }
-    data: dict[str, Any] = {
-        "incident_id": incident_id,
-        "state": state,
-        "stage": stage,
-        "version": version,
-    }
-    shipment_id = _public_text(item.get("shipment_id"))
-    if shipment_id is not None:
-        data["shipment_id"] = shipment_id
-    updated_at = _public_text(item.get("updated_at"))
-    if updated_at is not None:
-        data["updated_at"] = updated_at
-    config_version = _public_version(item.get("config_version"), default=None)
-    if config_version is not None:
-        data["config_version"] = config_version
-    reading = _public_reading(item.get("latest_reading"))
-    if reading is not None:
-        data["latest_reading"] = reading
-    update = {
-        "event_type": "INCIDENT_UPDATE",
-        "tenant_id": tenant_id,
-        "incident_id": incident_id,
-        "version": version,
-        "emitted_at": emitted_at,
-        "scope": "incident",
-        "data": data,
-    }
-    return summary, update
-
-
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Broadcast one batch. Retryable delivery errors are partial failures."""
 
@@ -556,33 +492,3 @@ def _gone(exc: ClientError) -> bool:
 
 def _dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, separators=(",", ":"))
-
-
-def _public_text(value: Any) -> str | None:
-    if isinstance(value, str) and value.strip() and value.strip() not in {"ALL", "*"}:
-        return value.strip()
-    return None
-
-
-def _public_version(value: Any, *, default: int | None = 1) -> int | None:
-    if isinstance(value, bool):
-        return default
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    if isinstance(value, Decimal) and value == int(value):
-        return int(value)
-    return default
-
-
-def _public_reading(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, dict):
-        return None
-    ts = _public_text(value.get("ts"))
-    temperature = value.get("temperature_c")
-    if ts is None or isinstance(temperature, bool):
-        return None
-    if not isinstance(temperature, (int, float, Decimal)):
-        return None
-    return {"ts": ts, "temperature_c": float(temperature)}
