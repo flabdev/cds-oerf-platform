@@ -2,7 +2,8 @@
   "domain": "cold_chain_excursion",
   "messages": {
     "driver_checkin": {
-      "sms": "Temperature alert {shipment_id}. Pull over safely and check WhatsApp."
+      "sms": "Temperature alert {shipment_id}. Pull over safely and check WhatsApp.",
+      "whatsapp": "Shipment {shipment_id} is at {temperature_c} C, above its safe range. Please pull over safely before replying. Is the refrigeration unit running?"
     },
     "driver_reminder": {},
     "driver_call": {},

@@ -10,6 +10,7 @@ from __future__ import annotations
 #: Phase name to the deployed function name.
 STEP_FUNCTION_NAMES = {
     "context": "oerf-step-context",
+    "diagnose": "oerf-step-diagnose",
     "assess": "oerf-step-assess",
     "act": "oerf-step-act",
     "verify": "oerf-step-verify",
@@ -20,9 +21,19 @@ STEP_FUNCTION_NAMES = {
     "cancel": "oerf-step-cancel",
 }
 
+#: Engagement task to the deployed function name. ``SendViaRouter`` invokes the
+#: existing channel router; it does not get a function of its own.
+ENGAGE_FUNCTION_NAMES = {
+    "cadence": "oerf-engage-cadence",
+    "interpret": "oerf-engage-interpret",
+}
+
+CHANNEL_ROUTER_NAME = "oerf-channel-router"
+
 #: Phase name to the frozen handler path in ``docs/interfaces.md`` section 8.
 STEP_HANDLERS = {
     "context": "domains.cold_chain_excursion.steps.context.handler",
+    "diagnose": "domains.cold_chain_excursion.steps.diagnose.handler",
     "assess": "domains.cold_chain_excursion.steps.assess.handler",
     "act": "domains.cold_chain_excursion.steps.act.handler",
     "verify": "domains.cold_chain_excursion.steps.verify.handler",
@@ -36,6 +47,7 @@ STEP_HANDLERS = {
 #: ASL placeholder to the phase whose function replaces it.
 ASL_STEP_PLACEHOLDERS = {
     "__STEP_CONTEXT_ARN__": "context",
+    "__STEP_DIAGNOSE_ARN__": "diagnose",
     "__STEP_ASSESS_ARN__": "assess",
     "__STEP_ACT_ARN__": "act",
     "__STEP_VERIFY_ARN__": "verify",
@@ -46,10 +58,16 @@ ASL_STEP_PLACEHOLDERS = {
     "__STEP_CANCEL_ARN__": "cancel",
 }
 
+ASL_ENGAGE_PLACEHOLDERS = {
+    "__ENGAGE_CADENCE_ARN__": "cadence",
+    "__ENGAGE_INTERPRET_ARN__": "interpret",
+}
+
 #: Cold-chain state name to the phase that serves it. ``VerifyLoop`` calls the
 #: verify handler; its payload step name stays ``Verify``.
 WIRED_STATES = {
     "GatherContext": "context",
+    "Diagnose": "diagnose",
     "Assess": "assess",
     "Act": "act",
     "VerifyLoop": "verify",

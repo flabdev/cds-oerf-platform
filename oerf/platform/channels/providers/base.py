@@ -17,5 +17,11 @@ class ProviderResult(BaseModel):
 
 
 class MessageProvider(Protocol):
-    def send(self, recipient: str, body: str, template_id: str) -> ProviderResult:
+    def send(
+        self,
+        recipient: str,
+        body: str,
+        template_id: str,
+        parameters: tuple[str, ...] = (),
+    ) -> ProviderResult:
         """Deliver one already-rendered body. The router chooses the channel."""

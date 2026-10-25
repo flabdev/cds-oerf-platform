@@ -45,6 +45,7 @@ from oerf.platform.agent.handlers import HANDLERS
 from oerf.platform.incidents.dynamo import DynamoIncidentStore
 from oerf.platform.observability.logging import get_logger, log
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
+from oerf.platform.tenancy.facilities import DynamoFacilityCatalog
 
 logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
@@ -69,6 +70,7 @@ __all__ = [
 #: ``domains.cold_chain_excursion.steps``.
 PHASES: dict[str, str] = {
     "context": "GatherContext",
+    "diagnose": "Diagnose",
     "assess": "Assess",
     "act": "Act",
     "verify": "Verify",
@@ -153,8 +155,10 @@ def build_dependencies(
     dynamo = client if client is not None else dynamodb_client()
     moment = clock or (lambda: datetime.now(UTC))
     config: ConfigReader | None = None
+    facilities = None
     if resolved.tenant_table:
         config = DynamoConfigRepository(dynamo, resolved.tenant_table)
+        facilities = DynamoFacilityCatalog(dynamo, resolved.tenant_table)
     return StepDependencies(
         incidents=DynamoIncidentStore(
             dynamo,
@@ -164,6 +168,7 @@ def build_dependencies(
         ),
         results=DynamoStepResultStore(dynamo, resolved.incident_table, clock=moment),
         config=config,
+        facilities=facilities,
         clock=moment,
     )
 

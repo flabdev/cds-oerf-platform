@@ -26,6 +26,8 @@ EXPECTED_FUNCTIONS = {
         "handler": "oerf.platform.channels.router.handler",
         "env": {
             "ROUTING_TABLE_NAME",
+            "INCIDENT_TABLE_NAME",
+            "TENANT_TABLE_NAME",
             "USE_MOCK_WHATSAPP",
             "USE_MOCK_SMS",
             "WHATSAPP_PHONE_NUMBER_ID",
@@ -97,6 +99,10 @@ EXPECTED_FUNCTIONS = {
         "handler": "domains.cold_chain_excursion.steps.context.handler",
         "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
     },
+    "oerf-step-diagnose": {
+        "handler": "domains.cold_chain_excursion.steps.diagnose.handler",
+        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
+    },
     "oerf-step-assess": {
         "handler": "domains.cold_chain_excursion.steps.assess.handler",
         "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
@@ -128,6 +134,14 @@ EXPECTED_FUNCTIONS = {
     "oerf-step-cancel": {
         "handler": "domains.cold_chain_excursion.steps.cancel.handler",
         "env": {"INCIDENT_TABLE_NAME", "LOG_LEVEL"},
+    },
+    "oerf-engage-cadence": {
+        "handler": "oerf.platform.cadence.engage.handler",
+        "env": {"LOG_LEVEL"},
+    },
+    "oerf-engage-interpret": {
+        "handler": "oerf.platform.cadence.interpret.handler",
+        "env": {"LOG_LEVEL", "AGENTCORE_ENABLED"},
     },
 }
 
@@ -282,6 +296,7 @@ def test_every_function_has_active_tracing_and_thirty_day_logs(template: Templat
 
 _STEP_DYNAMO = {
     "oerf-step-context": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
+    "oerf-step-diagnose": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"},
     "oerf-step-assess": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
     "oerf-step-act": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
     "oerf-step-verify": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
@@ -349,6 +364,22 @@ def test_step_roles_have_only_the_handler_actions(template: Template) -> None:
         assert "lambda:InvokeFunction" not in forbidden
         assert "bedrock:InvokeModel" not in forbidden
         assert "ses:SendEmail" not in forbidden
+        assert "social-messaging:SendWhatsAppMessage" not in forbidden
+        assert "sns:Publish" not in forbidden
+
+
+@pytest.mark.security
+def test_engagement_adapters_cannot_send_or_resume(template: Template) -> None:
+    """Cadence and interpret hold no table, no provider send, and no task token."""
+
+    for name in ("oerf-engage-cadence", "oerf-engage-interpret"):
+        actions = role_actions(template, name)
+        assert not any(action.startswith("dynamodb:") for action in actions), name
+        assert "states:SendTaskSuccess" not in actions
+        assert "social-messaging:SendWhatsAppMessage" not in actions
+        assert "sns:Publish" not in actions
+        assert "ses:SendEmail" not in actions
+        assert "lambda:InvokeFunction" not in actions
 
 
 @pytest.mark.security
@@ -806,7 +837,8 @@ def test_channel_mocks_default_true_and_whatsapp_is_unscoped_without_a_phone_id(
     parameter = _statements_with_action(statements, "ssm:GetParameter")
     assert len(parameter) == 1
     assert _resource_list(parameter[0]["Resource"]) == [
-        f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/oerf/whatsapp/phone-number-id"
+        f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/oerf/whatsapp/phone-number-id",
+        f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/oerf/demo-numbers/*",
     ]
     vision = functions_by_name(template)["oerf-evidence-analyzer"]["Environment"]["Variables"]
     assert vision["USE_MOCK_BEDROCK"] == "true"

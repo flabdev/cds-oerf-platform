@@ -47,7 +47,12 @@ from oerf.platform.agent.context import (
 )
 from oerf.platform.agent.envelope import StepEnvelope
 from oerf.platform.agent.idempotency import StepRecord
-from oerf.platform.cadence.policy import DurationError, parse_duration
+from oerf.platform.cadence.policy import (
+    DurationError,
+    load_policies,
+    parse_duration,
+    select_policy,
+)
 from oerf.platform.incidents.repository import (
     TERMINAL_STATES,
     TRANSITIONS,
@@ -170,6 +175,95 @@ def gather_context(envelope: StepEnvelope, dependencies: StepDependencies) -> St
             workflow=workflow,
             context=context,
             incident_state="DIAGNOSING",
+        ),
+        envelope,
+        dependencies,
+    )
+
+
+_DIAGNOSE_ROLE = "driver"
+_DIAGNOSE_ASK = "diagnose"
+
+
+def _facility_candidate(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy one catalog row. Drive time and identity stay the values on the row."""
+
+    facility_id = text(row, "facility_id") or text(row, "id")
+    drive = field(row, "drive_min")
+    if facility_id is None:
+        raise MissingStepInput("a facility row has no facility_id")
+    if isinstance(drive, bool) or not isinstance(drive, (int, float)):
+        raise MissingStepInput("a facility row has no drive_min")
+    if "capacity_available" not in row or "approved" not in row:
+        raise MissingStepInput("a facility row is missing capacity or approval")
+    candidate = {
+        "id": facility_id,
+        "facility_id": facility_id,
+        "drive_min": float(drive),
+        "capacity_available": bool(row["capacity_available"]),
+        "approved": bool(row["approved"]),
+    }
+    contact_id = text(row, "contact_id")
+    if contact_id is not None:
+        candidate["contact_id"] = contact_id
+    return candidate
+
+
+@handles("Diagnose")
+def diagnose(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
+    """Name the driver engagement and load the tenant's facilities.
+
+    The policy id is the pinned cadence entry for this role and ask. Facility
+    ids and drive times are the tenant table's. This step does not move the
+    incident: ``Assess`` is the next transition.
+    """
+
+    replay = _replay(envelope, dependencies)
+    if replay is not None:
+        return replay
+    if dependencies.facilities is None:
+        raise MissingStepInput("Diagnose needs the facility catalog")
+
+    workflow = dict(envelope.workflow)
+    incident = incident_for(envelope, dependencies)
+    config = pinned_config(incident, dependencies)
+    policy = select_policy(
+        _DIAGNOSE_ROLE,
+        _DIAGNOSE_ASK,
+        dict(config.resolved.cadence),
+        load_policies(),
+    )
+    facilities = [
+        _facility_candidate(row)
+        for row in dependencies.facilities.list_facilities(envelope.tenant_id)
+    ]
+    gathered = dict(mapping(workflow, "context") or envelope.context)
+    gathered["facilities"] = facilities
+    workflow["context"] = gathered
+    if _ship_time(workflow, gathered) is None:
+        trigger = mapping(workflow, "trigger") or {}
+        stamp = text(trigger, "timestamp")
+        if stamp is None:
+            raise MissingStepInput("Diagnose needs the trigger timestamp to set ship_time")
+        workflow["ship_time"] = stamp
+    workflow["diagnosis"] = {
+        "engagement_id": f"ENG-{envelope.incident_id}-{_DIAGNOSE_ROLE}-{_DIAGNOSE_ASK}",
+        "policy_id": policy.policy_id,
+        "role": _DIAGNOSE_ROLE,
+        "ask": _DIAGNOSE_ASK,
+    }
+    outcome = decision(
+        "diagnose.prepare",
+        config=config,
+        inputs={"role": _DIAGNOSE_ROLE, "ask": _DIAGNOSE_ASK},
+        policy_id=policy.policy_id,
+    )
+    return apply(
+        WorkflowStep(
+            step=envelope.step,
+            workflow=workflow,
+            context=gathered,
+            decision=outcome,
         ),
         envelope,
         dependencies,
