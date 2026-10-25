@@ -22,7 +22,7 @@ on:
       seed_demo_devices:
         description: Write demo DEVICE rows from the seed files
         type: boolean
-        default: true
+        default: false
       phone_number_id:
         description: WhatsApp phone number id. Empty uses repository variable WA_PHONE_NUMBER_ID.
         type: string
