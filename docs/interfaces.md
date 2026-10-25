@@ -4,7 +4,7 @@
 
 Change log:
 
-- v1.22 (2026-10-25) The HTTP API action route is retired. Section 3.2 places frozen `POST /incidents/{id}/actions` on the OerfApiStack REST API. Section 7.1 lists `GET /incidents` and `GET /incidents/{id}` on `oerf-http-api`. `INBOUND_QUEUE_URL` is set only on the REST dashboard action function.
+- v1.22 (2026-10-25) The HTTP API action route is retired. Section 3.2 places frozen `POST /incidents/{id}/actions` on the OerfApiStack REST API. Section 7.1 lists `GET /incidents` and `GET /incidents/{id}` on `oerf-http-api`. `INBOUND_QUEUE_URL` is set only on the REST dashboard action function. Section 9 resolves the account as context `account`, then `CDK_DEFAULT_ACCOUNT`, then the placeholder `000000000000`, and the region as `CDK_DEFAULT_REGION`, then context `region`, then `us-east-1`.
 - v1.21 (2026-10-25) Dashboard `POST /incidents/{id}/actions` is served by the OerfApiStack REST API (`oerf.platform.api.dashboard.handler`). `oerf-http-api` does not expose that route. `oerf-action-handler` reads `GET /incidents` and `GET /incidents/{id}` and does not send to the inbound queue. Its role has no `sqs:SendMessage` on that queue. `INBOUND_QUEUE_URL` is set on the REST dashboard action function.
 - v1.20 (2026-10-24) One `READ#` writer: ingest calls `IncidentStore.record_reading` while the shipment lock is present and the incident is not terminal. `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}#{sha256}` where `ts` is `YYYY-MM-DDTHH:MM:SSZ`, `seq` is twelve digits, and `sha256` is the hex SHA-256 of `event_id`. Stored attributes are `pk`, `sk`, `tenant_id`, `ts`, `temperature_c`, and `expires_at`. `expires_at` is the reading `ts` in epoch seconds plus 90 days. Incident-table TTL deletes on `expires_at`. `device_id`, `latitude`, `longitude`, `shipment_id`, and `event_id` are not stored. A conditional put leaves an existing key unchanged. The broadcaster stream filter stays `SK=META`. `EVT#` and `READ#` are not delivered. A record whose `tenant_id` contradicts `TENANT#{tid}#INC#{iid}` is dropped.
 - v1.19 (2026-10-23) Ingest writes one temperature row while the shipment lock is present: `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}` with `seq` six digits, attributes `ts` and `temperature_c` only, `expires_at` 90 days from the reading. A conditional put leaves an existing key unchanged. The report temperature section reads those rows. The broadcaster stream filter stays on `SK=META`, so `READ#` is not delivered.
@@ -543,7 +543,7 @@ The image is published to the CDK asset repository. The execution role pulls tha
 
 Provider secrets stay in Secrets Manager, referenced by name or ARN. They are not environment variables.
 
-Synth: [infra/app.py](../infra/app.py) takes the account from `CDK_DEFAULT_ACCOUNT`, then context `account`, then the placeholder `000000000000`. A CloudFormation rule rejects a deploy of that placeholder. Region defaults to `us-east-1`.
+Synth: [infra/app.py](../infra/app.py) takes the account from context `account`, then `CDK_DEFAULT_ACCOUNT`, then the placeholder `000000000000`. A CloudFormation rule rejects a deploy of that placeholder. Region resolves `CDK_DEFAULT_REGION`, then context `region`, then `us-east-1`.
 
 ## 10. Logger
 
