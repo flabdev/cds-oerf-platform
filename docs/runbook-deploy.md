@@ -32,7 +32,7 @@ The account must already be bootstrapped (`CDKToolkit` in `us-east-1`). This rol
 | `agentcore` | true | `agentcore:enabled` |
 | `dashboard` | true | `dashboard:enabled` |
 | `channels_live` | false | `channels:live` |
-| `seed_demo_devices` | true | `demo:seedDevices=true` only when true |
+| `seed_demo_devices` | false | `demo:seedDevices=true` only when true. Tick it only for a deploy that must write the demo `DEVICE#` rows (first demo deploy, or after a reset). |
 | `waba_id` | empty | `whatsapp:wabaId` when the resolved value is not empty |
 | `phone_number_id` | empty | `whatsapp:phoneNumberId` when the resolved value is not empty |
 | `alarm_email` | empty | `alarms:email` when the resolved value is not empty |
@@ -43,7 +43,7 @@ An empty `waba_id`, `phone_number_id`, or `alarm_email` uses repository variable
 
 `seed_demo_devices` writes `DEVICE#{device_id}` / `META` on the routing table from `sim/seed/*/shipments.json`. The row carries `tenant_id`, `shipment_id`, and `asset_id` (`truck`). Ingest only reads that row and still drops an unknown device. The files are the demo tenants `t1`, `t2`, and `sbx`. A second run replaces the same ids.
 
-A normal `OerfComputeStack` deploy does not write those rows. Pass CDK context `demo:seedDevices=true` to add `oerf-device-seed` and the custom resource `DemoDeviceSeed` (`SeedVersion` `1`). The code default is off, so `cdk synth` and CI stay unseeded. On GitHub, **Deploy CDK Infrastructure** defaults `seed_demo_devices` to true and then passes `-c demo:seedDevices=true`. Set that input to false to leave the table unseeded. Delete of the resource does not remove the rows.
+A normal `OerfComputeStack` deploy does not write those rows. Pass CDK context `demo:seedDevices=true` to add `oerf-device-seed` and the custom resource `DemoDeviceSeed` (`SeedVersion` `1`). The code default is off, so `cdk synth` and CI stay unseeded. On GitHub, **Deploy CDK Infrastructure** defaults `seed_demo_devices` to false. Tick it for the first demo deploy or after a reset. Delete of the resource does not remove the rows.
 
 Unit tests do not prove the deployed table. After a deploy with `demo:seedDevices=true`, confirm `RF-7781` resolves to tenant `t1` and shipment `PH-2841`, and that an id that is not in the seed files does not resolve.
 
@@ -57,7 +57,7 @@ Do this once, from `main`, before any later deploy uses the narrowed role.
 
 1. Merge the SEC-1 commit to `main`.
 2. Confirm the live role still has `AdministratorAccess`. If it does not, use the restore steps below before trying again.
-3. In GitHub, run **Deploy CDK Infrastructure** on `main`. The defaults turn AgentCore, the dashboard, and demo device seeding on, and leave live channels off. `waba_id`, `phone_number_id`, and `alarm_email` are empty unless this release sets them; an empty input uses repository variables `WABA_ID`, `WA_PHONE_NUMBER_ID`, and `ALARM_EMAIL`. A variable that is also empty omits that context key. CDK context defaults in code stay off, so a local synth does not turn these on.
+3. In GitHub, run **Deploy CDK Infrastructure** on `main`. The defaults turn AgentCore and the dashboard on and leave live channels and demo device seeding off; tick `seed_demo_devices` for the first demo deploy or after a reset. `waba_id`, `phone_number_id`, and `alarm_email` are empty unless this release sets them; an empty input uses repository variables `WABA_ID`, `WA_PHONE_NUMBER_ID`, and `ALARM_EMAIL`. A variable that is also empty omits that context key. CDK context defaults in code stay off, so a local synth does not turn these on.
 4. Read the `cdk diff` step. The data stack change replaces `AdministratorAccess` with the bootstrap `AssumeRole` statement and tightens the trust.
 5. Wait until the deploy finishes. A second run waits on the concurrency group `cdk-deploy-us-east-1`.
 
