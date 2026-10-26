@@ -182,7 +182,8 @@ def test_nested_engagement_is_a_token_waiting_state_machine_and_is_wired_after_a
     states = definition["States"]
     parent_states = load_definition()["States"]
     parent = parent_states["EngageDriverDiagnosis"]
-    assert parent_states["Assess"]["Next"] == "EngageDriverDiagnosis"
+    assert parent_states["Assess"]["Next"] == "CancelAfterAssess?"
+    assert parent_states["CancelAfterAssess?"]["Default"] == "EngageDriverDiagnosis"
     assert parent["Next"] == "CancelAfterEngageDriverDiagnosis?"
     assert parent_states["CancelAfterEngageDriverDiagnosis?"]["Default"] == "NeedApproval?"
 
@@ -283,12 +284,6 @@ def test_cancellation_is_checked_after_work_steps_and_infeasible_assessment_esca
 
     for step in work_steps:
         gate = states[step]["Next"]
-        if step == "Diagnose":
-            assert gate == "Assess"
-            continue
-        if step == "Assess":
-            assert gate == "EngageDriverDiagnosis"
-            gate = states[gate]["Next"]
         assert gate.startswith("CancelAfter"), step
         assert states[gate]["Choices"] == [
             {
@@ -297,6 +292,7 @@ def test_cancellation_is_checked_after_work_steps_and_infeasible_assessment_esca
                 "Next": "Cancel",
             }
         ]
+    assert states["CancelAfterAssess?"]["Default"] == "EngageDriverDiagnosis"
     assert states["NeedApproval?"]["Choices"][0] == {
         "Variable": "$.decision.has_feasible_options",
         "BooleanEquals": False,
@@ -405,7 +401,24 @@ def test_terminal_states_have_no_next_transition() -> None:
 def test_definition_guards_against_orphaned_executions() -> None:
     # The CDK L2 `timeout` prop is not rendered for a from_string definition,
     # so the execution timeout lives in the ASL top level instead.
-    assert load_definition()["TimeoutSeconds"] == 86400
+    definition = load_definition()
+    assert definition["TimeoutSeconds"] == 86400
+
+    # Every declared state must be reachable from StartAt; AWS rejects a deploy
+    # with MISSING_TRANSITION_TARGET for orphaned states, and a `Next`-only walk
+    # of a hand-edited graph is exactly how the cancel gates were bypassed.
+    states = definition["States"]
+    reachable = set()
+    pending = [definition["StartAt"]]
+    while pending:
+        name = pending.pop()
+        if name in reachable or name not in states:
+            continue
+        reachable.add(name)
+        pending.extend(transition_targets(states[name]))
+
+    orphans = sorted(set(states) - reachable)
+    assert not orphans, f"unreachable states: {orphans}"
 
 
 # ---------------------------------------------------------------------------
