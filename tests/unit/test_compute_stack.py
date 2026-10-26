@@ -93,6 +93,30 @@ EXPECTED_FUNCTIONS = {
             "LOG_LEVEL",
         },
     },
+    "oerf-step-context": {
+        "handler": "domains.cold_chain_excursion.steps.context.handler",
+        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
+    },
+    "oerf-step-assess": {
+        "handler": "domains.cold_chain_excursion.steps.assess.handler",
+        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
+    },
+    "oerf-step-act": {
+        "handler": "domains.cold_chain_excursion.steps.act.handler",
+        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
+    },
+    "oerf-step-verify": {
+        "handler": "domains.cold_chain_excursion.steps.verify.handler",
+        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
+    },
+    "oerf-step-qa": {
+        "handler": "domains.cold_chain_excursion.steps.qa.handler",
+        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
+    },
+    "oerf-step-close": {
+        "handler": "domains.cold_chain_excursion.steps.close.handler",
+        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
+    },
 }
 
 
@@ -242,6 +266,63 @@ def test_every_function_has_active_tracing_and_thirty_day_logs(template: Templat
     assert referenced.issubset(set(log_groups))
     for logical_id in referenced:
         assert log_groups[logical_id]["Properties"]["RetentionInDays"] == 30
+
+
+_STEP_DYNAMO = {
+    "oerf-step-context": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
+    "oerf-step-assess": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
+    "oerf-step-act": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
+    "oerf-step-verify": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
+    "oerf-step-qa": {"dynamodb:GetItem", "dynamodb:PutItem"},
+    "oerf-step-close": {
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+    },
+}
+_XRAY_STAR = {"xray:PutTraceSegments", "xray:PutTelemetryRecords"}
+
+
+def _action_list(statement: dict) -> list[str]:
+    action = statement.get("Action", [])
+    return [action] if isinstance(action, str) else list(action)
+
+
+def _resource_count(statement: dict) -> int:
+    resource = statement["Resource"]
+    return len(resource) if isinstance(resource, list) else 1
+
+
+@pytest.mark.security
+def test_step_roles_have_only_the_handler_actions(template: Template) -> None:
+    """Each step role matches the DynamoDB calls in its handler. X-Ray * is listed."""
+
+    for name, expected in _STEP_DYNAMO.items():
+        props = functions_by_name(template)[name]
+        assert props["Timeout"] == 30
+        assert props["MemorySize"] == 256
+        statements = statements_for_role(template, role_logical_id(props))
+        dynamo = {
+            action
+            for statement in statements
+            for action in _action_list(statement)
+            if action.startswith("dynamodb:")
+        }
+        assert dynamo == expected, name
+        for statement in statements:
+            actions = _action_list(statement)
+            if "dynamodb:GetItem" in actions:
+                assert _resource_count(statement) == 2, name
+            elif any(action.startswith("dynamodb:") for action in actions):
+                assert _resource_count(statement) == 1, name
+            if resource_is_star(statement.get("Resource")):
+                assert set(actions) <= _XRAY_STAR, name
+        forbidden = role_actions(template, name)
+        assert "states:SendTaskSuccess" not in forbidden
+        assert "lambda:InvokeFunction" not in forbidden
+        assert "bedrock:InvokeModel" not in forbidden
+        assert "ses:SendEmail" not in forbidden
 
 
 @pytest.mark.security
