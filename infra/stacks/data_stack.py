@@ -351,10 +351,22 @@ class OerfDataStack(Stack):
             retention=logs.RetentionDays.ONE_MONTH,
             removal_policy=RemovalPolicy.DESTROY,
         )
+        # Raw ASL does not make CDK grant what startExecution.sync:2 needs.
+        # Synchronous nested execution, from
+        # https://docs.aws.amazon.com/step-functions/latest/dg/connect-stepfunctions.html
+        # (IAM policies for calling nested Step Functions workflows):
+        # states:StartExecution on the child state machine;
+        # states:DescribeExecution and states:StopExecution on its executions
+        # (the * is the execution name; see iam-exceptions.md);
+        # events:PutTargets, events:PutRule, and events:DescribeRule on
+        # rule/StepFunctionsGetEventsForStepFunctionsExecutionRule.
+        # StartExecution uses a state machine ARN. Describe and Stop use an
+        # execution ARN. Combining the three on one resource is incorrect.
+        engage_state_machine_name = "oerf-engage-party"
         self.engage_party_state_machine = sfn.StateMachine(
             self,
             "EngagePartyStateMachine",
-            state_machine_name="oerf-engage-party",
+            state_machine_name=engage_state_machine_name,
             state_machine_type=sfn.StateMachineType.STANDARD,
             role=engagement_role,
             tracing_enabled=True,
@@ -367,12 +379,30 @@ class OerfDataStack(Stack):
         )
         workflow_role.add_to_policy(
             iam.PolicyStatement(
-                actions=[
-                    "states:StartExecution",
-                    "states:StopExecution",
-                    "states:DescribeExecution",
-                ],
+                actions=["states:StartExecution"],
                 resources=[self.engage_party_state_machine.state_machine_arn],
+            )
+        )
+        workflow_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["states:DescribeExecution", "states:StopExecution"],
+                resources=[
+                    (
+                        f"arn:aws:states:{self.region}:{self.account}:execution:"
+                        f"{engage_state_machine_name}:*"
+                    )
+                ],
+            )
+        )
+        workflow_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["events:PutTargets", "events:PutRule", "events:DescribeRule"],
+                resources=[
+                    (
+                        f"arn:aws:events:{self.region}:{self.account}:rule/"
+                        "StepFunctionsGetEventsForStepFunctionsExecutionRule"
+                    )
+                ],
             )
         )
         definition = definition.replace(
