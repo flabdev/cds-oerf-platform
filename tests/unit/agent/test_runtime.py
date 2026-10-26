@@ -10,6 +10,7 @@ from domains.cold_chain_excursion.steps import (
     cancel,
     close,
     context,
+    diagnose,
     escalate,
     qa,
     record_failure,
@@ -25,12 +26,24 @@ from tests.unit.support.fake_dynamo import FakeDynamoClient
 TENANT = "t1"
 SHIPMENT = "PH-2841"
 NOW = datetime(2026, 10, 20, 10, 16, tzinfo=UTC)
-STEP_MODULES = (context, assess, act, verify, qa, close, record_failure, escalate, cancel)
+STEP_MODULES = (
+    context,
+    diagnose,
+    assess,
+    act,
+    verify,
+    qa,
+    close,
+    record_failure,
+    escalate,
+    cancel,
+)
 
 
 def test_phase_map_covers_the_frozen_modules() -> None:
     assert runtime.PHASES == {
         "context": "GatherContext",
+        "diagnose": "Diagnose",
         "assess": "Assess",
         "act": "Act",
         "verify": "Verify",
@@ -84,6 +97,9 @@ def test_container_wires_every_port_over_one_client_and_clock() -> None:
     assert isinstance(dependencies.incidents, DynamoIncidentStore)
     assert isinstance(dependencies.results, DynamoStepResultStore)
     assert isinstance(dependencies.config, DynamoConfigRepository)
+    from oerf.platform.tenancy.facilities import DynamoFacilityCatalog
+
+    assert isinstance(dependencies.facilities, DynamoFacilityCatalog)
     assert dependencies.now() == NOW
 
 
@@ -94,11 +110,12 @@ def test_config_port_is_optional_without_a_tenant_table() -> None:
     )
 
     assert dependencies.config is None
+    assert dependencies.facilities is None
 
 
 def test_an_unknown_phase_is_rejected_before_the_event_is_read() -> None:
     with pytest.raises(runtime.UnknownPhase):
-        runtime.run_step("diagnose", {})
+        runtime.run_step("report", {})
 
 
 def test_a_foreign_step_is_rejected_before_any_client_is_built(

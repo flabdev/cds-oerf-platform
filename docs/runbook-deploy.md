@@ -66,6 +66,20 @@ make reset-demo TENANT=t1 PROFILE=cds-oerf-poc
 
 `reset-test` is the dry run. `reset-demo` applies and reseeds. A second apply reports zero for every kind.
 
+## Run the PH-2841 demo
+
+Reset the tenant first. A reset does not clear `INGEST#` rows, so a replayed reading id is ignored for 7 days. Publish a new EventBridge id each time. Direct Lambda invoke of the same JSON is deduped the same way.
+
+1. `make reset-demo TENANT=t1 PROFILE=cds-oerf-poc`
+2. Publish one `sim.reefer` / `TemperatureReading` with `aws events put-events`. Use a new `id`. The device `RF-7781` resolves to tenant `t1` and shipment `PH-2841`.
+3. Watch `oerf-cold-chain` until `EngageDriverDiagnosis` is waiting on the child, and the child is waiting on `SendViaRouter`.
+4. Reply. With channels mocked, `python -m scripts.demo_reply --profile cds-oerf-poc --tenant t1 --shipment PH-2841 --role driver --button running`. With `channels:live` true, the driver replies on WhatsApp to template `oerf_driver_checkin`. The script reads the address from SSM `/oerf/demo-numbers/t1/driver` and prints the shipment and the message id, not the number.
+5. The child ends `answered` / `unit_running`. The parent takes the default of `NeedApproval?` into `SecureFacility` (still the stub), then real `Act`. The next state is `VerifyLoop`, which is unchanged and does not close this excursion by itself.
+
+`demo_reply` only posts a WhatsApp provider message to the inbound queue. It does not send a dashboard action and it does not call `SendTaskSuccess`.
+
+After each rehearsal, cancel the incident from the desk or run `make reset-demo TENANT=t1 PROFILE=cds-oerf-poc`.
+
 ## First deploy from main
 
 Do this once, from `main`, before any later deploy uses the narrowed role.

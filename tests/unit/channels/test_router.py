@@ -180,7 +180,38 @@ def test_a_simulated_channel_does_not_fall_through_or_count_as_delivered() -> No
     assert result.channel == "whatsapp"
     assert whatsapp.calls
     assert sms.calls == []
-    assert engagements.correlate("whatsapp-1") is None
+    assert result.provider_msg_id == "whatsapp-1"
+    correlated = engagements.correlate("whatsapp-1")
+    assert correlated is not None
+    assert correlated.status == "WAITING"
+    assert correlated.task_token == "task-token-1"
+    waiting = engagements.for_address("whatsapp", "+910000000101")
+    assert [item.engagement_id for item in waiting] == ["eng-1"]
+
+
+def test_live_whatsapp_template_keeps_parameter_order() -> None:
+    from oerf.platform.channels.router import _whatsapp_payload
+
+    payload = _whatsapp_payload("+910000000101", "rendered", "driver_checkin", ("PH-2841", "8.1"))
+    assert payload["type"] == "template"
+    assert payload["template"]["name"] == "oerf_driver_checkin"
+    parameters = payload["template"]["components"][0]["parameters"]
+    assert [item["text"] for item in parameters] == ["PH-2841", "8.1"]
+    prefixed = _whatsapp_payload("+910000000101", "rendered", "oerf_driver_checkin", ())
+    assert prefixed["template"]["name"] == "oerf_driver_checkin"
+    assert "components" not in prefixed["template"]
+
+
+def test_an_engagement_send_does_not_use_the_legacy_correlation(monkeypatch) -> None:
+    from oerf.platform.channels import engagement_send, router
+
+    def forbid(*_args, **_kwargs):
+        raise AssertionError("legacy correlation")
+
+    monkeypatch.setattr(router, "record_outbound_message", forbid)
+    monkeypatch.setattr(engagement_send, "send_engagement", lambda event, ports=None: {"ok": True})
+
+    assert router.handler({"step_name": "EngagementSendViaRouter"}, None) == {"ok": True}
 
 
 def test_provider_sdks_are_only_called_from_the_router() -> None:

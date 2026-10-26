@@ -19,28 +19,57 @@ def _from_legacy(result: dict) -> ProviderResult:
 
 
 class WhatsAppProvider:
-    def send(self, recipient: str, body: str, template_id: str) -> ProviderResult:
+    def send(
+        self,
+        recipient: str,
+        body: str,
+        template_id: str,
+        parameters: tuple[str, ...] = (),
+    ) -> ProviderResult:
         from oerf.platform.channels.router import send_whatsapp
 
-        return _from_legacy(send_whatsapp(recipient, body))
+        return _from_legacy(
+            send_whatsapp(recipient, body, template_id=template_id, parameters=parameters)
+        )
 
 
 class SmsProvider:
-    def send(self, recipient: str, body: str, template_id: str) -> ProviderResult:
+    def send(
+        self,
+        recipient: str,
+        body: str,
+        template_id: str,
+        parameters: tuple[str, ...] = (),
+    ) -> ProviderResult:
         from oerf.platform.channels.router import send_sms
 
+        del parameters
         return _from_legacy(send_sms(recipient, body))
 
 
 class EmailProvider:
-    def send(self, recipient: str, body: str, template_id: str) -> ProviderResult:
+    def send(
+        self,
+        recipient: str,
+        body: str,
+        template_id: str,
+        parameters: tuple[str, ...] = (),
+    ) -> ProviderResult:
         from oerf.platform.channels.router import send_email
 
+        del parameters
         return _from_legacy(send_email(recipient, template_id, body))
 
 
 class VoiceProvider:
     """Voice is one-way. A live voice SDK is not configured in this environment."""
 
-    def send(self, recipient: str, body: str, template_id: str) -> ProviderResult:
+    def send(
+        self,
+        recipient: str,
+        body: str,
+        template_id: str,
+        parameters: tuple[str, ...] = (),
+    ) -> ProviderResult:
+        del recipient, body, template_id, parameters
         return ProviderResult(delivered=False, reason="voice_provider_not_configured")

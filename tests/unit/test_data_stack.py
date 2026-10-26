@@ -220,6 +220,9 @@ def test_cold_chain_role_invokes_only_the_wired_steps_and_the_stub(template: Tem
     engagement = json.dumps(_invoke_resources(template, "EngagePartyStateMachineRole"))
     assert "oerf-step-" not in engagement
     assert "ColdChainWorkflowStub" in engagement
+    assert "oerf-engage-cadence" in engagement
+    assert "oerf-engage-interpret" in engagement
+    assert "oerf-channel-router" in engagement
     assert "*" not in engagement or '":*"' in engagement
     assert '"*"' not in engagement
 

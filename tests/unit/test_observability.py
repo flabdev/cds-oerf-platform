@@ -28,6 +28,7 @@ _NAMED_FUNCTIONS = {
     "oerf-pre-token",
     "oerf-tenant-attribute",
     "oerf-step-context",
+    "oerf-step-diagnose",
     "oerf-step-assess",
     "oerf-step-act",
     "oerf-step-verify",
@@ -36,6 +37,8 @@ _NAMED_FUNCTIONS = {
     "oerf-step-record-failure",
     "oerf-step-escalate",
     "oerf-step-cancel",
+    "oerf-engage-cadence",
+    "oerf-engage-interpret",
 }
 
 
@@ -106,6 +109,7 @@ def test_alarms_cover_every_dlq_machine_and_lambda(built) -> None:
         "ActionHandlerFunctionErrors",
         "ColdChainWorkflowStubErrors",
         "ContextFunctionErrors",
+        "DiagnoseFunctionErrors",
         "AssessFunctionErrors",
         "ActFunctionErrors",
         "VerifyFunctionErrors",
@@ -114,6 +118,8 @@ def test_alarms_cover_every_dlq_machine_and_lambda(built) -> None:
         "RecordFailureFunctionErrors",
         "EscalateFunctionErrors",
         "CancelFunctionErrors",
+        "CadenceFunctionErrors",
+        "InterpretFunctionErrors",
     ):
         assert any(logical_id.startswith(prefix) for logical_id in alarms), prefix
 

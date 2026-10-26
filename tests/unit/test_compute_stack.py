@@ -11,8 +11,10 @@ import aws_cdk as cdk
 import pytest
 from aws_cdk.assertions import Template
 
+from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
+from infra.stacks.observability import OerfObservabilityStack, lambda_functions
 
 ACCOUNT = "123456789012"
 REGION = "us-east-1"
@@ -26,6 +28,8 @@ EXPECTED_FUNCTIONS = {
         "handler": "oerf.platform.channels.router.handler",
         "env": {
             "ROUTING_TABLE_NAME",
+            "INCIDENT_TABLE_NAME",
+            "TENANT_TABLE_NAME",
             "USE_MOCK_WHATSAPP",
             "USE_MOCK_SMS",
             "WHATSAPP_PHONE_NUMBER_ID",
@@ -97,6 +101,10 @@ EXPECTED_FUNCTIONS = {
         "handler": "domains.cold_chain_excursion.steps.context.handler",
         "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
     },
+    "oerf-step-diagnose": {
+        "handler": "domains.cold_chain_excursion.steps.diagnose.handler",
+        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
+    },
     "oerf-step-assess": {
         "handler": "domains.cold_chain_excursion.steps.assess.handler",
         "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
@@ -128,6 +136,14 @@ EXPECTED_FUNCTIONS = {
     "oerf-step-cancel": {
         "handler": "domains.cold_chain_excursion.steps.cancel.handler",
         "env": {"INCIDENT_TABLE_NAME", "LOG_LEVEL"},
+    },
+    "oerf-engage-cadence": {
+        "handler": "oerf.platform.cadence.engage.handler",
+        "env": {"LOG_LEVEL"},
+    },
+    "oerf-engage-interpret": {
+        "handler": "oerf.platform.cadence.interpret.handler",
+        "env": {"LOG_LEVEL", "AGENTCORE_ENABLED"},
     },
 }
 
@@ -282,6 +298,7 @@ def test_every_function_has_active_tracing_and_thirty_day_logs(template: Templat
 
 _STEP_DYNAMO = {
     "oerf-step-context": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
+    "oerf-step-diagnose": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"},
     "oerf-step-assess": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
     "oerf-step-act": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
     "oerf-step-verify": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
@@ -349,6 +366,22 @@ def test_step_roles_have_only_the_handler_actions(template: Template) -> None:
         assert "lambda:InvokeFunction" not in forbidden
         assert "bedrock:InvokeModel" not in forbidden
         assert "ses:SendEmail" not in forbidden
+        assert "social-messaging:SendWhatsAppMessage" not in forbidden
+        assert "sns:Publish" not in forbidden
+
+
+@pytest.mark.security
+def test_engagement_adapters_cannot_send_or_resume(template: Template) -> None:
+    """Cadence and interpret hold no table, no provider send, and no task token."""
+
+    for name in ("oerf-engage-cadence", "oerf-engage-interpret"):
+        actions = role_actions(template, name)
+        assert not any(action.startswith("dynamodb:") for action in actions), name
+        assert "states:SendTaskSuccess" not in actions
+        assert "social-messaging:SendWhatsAppMessage" not in actions
+        assert "sns:Publish" not in actions
+        assert "ses:SendEmail" not in actions
+        assert "lambda:InvokeFunction" not in actions
 
 
 @pytest.mark.security
@@ -361,6 +394,130 @@ def test_no_role_is_granted_kms(template: Template) -> None:
         names = [action] if isinstance(action, str) else list(action)
         found.extend(name for name in names if name.startswith("kms:"))
     assert found == []
+
+
+# Service Authorization Reference actions for dynamodb. TransactWriteItems is
+# an API call, not an IAM action; the item operations authorise the transaction.
+_KNOWN_DYNAMODB_ACTIONS = {
+    "dynamodb:GetItem",
+    "dynamodb:PutItem",
+    "dynamodb:UpdateItem",
+    "dynamodb:DeleteItem",
+    "dynamodb:Query",
+    "dynamodb:Scan",
+    "dynamodb:BatchGetItem",
+    "dynamodb:BatchWriteItem",
+    "dynamodb:ConditionCheckItem",
+    "dynamodb:DescribeStream",
+    "dynamodb:GetRecords",
+    "dynamodb:GetShardIterator",
+    "dynamodb:ListStreams",
+    "dynamodb:DescribeTable",
+}
+
+
+def _action_strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        names: list[str] = []
+        for item in value:
+            names.extend(_action_strings(item))
+        return names
+    if isinstance(value, dict):
+        names = []
+        for item in value.values():
+            names.extend(_action_strings(item))
+        return names
+    return []
+
+
+def _policy_statements(template: Template):
+    resources = template.to_json().get("Resources", {})
+    for resource in resources.values():
+        props = resource.get("Properties") or {}
+        documents = []
+        document = props.get("PolicyDocument")
+        if isinstance(document, dict):
+            documents.append(document)
+        for inline in props.get("Policies") or []:
+            if isinstance(inline, dict) and isinstance(inline.get("PolicyDocument"), dict):
+                documents.append(inline["PolicyDocument"])
+        for document in documents:
+            statement = document.get("Statement", [])
+            statements = [statement] if isinstance(statement, dict) else statement
+            for item in statements:
+                if isinstance(item, dict):
+                    yield item
+
+
+def _synthesized_templates() -> dict[str, Template]:
+    """Every stack the five synths can emit, with the optional features on."""
+    app = cdk.App(
+        context={
+            "dashboard:enabled": "true",
+            "whatsapp:wabaId": "waba-0000000000000000",
+            "agentcore:enabled": "true",
+            "demo:seedDevices": "true",
+        }
+    )
+    env = cdk.Environment(account=ACCOUNT, region=REGION)
+    data = OerfDataStack(app, "OerfDataStack", env=env)
+    compute = OerfComputeStack(app, "OerfComputeStack", data_stack=data, env=env)
+    api = OerfApiStack(
+        app,
+        "OerfApiStack",
+        data_stack=data,
+        inbound_queue=compute.inbound_queue,
+        websocket_url=compute.ws_stage.url,
+        env=env,
+    )
+    observability = OerfObservabilityStack(
+        app,
+        "OerfObservabilityStack",
+        functions=lambda_functions(data, compute, api),
+        dead_letter_queues=[
+            compute.inbound_dlq,
+            compute.ingest_dlq,
+            compute.stream_dlq,
+        ],
+        state_machines=[
+            data.cold_chain_state_machine,
+            data.engage_party_state_machine,
+        ],
+        channel_router_log_group=compute.channel_router_fn.log_group,
+        env=env,
+    )
+    return {
+        stack.stack_name: Template.from_stack(stack)
+        for stack in (data, compute, api, observability)
+    }
+
+
+@pytest.mark.security
+def test_synthesized_stacks_use_only_known_dynamodb_actions() -> None:
+    """A DynamoDB IAM action outside the known list fails the synth review."""
+
+    saved = _without_synth_env()
+    try:
+        templates = _synthesized_templates()
+    finally:
+        _restore_env(saved)
+    assert set(templates) == {
+        "OerfDataStack",
+        "OerfComputeStack",
+        "OerfApiStack",
+        "OerfObservabilityStack",
+    }
+    offenders = []
+    for name, template in templates.items():
+        for statement in _policy_statements(template):
+            for action in _action_strings(statement.get("Action", [])):
+                if action.startswith("dynamodb:") and action not in _KNOWN_DYNAMODB_ACTIONS:
+                    offenders.append(f"{name} {action}")
+    assert offenders == [], (
+        "DynamoDB IAM action is not in the known allow-list: " + ", ".join(offenders)
+    )
 
 
 @pytest.mark.security
@@ -806,7 +963,8 @@ def test_channel_mocks_default_true_and_whatsapp_is_unscoped_without_a_phone_id(
     parameter = _statements_with_action(statements, "ssm:GetParameter")
     assert len(parameter) == 1
     assert _resource_list(parameter[0]["Resource"]) == [
-        f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/oerf/whatsapp/phone-number-id"
+        f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/oerf/whatsapp/phone-number-id",
+        f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/oerf/demo-numbers/*",
     ]
     vision = functions_by_name(template)["oerf-evidence-analyzer"]["Environment"]["Variables"]
     assert vision["USE_MOCK_BEDROCK"] == "true"

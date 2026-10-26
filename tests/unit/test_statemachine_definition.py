@@ -25,6 +25,7 @@ ASL_PATH = (
 STUB_PLACEHOLDER = "__STUB_ARN__"
 REAL_PLACEHOLDERS = {
     "GatherContext": "__STEP_CONTEXT_ARN__",
+    "Diagnose": "__STEP_DIAGNOSE_ARN__",
     "Assess": "__STEP_ASSESS_ARN__",
     "Act": "__STEP_ACT_ARN__",
     "VerifyLoop": "__STEP_VERIFY_ARN__",
@@ -37,7 +38,6 @@ REAL_PLACEHOLDERS = {
 STUB_COLD_CHAIN_TASKS = frozenset(
     {
         "OPEN",
-        "Diagnose",
         "Approval",
         "SecureFacility",
         "HandleReopen",
@@ -49,12 +49,8 @@ STUB_COLD_CHAIN_TASKS = frozenset(
 )
 STUB_ENGAGEMENT_TASKS = frozenset(
     {
-        "ComputeNextRung",
         "SendOneWay",
-        "SendViaRouter",
-        "Interpret",
         "HandleCallback",
-        "AdvanceRung",
         "ResetLadder",
         "SendFinalQuestion",
         "ApplyExhaustAction",
@@ -86,7 +82,7 @@ def task_states() -> dict:
 
 
 def test_real_and_stub_tasks_are_listed() -> None:
-    """The six wired tasks are explicit. Everything else stays on the stub."""
+    """Wired tasks name their functions. The remaining tasks stay on the stub."""
 
     cold = task_states()
     engagement = {
@@ -194,6 +190,15 @@ def test_nested_engagement_is_a_token_waiting_state_machine_and_is_wired_after_a
     assert parent["Resource"] == "arn:aws:states:::states:startExecution.sync:2"
     assert parent["Parameters"]["Input"]["role"] == "driver"
     assert parent["Parameters"]["Input"]["ask"] == "diagnose"
+    assert parent["Parameters"]["Input"]["engagement_id.$"] == "$.workflow.diagnosis.engagement_id"
+    assert parent["Parameters"]["Input"]["policy_id.$"] == "$.workflow.diagnosis.policy_id"
+    assert parent["ResultPath"] == "$.workflow.diagnosis.engagement_result"
+    assert states["ComputeNextRung"]["Parameters"]["FunctionName"] == "__ENGAGE_CADENCE_ARN__"
+    assert states["AdvanceRung"]["Parameters"]["FunctionName"] == "__ENGAGE_CADENCE_ARN__"
+    assert states["Interpret"]["Parameters"]["FunctionName"] == "__ENGAGE_INTERPRET_ARN__"
+    assert states["SendViaRouter"]["Parameters"]["FunctionName"] == "__CHANNEL_ROUTER_ARN__"
+    assert "HeartbeatSeconds" not in states["SendViaRouter"]
+    assert "HeartbeatTimeout" not in json.dumps(states["SendViaRouter"])
     assert states["SendViaRouter"]["Resource"].endswith(".waitForTaskToken")
     assert states["SendViaRouter"]["Parameters"]["Payload"]["task_token.$"] == "$$.Task.Token"
     assert states["SendViaRouter"]["TimeoutSecondsPath"] == "$.cadence.timeout_seconds"
