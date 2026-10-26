@@ -109,7 +109,7 @@
           "Next": "RecordFailure"
         }
       ],
-      "Next": "Assess"
+      "Next": "CancelAfterDiagnose?"
     },
     "Assess": {
       "Type": "Task",
@@ -145,7 +145,7 @@
           "Next": "RecordFailure"
         }
       ],
-      "Next": "EngageDriverDiagnosis"
+      "Next": "CancelAfterAssess?"
     },
     "EngageDriverDiagnosis": {
       "Type": "Task",
@@ -841,7 +841,7 @@
           "Next": "Cancel"
         }
       ],
-      "Default": "NeedApproval?"
+      "Default": "EngageDriverDiagnosis"
     },
     "CancelAfterApproval?": {
       "Type": "Choice",
