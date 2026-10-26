@@ -601,7 +601,24 @@ def test_terminal_states_have_no_next_transition() -> None:
 def test_definition_guards_against_orphaned_executions() -> None:
     # The CDK L2 `timeout` prop is not rendered for a from_string definition,
     # so the execution timeout lives in the ASL top level instead.
-    assert load_definition()["TimeoutSeconds"] == 86400
+    definition = load_definition()
+    assert definition["TimeoutSeconds"] == 86400
+
+    # Every declared state must be reachable from StartAt; AWS rejects a deploy
+    # with MISSING_TRANSITION_TARGET for orphaned states, and a `Next`-only walk
+    # of a hand-edited graph is exactly how the cancel gates were bypassed.
+    states = definition["States"]
+    reachable = set()
+    pending = [definition["StartAt"]]
+    while pending:
+        name = pending.pop()
+        if name in reachable or name not in states:
+            continue
+        reachable.add(name)
+        pending.extend(transition_targets(states[name]))
+
+    orphans = sorted(set(states) - reachable)
+    assert not orphans, f"unreachable states: {orphans}"
 
 
 # ---------------------------------------------------------------------------
