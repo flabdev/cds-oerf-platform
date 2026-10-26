@@ -97,8 +97,10 @@ def test_concurrent_creates_open_one_incident() -> None:
     for thread in threads:
         thread.join()
 
-    assert created == ["INC-000001", "INC-000001"]
-    assert [event.sk[-4:] for event in store.events("t1", "INC-000001")] == ["0001", "0002"]
+    assert len(set(created)) == 1
+    winner = created[0]
+    assert store.lock.get_lock("t1", "PH-2841")["incident_id"] == winner
+    assert [event.sk[-4:] for event in store.events("t1", winner)] == ["0001", "0002"]
 
 
 def test_record_reading_writes_an_idempotent_read_row_for_open_incident() -> None:

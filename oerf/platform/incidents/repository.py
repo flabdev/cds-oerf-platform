@@ -161,8 +161,8 @@ class IncidentRepository:
     ) -> None:
         self.lock = lock or OpenIncidentLock()
         self._clock = clock or (lambda: datetime.now(UTC))
-        self._ids = count(1)
-        self._next_id = next_id or (lambda: f"INC-{next(self._ids):06d}")
+        self._counters: dict[str, Any] = {}
+        self._next_id = next_id
         self._incidents: dict[tuple[str, str], Incident] = {}
         self._events: dict[tuple[str, str], list[TimelineEvent]] = {}
         self._readings: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
@@ -188,7 +188,7 @@ class IncidentRepository:
         shipment = _required(shipment_id, "shipment_id")
         cause = _required(reason, "reason")
         with self._guard:
-            incident_id = self._next_id()
+            incident_id = self._allocate_id(context.tenant_id)
             acquired = self.lock.acquire_lock(context.tenant_id, shipment, incident_id)
             if not acquired.created:
                 return self._append_open(context.tenant_id, acquired.incident_id, cause)
@@ -307,6 +307,17 @@ class IncidentRepository:
             state=to_state,
         )
 
+    def _allocate_id(self, tenant_id: str) -> str:
+        """Per-tenant ``INC-{n:06d}``, matching the DynamoDB counter.
+
+        ``next_id`` is the test injection. Without it, each tenant starts at
+        ``INC-000001`` and the next create for that tenant takes the next number.
+        """
+
+        if self._next_id is not None:
+            return self._next_id()
+        counter = self._counters.setdefault(tenant_id, count(1))
+        return f"INC-{next(counter):06d}"
 
     def _append_open(self, tenant_id: str, incident_id: str, reason: str) -> Incident:
         key = _meta_key(tenant_id, incident_id)

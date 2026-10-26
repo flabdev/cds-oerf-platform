@@ -343,7 +343,9 @@ def build_dependencies() -> InboundDependencies:
         callbacks=stepfunctions,
         registry=DynamoPhoneRegistry(_client, ROUTING_TABLE_NAME, TENANT_TABLE_NAME),
         media_evidence=_evidence_store(),
-        incidents=DynamoIncidentStore(_client, INCIDENT_TABLE_NAME),
+        incidents=DynamoIncidentStore(
+            _client, INCIDENT_TABLE_NAME, tenant_table=TENANT_TABLE_NAME
+        ),
         executions=stepfunctions,
         state_machine_arn=os.environ.get("STATE_MACHINE_ARN", ""),
     )
@@ -655,7 +657,7 @@ def _cancel(
             count=1,
         )
         return "ignored"
-    _stop_execution(dependencies, incident.incident_id)
+    _stop_execution(dependencies, incident.tenant_id, incident.incident_id)
     try:
         dependencies.incidents.transition(
             incident.tenant_id,
@@ -697,7 +699,7 @@ def _cancel_target(
     return engagement.tenant_id, engagement.incident_id
 
 
-def _stop_execution(dependencies: InboundDependencies, incident_id: str) -> None:
+def _stop_execution(dependencies: InboundDependencies, tenant_id: str, incident_id: str) -> None:
     """Stop the execution, or accept that it is already gone.
 
     A successful ``StopExecution`` covers an execution that is still running
@@ -708,7 +710,7 @@ def _stop_execution(dependencies: InboundDependencies, incident_id: str) -> None
     partial-batch failure.
     """
 
-    arn = _execution_arn(dependencies.state_machine_arn, incident_id)
+    arn = _execution_arn(dependencies.state_machine_arn, tenant_id, incident_id)
     executions = dependencies.executions
     if executions is None:
         raise RuntimeError("step functions are required to cancel")
@@ -719,15 +721,15 @@ def _stop_execution(dependencies: InboundDependencies, incident_id: str) -> None
             raise
 
 
-def _execution_arn(state_machine_arn: str, incident_id: str) -> str:
-    """The execution ARN ingest would have started for this incident."""
+def _execution_arn(state_machine_arn: str, tenant_id: str, incident_id: str) -> str:
+    """The execution ARN ingest would have started for this tenant and incident."""
 
     from oerf.platform.ingest.handler import _execution_name
 
     if _STATE_MACHINE not in state_machine_arn:
         raise RuntimeError("STATE_MACHINE_ARN is required to cancel")
     prefix, machine = state_machine_arn.split(_STATE_MACHINE, 1)
-    return f"{prefix}:execution:{machine}:{_execution_name(incident_id)}"
+    return f"{prefix}:execution:{machine}:{_execution_name(tenant_id, incident_id)}"
 
 
 def _is_finished_execution(exc: BaseException) -> bool:

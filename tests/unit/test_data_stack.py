@@ -200,8 +200,8 @@ def _invoke_resources(template: Template, role_prefix: str) -> list:
 
 
 @pytest.mark.security
-def test_cold_chain_role_invokes_only_the_six_steps_and_the_stub(template: Template) -> None:
-    """InvokeFunction stays on the six fixed names plus the stub. No Resource *."""
+def test_cold_chain_role_invokes_only_the_wired_steps_and_the_stub(template: Template) -> None:
+    """InvokeFunction stays on the fixed step names plus the stub. No Resource *."""
 
     expected = set()
     for name in STEP_FUNCTION_NAMES.values():
