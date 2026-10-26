@@ -9,8 +9,10 @@ This module is the deployed ``oerf-ingest`` entry point
 (``oerf.platform.ingest.handler.handler``). The compute stack already wires the
 EventBridge rule for ``sim.reefer`` / ``TemperatureReading``, the dead-letter
 queue, ``states:StartExecution`` on the cold-chain state machine, and the
-environment below. Ingest state is kept on the incident table because that is
-the only table this role may write: routing and tenant access is read-only.
+environment below. Ingest state is kept on the incident table. The tenant
+table is read for configuration, and one ``UpdateItem`` allocates the next
+incident id (``TENANT#{tid}`` / ``COUNTER#INCIDENT``). Routing access is
+read-only.
 While the shipment lock is present, each accepted reading is one ``READ#``
 row, written by ``IncidentStore.record_reading``.
 
@@ -52,6 +54,7 @@ DETAIL_TYPE = "TemperatureReading"
 DOMAIN = "cold_chain_excursion"
 EVENT_RETENTION_SECONDS = 7 * 24 * 60 * 60
 _EXECUTION_NAME = re.compile(r"[^A-Za-z0-9_-]")
+_EXECUTION_NAME_LIMIT = 80
 
 
 class Reading(BaseModel):
@@ -304,7 +307,7 @@ def handler(
             config_snapshot=config.model_dump(mode="json"),
         )
         _record_reading(ports, tenant_id, shipment_id, reading, event_id)
-        execution_name = _execution_name(incident.incident_id)
+        execution_name = _execution_name(tenant_id, incident.incident_id)
         if ports.incidents.get(tenant_id, incident.incident_id).state != "OPEN":
             return {
                 "status": "already_open",
@@ -393,7 +396,7 @@ def build_dependencies() -> IngestDependencies:
         shipments=DynamoShipmentReader(dynamodb, tenant_table),
         configs=_DynamoConfigReader(DynamoConfigRepository(dynamodb, tenant_table)),
         debounce=_configured_debounce(dynamodb, incident_table),
-        incidents=DynamoIncidentStore(dynamodb, incident_table),
+        incidents=DynamoIncidentStore(dynamodb, incident_table, tenant_table=tenant_table),
         dedupe=DynamoReadingDedupe(dynamodb, incident_table),
         executions=StepFunctionsStarter(boto3.client("stepfunctions"), state_machine_arn),
         state_machine_arn=state_machine_arn,
@@ -461,9 +464,30 @@ def _shipment_for_execution(shipment: Mapping[str, Any]) -> dict[str, Any]:
     return copied
 
 
-def _execution_name(incident_id: str) -> str:
-    cleaned = _EXECUTION_NAME.sub("-", incident_id)
-    return cleaned[:70] or "cold-chain"
+def _execution_name(tenant_id: str, incident_id: str) -> str:
+    """The execution name ingest starts and inbound cancel rebuilds.
+
+    Incident ids are ``INC-{n:06d}`` from a per-tenant counter, so two tenants
+    both open ``INC-000001``. The tenant is in the name so ``StartExecution``
+    and ``StopExecution`` do not land on the other tenant. Step Functions
+    allows 80 characters from ``A-Za-z0-9_-``. A longer pair keeps a tenant
+    prefix, an 8-character hash of the pair, and the start of the incident id.
+    """
+
+    tenant = _execution_token(tenant_id, "tenant")
+    incident = _execution_token(incident_id, "incident")
+    combined = f"{tenant}-{incident}"
+    if len(combined) <= _EXECUTION_NAME_LIMIT:
+        return combined
+    digest = hashlib.sha256(f"{tenant}\n{incident}".encode()).hexdigest()[:8]
+    prefix = f"{tenant[:20]}-{digest}"
+    room = _EXECUTION_NAME_LIMIT - len(prefix) - 1
+    return f"{prefix}-{incident[:room]}"
+
+
+def _execution_token(value: str, fallback: str) -> str:
+    cleaned = _EXECUTION_NAME.sub("-", value.strip())
+    return cleaned or fallback
 
 
 def _execution_conflict(error: BaseException) -> bool:

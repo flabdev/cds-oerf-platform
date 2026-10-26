@@ -117,6 +117,18 @@ EXPECTED_FUNCTIONS = {
         "handler": "domains.cold_chain_excursion.steps.close.handler",
         "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
     },
+    "oerf-step-record-failure": {
+        "handler": "domains.cold_chain_excursion.steps.record_failure.handler",
+        "env": {"INCIDENT_TABLE_NAME", "LOG_LEVEL"},
+    },
+    "oerf-step-escalate": {
+        "handler": "domains.cold_chain_excursion.steps.escalate.handler",
+        "env": {"INCIDENT_TABLE_NAME", "LOG_LEVEL"},
+    },
+    "oerf-step-cancel": {
+        "handler": "domains.cold_chain_excursion.steps.cancel.handler",
+        "env": {"INCIDENT_TABLE_NAME", "LOG_LEVEL"},
+    },
 }
 
 
@@ -280,6 +292,19 @@ _STEP_DYNAMO = {
         "dynamodb:UpdateItem",
         "dynamodb:DeleteItem",
     },
+    "oerf-step-record-failure": {"dynamodb:GetItem", "dynamodb:PutItem"},
+    "oerf-step-escalate": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
+    "oerf-step-cancel": {
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+    },
+}
+_INCIDENT_ONLY_STEPS = {
+    "oerf-step-record-failure",
+    "oerf-step-escalate",
+    "oerf-step-cancel",
 }
 _XRAY_STAR = {"xray:PutTraceSegments", "xray:PutTelemetryRecords"}
 
@@ -313,7 +338,8 @@ def test_step_roles_have_only_the_handler_actions(template: Template) -> None:
         for statement in statements:
             actions = _action_list(statement)
             if "dynamodb:GetItem" in actions:
-                assert _resource_count(statement) == 2, name
+                expected_reads = 1 if name in _INCIDENT_ONLY_STEPS else 2
+                assert _resource_count(statement) == expected_reads, name
             elif any(action.startswith("dynamodb:") for action in actions):
                 assert _resource_count(statement) == 1, name
             if resource_is_star(statement.get("Resource")):

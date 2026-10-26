@@ -560,7 +560,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_RECORD_FAILURE_ARN__",
         "Payload": {
           "step_name": "RecordFailure",
           "workflow.$": "$"
@@ -596,7 +596,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_ESCALATE_ARN__",
         "Payload": {
           "step_name": "Escalate",
           "workflow.$": "$"
@@ -699,7 +699,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_CANCEL_ARN__",
         "Payload": {
           "step_name": "Cancel",
           "workflow.$": "$"

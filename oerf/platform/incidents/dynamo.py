@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
-from itertools import count
 from typing import Any
 
 from oerf.platform.incidents.lock import LockResult
@@ -103,22 +102,30 @@ class DynamoOpenIncidentLock:
 
 
 class DynamoIncidentStore:
-    """Incident meta, timeline, and shipment lock on one incident table."""
+    """Incident meta, timeline, and shipment lock on one incident table.
+
+    New ids come from an atomic counter on the tenant table,
+    ``TENANT#{tid}`` / ``COUNTER#INCIDENT``. ``ADD`` starts at 1 for a missing
+    attribute, so two processes cannot take the same number. The row is tenant
+    configuration, not an incident item: reset does not delete tenant-table
+    rows, and the next cold start continues the sequence.
+    """
 
     def __init__(
         self,
         client: Any,
         table_name: str,
         *,
+        tenant_table: str | None = None,
         clock: Callable[[], datetime] | None = None,
         next_id: Callable[[], str] | None = None,
     ) -> None:
         self._client = client
         self._table = table_name
+        self._tenant_table = tenant_table or table_name
         self.lock = DynamoOpenIncidentLock(client, table_name)
         self._clock = clock or (lambda: datetime.now(UTC))
-        self._ids = count(1)
-        self._next_id = next_id or (lambda: f"INC-{next(self._ids):06d}")
+        self._next_id = next_id
 
     def create(
         self,
@@ -137,7 +144,7 @@ class DynamoIncidentStore:
         context = TenantContext(tenant_id=tenant_id)
         shipment = required_text(shipment_id, "shipment_id")
         cause = required_text(reason, "reason")
-        incident_id = self._next_id()
+        incident_id = self._allocate_id(context.tenant_id)
         opened_at = iso_z(self._clock())
         pk = incident_pk(context.tenant_id, incident_id)
         meta = _meta_item(
@@ -186,6 +193,22 @@ class DynamoIncidentStore:
                 raise
             return self._append(context.tenant_id, str(existing["incident_id"]), cause)
         return _incident(meta)
+
+    def _allocate_id(self, tenant_id: str) -> str:
+        """The next ``INC-{n:06d}`` for this tenant, or the injected test id."""
+
+        if self._next_id is not None:
+            return self._next_id()
+        response = self._client.update_item(
+            TableName=self._tenant_table,
+            Key=key(f"TENANT#{tenant_id}", "COUNTER#INCIDENT"),
+            UpdateExpression="ADD #n :one",
+            ExpressionAttributeNames={"#n": "n"},
+            ExpressionAttributeValues={":one": n(1)},
+            ReturnValues="UPDATED_NEW",
+        )
+        allocated = number(response["Attributes"]["n"])
+        return f"INC-{allocated:06d}"
 
     def get(self, tenant_id: str, incident_id: str) -> Incident:
         context = TenantContext(tenant_id=tenant_id)

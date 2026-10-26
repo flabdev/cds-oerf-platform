@@ -4,7 +4,17 @@ from datetime import UTC, datetime
 
 import pytest
 
-from domains.cold_chain_excursion.steps import act, assess, close, context, qa, verify
+from domains.cold_chain_excursion.steps import (
+    act,
+    assess,
+    cancel,
+    close,
+    context,
+    escalate,
+    qa,
+    record_failure,
+    verify,
+)
 from oerf.platform.agent import runtime
 from oerf.platform.agent.dynamo_step_results import DynamoStepResultStore
 from oerf.platform.agent.handlers import HANDLERS
@@ -15,10 +25,10 @@ from tests.unit.support.fake_dynamo import FakeDynamoClient
 TENANT = "t1"
 SHIPMENT = "PH-2841"
 NOW = datetime(2026, 10, 20, 10, 16, tzinfo=UTC)
-STEP_MODULES = (context, assess, act, verify, qa, close)
+STEP_MODULES = (context, assess, act, verify, qa, close, record_failure, escalate, cancel)
 
 
-def test_phase_map_covers_the_six_frozen_modules() -> None:
+def test_phase_map_covers_the_frozen_modules() -> None:
     assert runtime.PHASES == {
         "context": "GatherContext",
         "assess": "Assess",
@@ -26,6 +36,9 @@ def test_phase_map_covers_the_six_frozen_modules() -> None:
         "verify": "Verify",
         "qa": "QA",
         "close": "Close",
+        "record_failure": "RecordFailure",
+        "escalate": "Escalate",
+        "cancel": "Cancel",
     }
     assert set(runtime.MODULES.values()) == {module.__name__ for module in STEP_MODULES}
     assert set(runtime.PHASES.values()) <= set(HANDLERS)

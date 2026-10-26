@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime
+from itertools import count
 from typing import Any
 
 import pytest
@@ -109,7 +110,7 @@ def _cancel(**overrides: Any) -> dict[str, Any]:
 def _expected_arn() -> str:
     return (
         "arn:aws:states:us-east-1:000000000000:execution:oerf-cold-chain:"
-        + _execution_name(INCIDENT)
+        + _execution_name(TENANT, INCIDENT)
     )
 
 
@@ -134,9 +135,9 @@ def test_cancel_stops_the_derived_execution_and_releases_the_lock(role: str) -> 
 
 
 def test_cancel_derives_the_same_execution_name_ingest_stores() -> None:
-    assert _execution_arn(MACHINE, "INC/000123") == (
+    assert _execution_arn(MACHINE, TENANT, "INC/000123") == (
         "arn:aws:states:us-east-1:000000000000:execution:oerf-cold-chain:"
-        + _execution_name("INC/000123")
+        + _execution_name(TENANT, "INC/000123")
     )
 
 
@@ -266,3 +267,44 @@ def test_cancel_after_the_engagement_was_answered_does_not_resume_the_token() ->
     assert len(stopper.calls) == 1
     assert callbacks.calls == []
     assert incidents.get(TENANT, INCIDENT).state == "CANCELLED"
+
+
+@pytest.mark.security
+def test_dashboard_cancel_of_escalated_releases_the_lock() -> None:
+    """An escalated incident stays locked until cancel, then a new breach can open."""
+
+    ids = count(1)
+    incidents = IncidentRepository(clock=lambda: NOW, next_id=lambda: f"INC-{next(ids):06d}")
+    opened = incidents.create(
+        tenant_id=TENANT, shipment_id=SHIPMENT, reason="TEMPERATURE_EXCURSION"
+    )
+    incidents.transition(TENANT, opened.incident_id, from_state="OPEN", to_state="DIAGNOSING")
+    incidents.transition(TENANT, opened.incident_id, from_state="DIAGNOSING", to_state="ASSESSING")
+    incidents.transition(TENANT, opened.incident_id, from_state="ASSESSING", to_state="ESCALATED")
+    stopper = _Stop()
+    dependencies = InboundDependencies(
+        InboundDedupe(clock=lambda: NOW),
+        MemoryEngagementStore(clock=lambda: NOW),
+        _Callbacks(),
+        incidents=incidents,
+        executions=stopper,
+        state_machine_arn=MACHINE,
+    )
+
+    assert (
+        process_message(
+            _cancel(incident_id=opened.incident_id, engagement_id=None, action_id="act-esc"),
+            dependencies,
+        )
+        == "cancelled"
+    )
+
+    assert incidents.get(TENANT, opened.incident_id).state == "CANCELLED"
+    assert incidents.lock.get_lock(TENANT, SHIPMENT) is None
+    assert stopper.calls[0]["executionArn"].endswith(_execution_name(TENANT, opened.incident_id))
+    opened_again = incidents.create(
+        tenant_id=TENANT, shipment_id=SHIPMENT, reason="TEMPERATURE_EXCURSION"
+    )
+    assert opened_again.incident_id != opened.incident_id
+    assert opened_again.state == "OPEN"
+    assert incidents.lock.get_lock(TENANT, SHIPMENT)["incident_id"] == opened_again.incident_id
