@@ -20,6 +20,7 @@ from botocore.exceptions import ClientError
 from pydantic import BaseModel, ConfigDict, Field
 
 from oerf.platform.channels.engagement import EngagementStore
+from oerf.platform.channels.phone_id import _whatsapp_phone_number_id as _resolve_phone_number_id
 from oerf.platform.channels.providers.base import MessageProvider
 from oerf.platform.channels.registry import PhoneRegistry
 from oerf.platform.channels.templates import MissingFacts, MissingTemplate, render_message
@@ -33,6 +34,7 @@ logger.setLevel(logging.INFO)
 ROUTING_TABLE_NAME = os.environ.get("ROUTING_TABLE_NAME", "")
 SES_SOURCE_EMAIL = os.environ.get("SES_SOURCE_EMAIL", "")
 WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
+WA_PHONE_NUMBER_ID_PARAM = os.environ.get("WA_PHONE_NUMBER_ID_PARAM", "").strip()
 USE_MOCK_WHATSAPP = os.environ.get("USE_MOCK_WHATSAPP", "false").lower() == "true"
 USE_MOCK_SMS = os.environ.get("USE_MOCK_SMS", "false").lower() == "true"
 USE_MOCK_EMAIL = os.environ.get("USE_MOCK_EMAIL", "false").lower() == "true"
@@ -54,6 +56,17 @@ def get_ses():
     if _ses is None:
         _ses = boto3.client("sesv2")
     return _ses
+
+
+def _whatsapp_phone_number_id() -> str:
+    """Return the live WhatsApp phone-number id, resolved once per process."""
+
+    return _resolve_phone_number_id(
+        WA_PHONE_NUMBER_ID_PARAM,
+        WHATSAPP_PHONE_NUMBER_ID,
+        logger,
+        channel="WHATSAPP",
+    )
 
 
 def _required_text(value: Any) -> str | None:
@@ -139,13 +152,19 @@ def send_whatsapp(recipient: str, message: str) -> dict[str, Any]:
             "status": "SIMULATED",
         }
 
-    if not WHATSAPP_PHONE_NUMBER_ID:
-        logger.warning(
-            "WHATSAPP_PHONE_NUMBER_ID not configured, falling back to next channel"
+    phone_number_id = _whatsapp_phone_number_id()
+    if not phone_number_id:
+        log(
+            logger,
+            logging.WARNING,
+            "wa_phone_id_missing",
+            channel="WHATSAPP",
+            outcome="error",
+            count=1,
         )
         return {
             "success": False,
-            "error": "WHATSAPP_PHONE_NUMBER_ID not configured",
+            "error": "wa_phone_id_missing",
             "channel": "WHATSAPP",
         }
 
@@ -160,7 +179,7 @@ def send_whatsapp(recipient: str, message: str) -> dict[str, Any]:
             "text": {"preview_url": False, "body": message},
         }
         resp = eum.send_whatsapp_message(
-            originationPhoneNumberId=WHATSAPP_PHONE_NUMBER_ID,
+            originationPhoneNumberId=phone_number_id,
             metaApiVersion="v20.0",
             message=json.dumps(payload).encode("utf-8"),
         )

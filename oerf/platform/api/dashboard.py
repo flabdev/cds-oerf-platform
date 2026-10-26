@@ -322,6 +322,7 @@ def _action(
         "action": parsed["action"],
         "option_id": parsed["option_id"],
         "user_id": principal.sub,
+        "role": principal.role,
         "type": "text",
         "text": None,
         "media_ref": None,

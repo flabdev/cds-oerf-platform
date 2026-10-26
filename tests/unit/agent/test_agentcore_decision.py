@@ -108,6 +108,7 @@ def test_the_advisory_caps_how_many_actions_it_names() -> None:
     assert len(result.recommended_actions) <= decision.MAX_ACTIONS
 
 
+@pytest.mark.security
 def test_the_event_never_carries_a_prompt_or_raw_record() -> None:
     result = decision.advise(incident=_incident(), policy=_policy(), config=_config())
 
@@ -147,6 +148,7 @@ def test_the_reader_tries_the_contract_key_then_the_deployed_one() -> None:
     }
 
 
+@pytest.mark.security
 def test_both_key_shapes_stay_tenant_scoped() -> None:
     shapes = decision.incident_key_shapes("t1", "INC-1")
 

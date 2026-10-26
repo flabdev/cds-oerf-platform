@@ -8,6 +8,7 @@ state still matches ``from_state``. Closing or cancelling releases the lock.
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -17,9 +18,11 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict
 
 from oerf.platform.incidents.lock import OpenIncidentLock
+from oerf.platform.storage.dynamo import iso_z
 from oerf.platform.tenancy.context import TenantContext
 
 TERMINAL_STATES = frozenset({"CLOSED", "CANCELLED"})
+READING_RETENTION_SECONDS = 90 * 24 * 60 * 60
 TRANSITIONS: dict[str, frozenset[str]] = {
     "OPEN": frozenset({"DIAGNOSING", "CANCELLED"}),
     "DIAGNOSING": frozenset({"ASSESSING", "CANCELLED"}),
@@ -116,12 +119,14 @@ class IncidentStore(Protocol):
         event_id: str,
         timestamp: str,
         temperature_c: float,
-        device_id: str,
         sequence: int,
-        latitude: float | None = None,
-        longitude: float | None = None,
     ) -> bool:
-        """Persist a sensor reading when the shipment currently has an open incident."""
+        """Persist one reading when the shipment has a non-terminal incident.
+
+        ``shipment_id`` selects the open lock. ``event_id`` is only the sort-key
+        suffix. The row is ``pk``, ``sk``, ``tenant_id``, ``ts``, ``temperature_c``,
+        and ``expires_at``.
+        """
 
     def transition(
         self,
@@ -229,10 +234,7 @@ class IncidentRepository:
         event_id: str,
         timestamp: str,
         temperature_c: float,
-        device_id: str,
         sequence: int,
-        latitude: float | None = None,
-        longitude: float | None = None,
     ) -> bool:
         context = TenantContext(tenant_id=tenant_id)
         with self._guard:
@@ -244,15 +246,18 @@ class IncidentRepository:
             incident = self._incidents.get(key)
             if incident is None or incident.state in TERMINAL_STATES:
                 return False
-            self._readings[key][event_id] = {
-                "sk": f"READ#{timestamp}#{sequence:012d}",
-                "ts": timestamp,
-                "temperature_c": temperature_c,
-                "device_id": device_id,
-                "sequence": sequence,
-                "latitude": latitude,
-                "longitude": longitude,
-            }
+            row = reading_item(
+                pk=incident.pk,
+                tenant_id=context.tenant_id,
+                event_id=event_id,
+                timestamp=timestamp,
+                temperature_c=temperature_c,
+                sequence=sequence,
+            )
+            stored = self._readings[key]
+            if row["sk"] in stored:
+                return False
+            stored[row["sk"]] = row
             return True
 
     def readings(self, tenant_id: str, incident_id: str) -> list[dict[str, Any]]:
@@ -333,5 +338,39 @@ def _required(value: str, name: str) -> str:
     return stripped
 
 
+def reading_item(
+    *,
+    pk: str,
+    tenant_id: str,
+    event_id: str,
+    timestamp: str,
+    temperature_c: float,
+    sequence: int,
+) -> dict[str, Any]:
+    """One ``READ#`` item. Both stores write this shape, including the key suffix."""
+
+    moment = _reading_moment(timestamp)
+    stamp = iso_z(moment)
+    suffix = hashlib.sha256(event_id.encode("utf-8")).hexdigest()
+    return {
+        "pk": pk,
+        "sk": f"READ#{stamp}#{sequence:012d}#{suffix}",
+        "tenant_id": tenant_id,
+        "ts": stamp,
+        "temperature_c": temperature_c,
+        "expires_at": int(moment.timestamp()) + READING_RETENTION_SECONDS,
+    }
+
+
+def _reading_moment(timestamp: str) -> datetime:
+    text = timestamp.strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    moment = datetime.fromisoformat(text)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return moment.astimezone(UTC)
+
+
 def _iso_z(moment: datetime) -> str:
-    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return iso_z(moment)

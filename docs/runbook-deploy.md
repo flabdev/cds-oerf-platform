@@ -33,7 +33,7 @@ Unit tests do not prove the deployed table. After a deploy with `demo:seedDevice
 
 ## Demo incident trigger
 
-`POST /incidents/trigger` on `oerf-http-api` stays as a demo hook. It requires a Cognito token, takes the tenant from `custom:tenant_id`, ignores a tenant in the body, and writes one item: `TENANT#{tenant}#INC#{id}` / `META`. It then calls `StartExecution`. Frozen ingest remains the EventBridge path. Dashboard actions are `POST /incidents/{id}/actions` and do not write incident state.
+`POST /incidents/trigger` is retired (interfaces v1.14). The action handler does not call `StartExecution`. Ingest (`sim.reefer` / `TemperatureReading` on EventBridge) is the only start of an incident and its execution. Dashboard actions are `POST /incidents/{id}/actions` and do not write incident state.
 
 ## First deploy from main
 

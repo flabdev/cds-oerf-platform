@@ -1,6 +1,6 @@
 """EventBridge ingest validation, debounce, and start-execution contract."""
 
-import logging
+import hashlib
 import threading
 from datetime import UTC, datetime
 from typing import Any
@@ -9,10 +9,9 @@ import pytest
 
 from oerf.platform.incidents.debounce import MemoryDebounce
 from oerf.platform.incidents.repository import IncidentRepository
-from oerf.platform.ingest.handler import (
-    IngestDependencies,
-    handler,
-)
+from oerf.platform.ingest.handler import IngestDependencies, handler
+from oerf.platform.report.generator import handler as report_handler
+from oerf.platform.report.store import MemoryReportStore
 from oerf.platform.tenancy.config_resolver import get_config
 
 NOW = datetime(2026, 10, 20, 10, 16, tzinfo=UTC)
@@ -148,7 +147,14 @@ def test_first_breach_waits_for_configured_threshold_and_second_starts_once() ->
     readings = deps.incidents.readings("t1", incident.incident_id)
     assert len(readings) == 1
     assert readings[0]["temperature_c"] == 9
-    assert readings[0]["device_id"] == "RF-1"
+    assert set(readings[0]) == {
+        "pk",
+        "sk",
+        "tenant_id",
+        "ts",
+        "temperature_c",
+        "expires_at",
+    }
 
 
 def test_safe_reading_clears_streak_before_breach_restarts_it() -> None:
@@ -217,19 +223,19 @@ def test_concurrent_trigger_calls_open_one_incident() -> None:
     assert len({item["name"] for item in deps.executions.calls}) == 1
 
 
-def test_reading_values_are_not_logged(caplog: pytest.LogCaptureFixture) -> None:
+def test_reading_values_are_not_logged(capsys: pytest.CaptureFixture[str]) -> None:
     """Log lines carry identifiers only; untrusted reading values stay out."""
     deps = _deps()
 
-    with caplog.at_level(logging.INFO, logger="oerf.platform.ingest.handler"):
-        handler(_event("hot-1"), None, dependencies=deps)
-        handler(_event("hot-2", detail={"seq": 8}), None, dependencies=deps)
+    handler(_event("hot-1"), None, dependencies=deps)
+    handler(_event("hot-2", detail={"seq": 8}), None, dependencies=deps)
+    text = capsys.readouterr().out
 
-    assert "tenant=t1" in caplog.text
-    assert "shipment=PH-1" in caplog.text
-    assert "temperature_c" not in caplog.text
-    assert "17.4" not in caplog.text
-    assert "78.3" not in caplog.text
+    assert "tenant=t1" in text
+    assert "shipment=PH-1" in text
+    assert "temperature_c" not in text
+    assert "17.4" not in text
+    assert "78.3" not in text
 
 
 def test_reading_is_never_passed_through_as_the_return_value() -> None:
@@ -248,3 +254,125 @@ def test_reading_is_never_passed_through_as_the_return_value() -> None:
         "execution_arn",
     }
     assert "temperature_c" not in result
+
+
+def test_one_accepted_reading_on_an_open_incident_creates_one_read_row() -> None:
+    deps = _deps()
+    handler(_event("hot-1"), None, dependencies=deps)
+    opened = handler(
+        _event("hot-2", temperature=12, detail={"seq": 8, "ts": "2026-10-20T10:20:00Z"}),
+        None,
+        dependencies=deps,
+    )
+    incident_id = opened["incident_id"]
+    assert len(deps.incidents.readings("t1", incident_id)) == 1
+
+    accepted = handler(
+        _event("steady", temperature=5, detail={"seq": 9, "ts": "2026-10-20T10:26:00Z"}),
+        None,
+        dependencies=deps,
+    )
+    assert accepted["status"] == "accepted"
+    rows = deps.incidents.readings("t1", incident_id)
+    assert len(rows) == 2
+    suffix = hashlib.sha256(accepted["event_id"].encode("utf-8")).hexdigest()
+    assert rows[-1] == {
+        "pk": f"TENANT#t1#INC#{incident_id}",
+        "sk": f"READ#2026-10-20T10:26:00Z#000000000009#{suffix}",
+        "tenant_id": "t1",
+        "ts": "2026-10-20T10:26:00Z",
+        "temperature_c": 5.0,
+        "expires_at": int(datetime(2026, 10, 20, 10, 26, tzinfo=UTC).timestamp())
+        + 90 * 24 * 60 * 60,
+    }
+
+    deps.dedupe.forget(accepted["event_id"])
+    retried = handler(
+        _event("steady", temperature=5, detail={"seq": 9, "ts": "2026-10-20T10:26:00Z"}),
+        None,
+        dependencies=deps,
+    )
+    assert retried["status"] == "accepted"
+    assert deps.incidents.readings("t1", incident_id) == rows
+
+
+def test_report_temperature_section_uses_stored_readings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deps = _deps()
+    handler(_event("hot-1"), None, dependencies=deps)
+    opened = handler(
+        _event("hot-2", temperature=12, detail={"seq": 8, "ts": "2026-10-20T10:20:00Z"}),
+        None,
+        dependencies=deps,
+    )
+    handler(
+        _event("safe", temperature=5, detail={"seq": 9, "ts": "2026-10-20T10:26:00Z"}),
+        None,
+        dependencies=deps,
+    )
+    handler(
+        _event("later", temperature=9.5, detail={"seq": 10, "ts": "2026-10-20T10:31:00Z"}),
+        None,
+        dependencies=deps,
+    )
+    incident = deps.incidents.get("t1", opened["incident_id"])
+    store = MemoryReportStore()
+    table = _ReportTable(incident, deps.incidents.readings("t1", incident.incident_id))
+    monkeypatch.setattr("oerf.platform.report.generator._store", lambda: store)
+    monkeypatch.setattr("oerf.platform.report.generator.INCIDENT_TABLE_NAME", "incidents")
+    monkeypatch.setattr("oerf.platform.report.generator.get_dynamodb", lambda: table)
+
+    result = report_handler({"tenant_id": "t1", "incident_id": incident.incident_id}, None)
+    html = store.objects[result["report_key"]].decode()
+    section = html.split('id="temperature_timeline"', 1)[1].split('id="state_timeline"', 1)[0]
+    points = [
+        (datetime.fromisoformat(stamp.replace("Z", "+00:00")), float(temperature))
+        for stamp, temperature, _unit in (line.split() for line in _list_items(section))
+    ]
+    limit = get_config("t1", "cold_chain_excursion").product_profile("PP-2-8-45").range_c[1]
+    minutes = sum(
+        (end - start).total_seconds() / 60
+        for (start, temperature), (end, _following) in zip(points, points[1:])
+        if temperature > limit
+    )
+
+    assert limit == 8
+    assert max(temperature for _stamp, temperature in points) == 12.0
+    assert minutes == 6
+    assert "17.4" not in section
+    assert "RF-1" not in section
+
+
+def _list_items(section: str) -> list[str]:
+    return [item.split("</li>", 1)[0] for item in section.split("<li>")[1:]]
+
+
+class _ReportTable:
+    def __init__(self, incident: Any, readings: list[dict[str, Any]]) -> None:
+        self._incident = incident
+        self._readings = readings
+
+    def Table(self, _name: str) -> "_ReportTable":
+        return self
+
+    def get_item(self, Key: dict[str, str]) -> dict[str, Any]:
+        if Key == {"pk": self._incident.pk, "sk": "META"}:
+            return {
+                "Item": {
+                    "pk": self._incident.pk,
+                    "sk": "META",
+                    "tenant_id": self._incident.tenant_id,
+                    "incident_id": self._incident.incident_id,
+                    "shipment_id": self._incident.shipment_id,
+                    "state": self._incident.state,
+                }
+            }
+        return {}
+
+    def query(self, **kwargs: object) -> dict[str, Any]:
+        values = kwargs.get("ExpressionAttributeValues")
+        prefix = values.get(":prefix") if isinstance(values, dict) else ""
+        if prefix == "READ#":
+            return {"Items": [dict(row) for row in self._readings]}
+        return {"Items": []}

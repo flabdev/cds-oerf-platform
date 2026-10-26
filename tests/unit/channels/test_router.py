@@ -184,12 +184,17 @@ def test_a_simulated_channel_does_not_fall_through_or_count_as_delivered() -> No
 
 
 def test_provider_sdks_are_only_called_from_the_router() -> None:
+    """Sends stay in the router. Inbound may call GetWhatsAppMessageMedia only."""
+
     offenders: list[str] = []
     for path in Path("oerf").rglob("*.py"):
         if path.name == "router.py":
             continue
         source = path.read_text(encoding="utf-8")
-        if "socialmessaging" in source or "sns.publish" in source or ".send_email(" in source:
+        inbound_media = path.as_posix() == "oerf/platform/inbound/handler.py"
+        if "sns.publish" in source or ".send_email(" in source or "send_whatsapp_message" in source:
+            offenders.append(str(path))
+        if "socialmessaging" in source and not inbound_media:
             offenders.append(str(path))
 
     assert offenders == []

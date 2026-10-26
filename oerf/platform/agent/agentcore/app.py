@@ -30,8 +30,9 @@ from oerf.platform.agent.agentcore.decision import (
     resolve_config,
 )
 from oerf.platform.evidence.policy import dynamo_readers
+from oerf.platform.observability.logging import get_logger, log
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 _ENVELOPE = ("tenant_id", "incident_id", "task", "inputs", "trace_id")
@@ -56,10 +57,26 @@ def handle(event: object) -> dict[str, object]:
         return dict(_PLACEHOLDER)
     try:
         return _advisory(envelope)
-    except (IncidentMissing, TenantMismatch) as exc:
-        logger.warning("agent advisory refused for incident %s: %s", envelope["incident_id"], exc)
-    except Exception as exc:  # noqa: BLE001 - the runtime never 500s a calling workflow
-        logger.exception("agent advisory failed for incident %s: %s", envelope["incident_id"], exc)
+    except (IncidentMissing, TenantMismatch):
+        log(
+            logger,
+            logging.WARNING,
+            f"agent advisory refused for incident {envelope['incident_id']}",
+            tenant_id=envelope["tenant_id"],
+            incident_id=envelope["incident_id"],
+            outcome="refused",
+            count=1,
+        )
+    except Exception:  # noqa: BLE001 - the runtime never 500s a calling workflow
+        log(
+            logger,
+            logging.ERROR,
+            f"agent advisory failed for incident {envelope['incident_id']}",
+            tenant_id=envelope["tenant_id"],
+            incident_id=envelope["incident_id"],
+            outcome="error",
+            count=1,
+        )
     return dict(_PLACEHOLDER)
 
 

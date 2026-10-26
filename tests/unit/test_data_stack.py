@@ -260,6 +260,7 @@ def test_incident_table_defines_exactly_one_gsi_by_status(
     assert index == gsi1
 
 
+@pytest.mark.security
 def test_s3_buckets_block_public_access(template: Template) -> None:
     for logical_id, bucket in template.find_resources("AWS::S3::Bucket").items():
         assert bucket["Properties"]["PublicAccessBlockConfiguration"] == {
@@ -302,6 +303,7 @@ def test_tables_use_the_aws_managed_key(template: Template) -> None:
         assert "KMSMasterKeyId" not in spec, logical_id
 
 
+@pytest.mark.security
 def test_no_role_is_granted_kms(template: Template) -> None:
     """aws/dynamodb and aws/s3 do not need a kms grant on the caller."""
 
@@ -349,6 +351,7 @@ def test_tenant_attribute_custom_resource_targets_the_existing_pool(
     assert set(properties) >= {"ServiceToken", "UserPoolId"}
 
 
+@pytest.mark.security
 def test_tenant_attribute_role_is_limited_to_the_user_pool(template: Template) -> None:
     statements = []
     for policy in template.find_resources("AWS::IAM::Policy").values():
@@ -381,6 +384,20 @@ def test_persistent_resources_use_retain_removal_policy(
         assert resource["DeletionPolicy"] == "Retain", logical_id
         assert resource["UpdateReplacePolicy"] == "Retain", logical_id
 
+def test_workflow_stub_traces_and_keeps_logs_for_thirty_days(template: Template) -> None:
+    functions = [
+        resource["Properties"]
+        for resource in template.find_resources("AWS::Lambda::Function").values()
+        if resource["Properties"].get("Handler") == "workflow_stub.handler"
+    ]
+    assert len(functions) == 1
+    props = functions[0]
+    assert props["TracingConfig"] == {"Mode": "Active"}
+    log_group_id = props["LoggingConfig"]["LogGroup"]["Ref"]
+    group = template.find_resources("AWS::Logs::LogGroup")[log_group_id]
+    assert group["Properties"]["RetentionInDays"] == 30
+
+
 def test_cold_chain_state_machine_has_tracing(template):
     template.has_resource_properties(
         "AWS::StepFunctions::StateMachine",
@@ -388,6 +405,7 @@ def test_cold_chain_state_machine_has_tracing(template):
     )
 
 
+@pytest.mark.security
 def test_data_buckets_deny_insecure_transport_and_expire(template: Template) -> None:
     """Evidence expires. Reports stay. Both buckets refuse plain HTTP."""
 
@@ -409,6 +427,7 @@ def test_data_buckets_deny_insecure_transport_and_expire(template: Template) -> 
         assert any(_denies_insecure_transport(item) for item in statements)
 
 
+@pytest.mark.security
 def test_cold_chain_sampling_is_an_iam_exception(template: Template) -> None:
     path = Path(__file__).resolve().parents[2] / "docs" / "security" / "iam-exceptions.md"
     text = path.read_text(encoding="utf-8")
@@ -524,6 +543,7 @@ def _as_list(value: str | list) -> list:
     return value if isinstance(value, list) else [value]
 
 
+@pytest.mark.security
 def test_github_deploy_role_trusts_only_main(template: Template) -> None:
     _logical_id, role = _github_deploy_role(template)
     document = role["Properties"]["AssumeRolePolicyDocument"]
@@ -539,6 +559,7 @@ def test_github_deploy_role_trusts_only_main(template: Template) -> None:
     assert string_equals["token.actions.githubusercontent.com:sub"] == _GITHUB_OIDC_SUBS
 
 
+@pytest.mark.security
 def test_github_deploy_role_assumes_only_bootstrap_roles(template: Template) -> None:
     logical_id, role = _github_deploy_role(template)
     assert "ManagedPolicyArns" not in role["Properties"]

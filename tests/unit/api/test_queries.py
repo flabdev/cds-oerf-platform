@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from oerf.platform.api.dashboard import (
     DashboardServices,
     MemoryActionQueue,
@@ -15,6 +17,7 @@ from oerf.platform.storage.dynamo import key, s
 from tests.unit.support.fake_dynamo import FakeDynamoClient
 
 
+@pytest.mark.security
 def test_list_and_detail_stay_in_one_tenant_and_hide_secrets() -> None:
     client = FakeDynamoClient()
     _incident(client, "t1", "INC-1", "PH-2841", "ASSESSING", allowance=41)
@@ -74,6 +77,7 @@ def test_list_pages_after_the_cursor() -> None:
     assert second["next_cursor"] is None
 
 
+@pytest.mark.security
 def test_a_disallowed_action_is_rejected_and_the_queue_is_untouched() -> None:
     services = DashboardServices(
         queries=MemoryIncidentQuery(
@@ -96,6 +100,7 @@ def test_a_disallowed_action_is_rejected_and_the_queue_is_untouched() -> None:
     assert services.queue.messages == []
 
 
+@pytest.mark.security
 def test_an_unknown_role_cannot_enqueue() -> None:
     services = DashboardServices(
         queries=MemoryIncidentQuery(
@@ -173,6 +178,7 @@ def test_sqs_send_sets_fifo_ids_only_for_a_fifo_url() -> None:
     assert json.loads(standard.messages[0]["MessageBody"]) == body
 
 
+@pytest.mark.security
 def test_sqs_message_uses_the_idempotency_id_and_omits_the_task_token() -> None:
     client = _RecordingQueue()
     services = DashboardServices(
@@ -216,6 +222,7 @@ def test_sqs_message_uses_the_idempotency_id_and_omits_the_task_token() -> None:
     assert body["channel"] == "dashboard"
     assert body["engagement_id"] == "ENG-03"
     assert body["user_id"] == "user-1"
+    assert body["role"] == "ops_user"
     assert body["text"] is None
     assert "task_token" not in body
 

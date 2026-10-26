@@ -65,8 +65,6 @@ EXPECTED_FUNCTIONS = {
         "env": {
             "INCIDENT_TABLE_NAME",
             "ROUTING_TABLE_NAME",
-            "STATE_MACHINE_ARN",
-            "INBOUND_QUEUE_URL",
         },
     },
     "oerf-inbound": {
@@ -77,6 +75,10 @@ EXPECTED_FUNCTIONS = {
             "ROUTING_TABLE_NAME",
             "PLATFORM_TABLE_NAME",
             "EVIDENCE_BUCKET_NAME",
+            "STATE_MACHINE_ARN",
+            "WA_PHONE_NUMBER_ID_PARAM",
+            "WHATSAPP_PHONE_NUMBER_ID",
+            "INBOUND_MEDIA_MAX_BYTES",
             "LOG_LEVEL",
         },
     },
@@ -242,6 +244,7 @@ def test_every_function_has_active_tracing_and_thirty_day_logs(template: Templat
         assert log_groups[logical_id]["Properties"]["RetentionInDays"] == 30
 
 
+@pytest.mark.security
 def test_no_role_is_granted_kms(template: Template) -> None:
     """Bucket and table grants do not add kms:Decrypt for aws/s3 or aws/dynamodb."""
 
@@ -253,39 +256,76 @@ def test_no_role_is_granted_kms(template: Template) -> None:
     assert found == []
 
 
-def test_star_resources_are_listed_in_the_exceptions_file(template: Template) -> None:
+@pytest.mark.security
+def test_star_resources_are_listed_in_the_exceptions_file(
+    stack: OerfComputeStack, template: Template
+) -> None:
+    """Compute and data templates. The data stack holds the OIDC provider role."""
+
+    data = stack.node.scope.node.try_find_child("OerfDataStack")
+    assert isinstance(data, OerfDataStack)
+    scanned = {
+        "OerfComputeStack": template,
+        "OerfDataStack": Template.from_stack(data),
+    }
     allowed = allowed_star_actions()
     assert allowed, f"{EXCEPTIONS} does not list any IAM actions"
     offenders = []
-    for statement in iter_allow_statements(template):
+    for stack_name, current in scanned.items():
+        for statement in iter_allow_statements(current):
+            if not resource_is_star(statement.get("Resource")):
+                continue
+            action = statement.get("Action", [])
+            names = [action] if isinstance(action, str) else list(action)
+            for name in names:
+                if name not in allowed:
+                    offenders.append(f"{stack_name} {name}")
+    assert offenders == [], (
+        "Resource * is outside docs/security/iam-exceptions.md: " + ", ".join(offenders)
+    )
+    oidc = {
+        "iam:CreateOpenIDConnectProvider",
+        "iam:DeleteOpenIDConnectProvider",
+        "iam:UpdateOpenIDConnectProviderThumbprint",
+        "iam:AddClientIDToOpenIDConnectProvider",
+        "iam:RemoveClientIDFromOpenIDConnectProvider",
+    }
+    found: set[str] = set()
+    for statement in iter_allow_statements(scanned["OerfDataStack"]):
         if not resource_is_star(statement.get("Resource")):
             continue
         action = statement.get("Action", [])
         names = [action] if isinstance(action, str) else list(action)
-        for name in names:
-            if name not in allowed:
-                offenders.append(name)
-    assert offenders == [], (
-        "Resource * is outside docs/security/iam-exceptions.md: " + ", ".join(offenders)
-    )
+        found.update(name for name in names if name in oidc)
+    assert found == oidc
 
 
-def test_inbound_media_permissions_are_limited_to_bucket_and_token_secret(
+@pytest.mark.security
+def test_inbound_media_permissions_use_end_user_messaging_not_a_token_secret(
     template: Template,
 ) -> None:
     inbound = functions_by_name(template)["oerf-inbound"]
+    variables = inbound["Environment"]["Variables"]
+    assert variables["WA_PHONE_NUMBER_ID_PARAM"] == "/oerf/whatsapp/phone-number-id"
+    assert variables["WHATSAPP_PHONE_NUMBER_ID"] == ""
+    assert variables["INBOUND_MEDIA_MAX_BYTES"] == str(10 * 1024 * 1024)
     statements = statements_for_role(template, role_logical_id(inbound))
-    secret_reads = _statements_with_action(statements, "secretsmanager:GetSecretValue")
-    assert len(secret_reads) == 1
-    assert _resource_list(secret_reads[0]["Resource"]) == [
-        f"arn:aws:secretsmanager:{REGION}:{ACCOUNT}:secret:oerf/whatsapp/access_token-*"
-    ]
+    assert _statements_with_action(statements, "secretsmanager:GetSecretValue") == []
     puts = _statements_with_action(statements, "s3:PutObject")
     assert len(puts) == 1
     resource = _resource_list(puts[0]["Resource"])[0]
     assert resource["Fn::Join"][1][-1].endswith("/tenants/*/inbound/*")
+    media = _statements_with_action(statements, "social-messaging:GetWhatsAppMessageMedia")
+    assert len(media) == 1
+    assert media[0]["Resource"] == "*"
+    parameter = _statements_with_action(statements, "ssm:GetParameter")
+    assert len(parameter) == 1
+    assert _resource_list(parameter[0]["Resource"]) == [
+        f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/oerf/whatsapp/phone-number-id"
+    ]
 
 
+@pytest.mark.security
 def test_send_task_success_is_only_on_the_inbound_role(template: Template) -> None:
     inbound = role_actions(template, "oerf-inbound")
     action = role_actions(template, "oerf-action-handler")
@@ -294,10 +334,21 @@ def test_send_task_success_is_only_on_the_inbound_role(template: Template) -> No
     assert "states:StopExecution" in inbound
     assert "states:SendTaskSuccess" not in action
     assert "states:SendTaskFailure" not in action
+    assert "states:StartExecution" not in action
+    assert "states:StartExecution" in role_actions(template, "oerf-ingest")
     assert "states:SendTaskSuccess" not in role_actions(template, "oerf-ingest")
-    assert "sqs:SendMessage" in action
+    assert "sqs:SendMessage" not in action
+    routes = [
+        resource["Properties"]["RouteKey"]
+        for resource in template.find_resources("AWS::ApiGatewayV2::Route").values()
+    ]
+    assert "GET /incidents" in routes
+    assert "GET /incidents/{id}" in routes
+    assert "POST /incidents/{id}/actions" not in routes
+    assert all(not key.endswith("trigger") for key in routes)
 
 
+@pytest.mark.security
 def test_inbound_can_stop_only_cold_chain_executions(template: Template) -> None:
     inbound = functions_by_name(template)["oerf-inbound"]
     stops = [
@@ -317,6 +368,7 @@ def test_inbound_can_stop_only_cold_chain_executions(template: Template) -> None
         assert "states:StopExecution" not in role_actions(template, name)
 
 
+@pytest.mark.security
 def test_invokers_and_queue_allows_require_this_account(template: Template) -> None:
     permissions = template.find_resources("AWS::Lambda::Permission")
     assert permissions
@@ -499,6 +551,7 @@ def test_inbound_event_source_reports_batch_item_failures(template: Template) ->
     assert source["Fn::GetAtt"][0].startswith("InboundQueue")
 
 
+@pytest.mark.security
 def test_queues_and_inbound_topic_deny_insecure_transport(template: Template) -> None:
     queues = template.find_resources("AWS::SQS::Queue")
     assert len(queues) == 4
@@ -534,6 +587,13 @@ def test_stream_broadcaster_bisects_and_fails_to_a_queue(template: Template) -> 
     assert props["MaximumRetryAttempts"] == 3
     assert "ReportBatchItemFailures" in props["FunctionResponseTypes"]
     assert "Destination" in props["DestinationConfig"]["OnFailure"]
+    filters = props["FilterCriteria"]["Filters"]
+    assert len(filters) == 1
+    pattern = filters[0]["Pattern"]
+    if isinstance(pattern, str):
+        pattern = json.loads(pattern)
+    assert pattern["dynamodb"]["Keys"]["sk"]["S"] == ["META"]
+    assert pattern["dynamodb"]["Keys"]["pk"]["S"] == [{"prefix": "TENANT#"}]
 
 
 def _denies_insecure_transport(statement: dict) -> bool:
@@ -679,6 +739,19 @@ def test_channels_live_disables_mocks_and_scopes_whatsapp_to_the_phone_number() 
         f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:phone-number-id/{phone_id}"
     ]
     assert "socialmessaging:*" not in role_actions(live, "oerf-channel-router")
+    inbound_statements = statements_for_role(
+        live, role_logical_id(functions_by_name(live)["oerf-inbound"])
+    )
+    fetch = _statements_with_action(
+        inbound_statements, "social-messaging:GetWhatsAppMessageMedia"
+    )
+    assert len(fetch) == 1
+    assert _resource_list(fetch[0]["Resource"]) == [
+        f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:phone-number-id/{phone_id}"
+    ]
+    assert functions_by_name(live)["oerf-inbound"]["Environment"]["Variables"][
+        "WHATSAPP_PHONE_NUMBER_ID"
+    ] == phone_id
     vision = functions_by_name(live)["oerf-evidence-analyzer"]["Environment"]["Variables"]
     assert vision["USE_MOCK_BEDROCK"] == "false"
     assert vision["BEDROCK_MODEL_ID"] == "amazon.nova-lite-v1:0"

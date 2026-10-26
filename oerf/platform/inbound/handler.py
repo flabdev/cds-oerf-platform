@@ -35,11 +35,15 @@ Boundaries this module keeps:
   the execution because a reply was unusable would let whoever holds a contacted
   number stop a workflow, so an unusable reply leaves the rung waiting instead.
 
-The inbound Lambda uses the deployed evidence bucket and accesses only the
-``oerf/whatsapp/access_token`` secret for Meta media download. A missing or
-ambiguous address match is acknowledged without resuming; a storage or provider
-failure releases the dedupe id for retry. The ``JOIN`` sandbox path remains
-separate from this provider reply handler.
+The inbound Lambda asks End User Messaging Social to store WhatsApp media.
+``GetWhatsAppMessageMedia`` with ``metadataOnly`` checks the type and size.
+A second call writes the object through a presigned PUT the inbound role
+signs. The handler does not download the bytes and does not read a Meta
+token. A missing phone id fails closed. Throttling and a 5xx are retried.
+A disallowed type, an oversize file, or an invalid media id is acknowledged
+without a callback for that media item. A missing or ambiguous address match
+is acknowledged without resuming. The ``JOIN`` sandbox path remains separate
+from this provider reply handler.
 """
 
 from __future__ import annotations
@@ -48,19 +52,19 @@ import hashlib
 import json
 import logging
 import os
-import urllib.parse
-import urllib.request
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, NoReturn, Protocol
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from oerf.platform.channels.engagement import DynamoEngagementStore, Engagement, EngagementStore
 from oerf.platform.channels.optout import handle_reply
+from oerf.platform.channels.phone_id import _whatsapp_phone_number_id as _resolve_phone_number_id
 from oerf.platform.channels.registry import (
     DynamoPhoneRegistry,
     PhoneRegistry,
@@ -69,8 +73,16 @@ from oerf.platform.channels.registry import (
 from oerf.platform.inbound.dedupe import MessageDedupePort
 from oerf.platform.inbound.dynamo import DynamoMessageDedupe
 from oerf.platform.inbound.normalize import NormalizationError, NormalizedMessage, normalize_inbound
+from oerf.platform.incidents.dynamo import DynamoIncidentStore
+from oerf.platform.incidents.repository import (
+    TERMINAL_STATES,
+    IncidentNotFound,
+    IncidentStore,
+    StaleIncidentUpdate,
+)
+from oerf.platform.observability.logging import get_logger, log
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 INCIDENT_TABLE_NAME = os.environ.get("INCIDENT_TABLE_NAME", "")
 TENANT_TABLE_NAME = os.environ.get("TENANT_TABLE_NAME", "")
@@ -79,107 +91,172 @@ MAX_REPLY_TEXT = 4000
 MAX_MEDIA_ITEMS = 10
 MAX_MEDIA_FIELD = 256
 MAX_CALLBACK_BYTES = 8192
-MAX_MEDIA_BYTES = 15 * 1024 * 1024
-WHATSAPP_ACCESS_TOKEN_SECRET = "oerf/whatsapp/access_token"
-WHATSAPP_GRAPH_API_VERSION = "v21.0"
-META_MEDIA_HOSTS = frozenset({"lookaside.fbsbx.com"})
+_DEFAULT_MEDIA_MAX_BYTES = 10 * 1024 * 1024
+_MEDIA_URL_TTL_SECONDS = 300
+_MEDIA_REGION = "us-east-1"
+WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
+WA_PHONE_NUMBER_ID_PARAM = os.environ.get("WA_PHONE_NUMBER_ID_PARAM", "").strip()
+_MEDIA_EXTENSIONS = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "application/pdf": ".pdf",
+}
+_THROTTLE_CODES = frozenset(
+    {
+        "Throttling",
+        "ThrottlingException",
+        "TooManyRequestsException",
+        "RequestThrottled",
+        "ProvisionedThroughputExceededException",
+        "SlowDown",
+    }
+)
 DASHBOARD_ACTIONS = frozenset({"confirm_transfer", "pick_option", "cancel"})
+CANCEL_ROLES = frozenset({"platform_admin", "tenant_admin", "ops_user"})
+_FINISHED_EXECUTION = frozenset({"ExecutionDoesNotExist"})
+_STATE_MACHINE = ":stateMachine:"
 
 
-class _MetaMediaRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Permit redirects only to the expected HTTPS Meta media host."""
+class MediaRejected(Exception):
+    """The media item is not stored. The record is acknowledged and not retried."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        parsed = urllib.parse.urlparse(newurl)
-        if parsed.scheme != "https" or parsed.hostname not in META_MEDIA_HOSTS:
-            raise ValueError("WhatsApp media redirect is not an approved Meta host")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+class MediaConfigError(Exception):
+    """Media cannot be requested. The record fails closed and SQS retries it."""
 
 
 class MediaEvidenceStore(Protocol):
     def store(
         self, tenant_id: str, message_id: str, media_id: str, mime_type: str | None
     ) -> str | None:
-        """Download one provider media item and return its tenant-scoped S3 key."""
+        """Store one provider media item and return its tenant-scoped S3 key."""
 
 
 class WhatsAppMediaEvidenceStore:
-    """Fetch Meta media using its ID API, then persist bytes in the evidence bucket."""
+    """Ask End User Messaging to write one WhatsApp media object into S3."""
 
-    def __init__(self, bucket_name: str) -> None:
+    def __init__(self, bucket_name: str, *, social: Any = None, s3: Any = None) -> None:
         self._bucket = bucket_name
-        self._s3 = boto3.client("s3")
-        self._secrets = boto3.client("secretsmanager")
-        self._token: str | None = None
+        self._social = social
+        self._s3 = s3
 
-    def _access_token(self) -> str:
-        if self._token is None:
-            secret = self._secrets.get_secret_value(SecretId=WHATSAPP_ACCESS_TOKEN_SECRET)
-            value = secret.get("SecretString", "")
-            try:
-                parsed = json.loads(value)
-            except (TypeError, json.JSONDecodeError):
-                parsed = value
-            if isinstance(parsed, dict):
-                value = parsed.get("access_token", "")
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError("WhatsApp media access token is unavailable")
-            self._token = value.strip()
-        return self._token
+    def _social_client(self) -> Any:
+        if self._social is None:
+            self._social = boto3.client("socialmessaging", region_name=_MEDIA_REGION)
+        return self._social
+
+    def _s3_client(self) -> Any:
+        if self._s3 is None:
+            self._s3 = boto3.client(
+                "s3",
+                region_name=_MEDIA_REGION,
+                config=Config(signature_version="s3v4"),
+            )
+        return self._s3
 
     def store(self, tenant_id: str, message_id: str, media_id: str, mime_type: str | None) -> str:
-        token = self._access_token()
-        metadata_url = (
-            f"https://graph.facebook.com/{WHATSAPP_GRAPH_API_VERSION}/"
-            f"{urllib.parse.quote(media_id, safe='')}"
+        del mime_type
+        phone_id = _whatsapp_phone_number_id()
+        if not phone_id:
+            log(logger, logging.ERROR, "wa_phone_id_missing", outcome="error", count=1)
+            raise MediaConfigError("whatsapp phone number id is required")
+        metadata = self._read_media(
+            tenant_id,
+            mediaId=media_id,
+            originationPhoneNumberId=phone_id,
+            metadataOnly=True,
         )
-        opener = urllib.request.build_opener(_MetaMediaRedirectHandler())
-        metadata_request = urllib.request.Request(
-            metadata_url,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        try:
-            with opener.open(metadata_request, timeout=10) as response:
-                metadata = json.loads(response.read(64 * 1024))
-        except Exception:
-            raise ValueError("WhatsApp media metadata request failed") from None
-        download_url = metadata.get("url") if isinstance(metadata, dict) else None
-        if not isinstance(download_url, str):
-            raise ValueError("WhatsApp media response did not include a download URL")
-        parsed_url = urllib.parse.urlparse(download_url)
-        if parsed_url.scheme != "https" or parsed_url.hostname not in META_MEDIA_HOSTS:
-            raise ValueError("WhatsApp media download URL is not an approved Meta host")
-        download_request = urllib.request.Request(
-            download_url,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        try:
-            with opener.open(download_request, timeout=20) as response:
-                content = response.read(MAX_MEDIA_BYTES + 1)
-        except Exception:
-            raise ValueError("WhatsApp media download failed") from None
-        if len(content) > MAX_MEDIA_BYTES:
-            raise ValueError("WhatsApp media exceeds the maximum evidence size")
-        content_type = mime_type or str(metadata.get("mime_type") or "application/octet-stream")
-        extension = {
-            "image/jpeg": ".jpg",
-            "image/png": ".png",
-            "image/webp": ".webp",
-            "audio/ogg": ".ogg",
-            "application/pdf": ".pdf",
-        }.get(content_type.split(";", 1)[0].lower(), ".bin")
+        extension = _media_extension(metadata.get("mimeType"))
+        if extension is None:
+            _reject_media(tenant_id)
+        size = _file_size(metadata.get("fileSize"))
+        if size is None or size > _media_max_bytes():
+            _reject_media(tenant_id)
         message_ref = hashlib.sha256(message_id.encode("utf-8")).hexdigest()
-        evidence_key = (
-            f"tenants/{tenant_id}/inbound/{message_ref}/{uuid.uuid4().hex}{extension}"
+        evidence_key = f"tenants/{tenant_id}/inbound/{message_ref}/{uuid.uuid4().hex}{extension}"
+        # Bucket default encryption is SSE-KMS aws/s3 (ADR-033). Signing an
+        # encryption header would override that default, so the PUT signs none.
+        url = self._s3_client().generate_presigned_url(
+            ClientMethod="put_object",
+            Params={"Bucket": self._bucket, "Key": evidence_key},
+            ExpiresIn=_MEDIA_URL_TTL_SECONDS,
+            HttpMethod="PUT",
         )
-        self._s3.put_object(
-            Bucket=self._bucket,
-            Key=evidence_key,
-            Body=content,
-            ContentType=content_type,
-            ServerSideEncryption="AES256",
+        self._read_media(
+            tenant_id,
+            mediaId=media_id,
+            originationPhoneNumberId=phone_id,
+            destinationS3PresignedUrl={"url": url, "headers": {}},
         )
         return evidence_key
+
+    def _read_media(self, tenant_id: str, **kwargs: Any) -> dict[str, Any]:
+        try:
+            response = self._social_client().get_whatsapp_message_media(**kwargs)
+        except ClientError as exc:
+            if _retryable_media_error(exc):
+                raise
+            _reject_media(tenant_id)
+        if not isinstance(response, dict):
+            _reject_media(tenant_id)
+        return response
+
+
+def _reject_media(tenant_id: str) -> NoReturn:
+    log(
+        logger,
+        logging.INFO,
+        "inbound media rejected",
+        tenant_id=tenant_id,
+        outcome="rejected",
+        count=1,
+    )
+    raise MediaRejected("rejected")
+
+
+def _whatsapp_phone_number_id() -> str:
+    """Return the live WhatsApp phone-number id, resolved once per process."""
+
+    return _resolve_phone_number_id(WA_PHONE_NUMBER_ID_PARAM, WHATSAPP_PHONE_NUMBER_ID, logger)
+
+
+def _media_extension(mime: Any) -> str | None:
+    if not isinstance(mime, str):
+        return None
+    return _MEDIA_EXTENSIONS.get(mime.split(";", 1)[0].strip().lower())
+
+
+def _file_size(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _media_max_bytes() -> int:
+    raw = os.environ.get("INBOUND_MEDIA_MAX_BYTES", "").strip()
+    if not raw:
+        return _DEFAULT_MEDIA_MAX_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        raise MediaConfigError("inbound media cap is invalid") from None
+    if value <= 0:
+        raise MediaConfigError("inbound media cap is invalid")
+    return value
+
+
+def _retryable_media_error(exc: ClientError) -> bool:
+    error = exc.response.get("Error", {})
+    code = str(error.get("Code", ""))
+    status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    if code in _THROTTLE_CODES or status == 429:
+        return True
+    if isinstance(status, int) and status >= 500:
+        return True
+    if isinstance(status, int) and 400 <= status < 500:
+        return False
+    return True
 
 
 def _evidence_store() -> MediaEvidenceStore | None:
@@ -195,16 +272,19 @@ def _persist_media(
     """Store provider media and project only safe metadata into the callback."""
     projected: list[dict[str, str | None]] = []
     for item in message.media[:MAX_MEDIA_ITEMS]:
-        if not item.id:
-            raise ValueError("provider media id is required for evidence storage")
         if store is None:
             raise RuntimeError("evidence bucket is required for inbound media")
-        evidence_key = store.store(
-            tenant_id,
-            message.provider_msg_id,
-            item.id,
-            item.mime_type,
-        )
+        try:
+            if not item.id:
+                _reject_media(tenant_id)
+            evidence_key = store.store(
+                tenant_id,
+                message.provider_msg_id,
+                item.id,
+                item.mime_type,
+            )
+        except MediaRejected:
+            continue
         projected.append(
             {
                 "id": item.id[:MAX_MEDIA_FIELD],
@@ -221,6 +301,10 @@ class TaskCallbacks(Protocol):
     def send_task_success(self, *, taskToken: str, output: str) -> Any: ...
 
 
+class ExecutionStop(Protocol):
+    def stop_execution(self, *, executionArn: str, error: str, cause: str) -> Any: ...
+
+
 @dataclass(frozen=True)
 class InboundDependencies:
     dedupe: MessageDedupePort
@@ -228,6 +312,9 @@ class InboundDependencies:
     callbacks: TaskCallbacks
     registry: PhoneRegistry | None = None
     media_evidence: MediaEvidenceStore | None = None
+    incidents: IncidentStore | None = None
+    executions: ExecutionStop | None = None
+    state_machine_arn: str = ""
 
 
 _dependencies: InboundDependencies | None = None
@@ -249,12 +336,16 @@ def build_dependencies() -> InboundDependencies:
         )
     if _client is None:
         _client = boto3.client("dynamodb")
+    stepfunctions = boto3.client("stepfunctions")
     return InboundDependencies(
         dedupe=DynamoMessageDedupe(_client, ROUTING_TABLE_NAME),
         engagements=DynamoEngagementStore(_client, INCIDENT_TABLE_NAME, ROUTING_TABLE_NAME),
-        callbacks=boto3.client("stepfunctions"),
+        callbacks=stepfunctions,
         registry=DynamoPhoneRegistry(_client, ROUTING_TABLE_NAME, TENANT_TABLE_NAME),
         media_evidence=_evidence_store(),
+        incidents=DynamoIncidentStore(_client, INCIDENT_TABLE_NAME),
+        executions=stepfunctions,
+        state_machine_arn=os.environ.get("STATE_MACHINE_ARN", ""),
     )
 
 
@@ -277,7 +368,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str
             accepted = _dedupe_id(body)
             process_message(body, dependencies)
         except Exception:
-            logger.exception("Inbound record processing failed; requesting SQS retry")
+            log(
+                logger,
+                logging.ERROR,
+                "Inbound record processing failed; requesting SQS retry",
+                outcome="error",
+                count=1,
+            )
             # The id was accepted before the failure, so it is released only
             # then, and only so a retried record can finish the callback.
             if accepted is not None:
@@ -285,7 +382,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str
             if isinstance(message_id, str) and message_id:
                 failures.append({"itemIdentifier": message_id})
     # Record content is untrusted, so the batch is reported by count only.
-    logger.info("Processed inbound records=%d failures=%d", len(messages), len(failures))
+    log(
+        logger,
+        logging.INFO,
+        f"Processed inbound records={len(messages)} failures={len(failures)}",
+        outcome="received",
+        count=len(failures),
+    )
     return {"batchItemFailures": failures}
 
 
@@ -300,7 +403,13 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
         channel=message.channel,
         received_at=received,
     ).is_duplicate:
-        logger.info("Ignoring duplicate inbound id=%s", message.provider_msg_id)
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring duplicate inbound id={message.provider_msg_id}",
+            outcome="duplicate",
+            count=1,
+        )
         return "duplicate"
     if dependencies.registry is None:
         raise RuntimeError("provider inbound requires a sender registry")
@@ -312,27 +421,47 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
         registry=dependencies.registry,
     )
     if reply.kind == "opt_out":
-        logger.info("Handled provider opt-out; stopped=%d", len(reply.stopped_ids))
+        log(
+            logger,
+            logging.INFO,
+            f"Handled provider opt-out; stopped={len(reply.stopped_ids)}",
+            outcome="opt_out",
+            count=len(reply.stopped_ids),
+        )
         return "opt_out"
     engagement = reply.engagement
     if context_id is None:
         candidates = dependencies.engagements.for_address(message.channel, message.sender)
         if len(candidates) != 1:
-            logger.info(
-                "Ignoring unquoted reply with candidate_count=%d id=%s",
-                len(candidates),
-                message.provider_msg_id,
+            log(
+                logger,
+                logging.INFO,
+                "Ignoring unquoted reply without one waiting engagement",
+                outcome="ignored",
+                count=len(candidates),
             )
             return "ignored"
         engagement = candidates[0]
     if engagement is None:
-        logger.info("Ignoring unknown or late provider reply id=%s", message.provider_msg_id)
+        log(
+            logger,
+            logging.INFO,
+            "Ignoring unknown or late provider reply",
+            outcome="ignored",
+            count=1,
+        )
         return "ignored"
     resolution = dependencies.registry.resolve_sender(message.sender)
     if not _sender_owns_engagement(engagement, resolution):
-        logger.warning(
-            "Ignoring reply from a sender that does not own engagement=%s",
-            engagement.engagement_id,
+        log(
+            logger,
+            logging.WARNING,
+            "Ignoring reply from a sender that does not own the engagement",
+            tenant_id=engagement.tenant_id,
+            incident_id=engagement.incident_id,
+            engagement_id=engagement.engagement_id,
+            outcome="ignored",
+            count=1,
         )
         return "ignored"
     media = _persist_media(message, engagement.tenant_id, dependencies.media_evidence)
@@ -400,18 +529,52 @@ def _process_dashboard(body: dict[str, Any], dependencies: InboundDependencies) 
         received_at=_parse_received_at(timestamp),
         tenant_id=tenant_id,
     ).is_duplicate:
-        logger.info("Ignoring duplicate dashboard action id=%s", action_id)
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring duplicate dashboard action id={action_id}",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+            outcome="duplicate",
+            count=1,
+        )
         return "duplicate"
+    if body.get("action") == "cancel":
+        return _cancel(body, tenant_id, incident_id, engagement_id, action_id, dependencies)
     if not engagement_id:
-        logger.info("Ignoring dashboard action without engagement id=%s", action_id)
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring dashboard action without engagement id={action_id}",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+            outcome="ignored",
+            count=1,
+        )
         return "ignored"
     engagement = dependencies.engagements.get(tenant_id, incident_id, engagement_id)
     if engagement is None or engagement.status != "WAITING":
-        logger.info("Ignoring unknown or late dashboard action id=%s", action_id)
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring unknown or late dashboard action id={action_id}",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+            outcome="ignored",
+            count=1,
+        )
         return "ignored"
     action, option_id = body.get("action"), _nonblank(body.get("option_id"))
     if action not in DASHBOARD_ACTIONS or (action == "pick_option" and not option_id):
-        logger.warning("Ignoring invalid dashboard action id=%s", action_id)
+        log(
+            logger,
+            logging.WARNING,
+            f"Ignoring invalid dashboard action id={action_id}",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+            outcome="invalid",
+            count=1,
+        )
         return "invalid"
     payload: dict[str, Any] = {
         "channel": "dashboard",
@@ -425,12 +588,169 @@ def _process_dashboard(body: dict[str, Any], dependencies: InboundDependencies) 
     return "resumed"
 
 
+def _cancel(
+    body: dict[str, Any],
+    lookup_tenant: str,
+    lookup_incident: str,
+    engagement_id: str | None,
+    action_id: str,
+    dependencies: InboundDependencies,
+) -> str:
+    """Stop the ingest execution and cancel the stored incident.
+
+    The message tenant only selects the row. The engagement, when present,
+    and then the incident row supply the tenant that is cancelled. A body
+    execution ARN is ignored. This path does not resume a task token.
+    """
+
+    role = _nonblank(body.get("role"))
+    if role not in CANCEL_ROLES:
+        log(
+            logger,
+            logging.WARNING,
+            f"Ignoring cancel from an unauthorised role id={action_id}",
+            outcome="denied",
+            count=1,
+        )
+        return "ignored"
+    if dependencies.incidents is None or dependencies.executions is None:
+        raise RuntimeError("incident store and step functions are required to cancel")
+    tenant_id, incident_id = _cancel_target(
+        dependencies, lookup_tenant, lookup_incident, engagement_id
+    )
+    if tenant_id is None or incident_id is None:
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring cancel with no stored incident id={action_id}",
+            tenant_id=lookup_tenant,
+            incident_id=lookup_incident,
+            outcome="ignored",
+            count=1,
+        )
+        return "ignored"
+    try:
+        incident = dependencies.incidents.get(tenant_id, incident_id)
+    except IncidentNotFound:
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring cancel for a missing incident id={action_id}",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+            outcome="ignored",
+            count=1,
+        )
+        return "ignored"
+    if incident.tenant_id != tenant_id or incident.incident_id != incident_id:
+        return "ignored"
+    if incident.state in TERMINAL_STATES:
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring cancel for a terminal incident id={action_id}",
+            tenant_id=incident.tenant_id,
+            incident_id=incident.incident_id,
+            outcome="ignored",
+            count=1,
+        )
+        return "ignored"
+    _stop_execution(dependencies, incident.incident_id)
+    try:
+        dependencies.incidents.transition(
+            incident.tenant_id,
+            incident.incident_id,
+            from_state=incident.state,
+            to_state="CANCELLED",
+        )
+    except StaleIncidentUpdate:
+        latest = dependencies.incidents.get(incident.tenant_id, incident.incident_id)
+        if latest.state not in TERMINAL_STATES:
+            raise
+    log(
+        logger,
+        logging.INFO,
+        f"Cancelled incident id={action_id}",
+        tenant_id=incident.tenant_id,
+        incident_id=incident.incident_id,
+        outcome="cancelled",
+        count=1,
+    )
+    return "cancelled"
+
+
+def _cancel_target(
+    dependencies: InboundDependencies,
+    lookup_tenant: str,
+    lookup_incident: str,
+    engagement_id: str | None,
+) -> tuple[str | None, str | None]:
+    """Return the stored tenant and incident, ignoring a mismatched body."""
+
+    if not engagement_id:
+        return lookup_tenant, lookup_incident
+    engagement = dependencies.engagements.get(lookup_tenant, lookup_incident, engagement_id)
+    if engagement is None:
+        return None, None
+    if engagement.tenant_id != lookup_tenant or engagement.incident_id != lookup_incident:
+        return None, None
+    return engagement.tenant_id, engagement.incident_id
+
+
+def _stop_execution(dependencies: InboundDependencies, incident_id: str) -> None:
+    """Stop the execution, or accept that it is already gone.
+
+    A successful ``StopExecution`` covers an execution that is still running
+    and one the service accepts because it has already finished. The only
+    error treated the same way is ``ExecutionDoesNotExist``. Throttling,
+    access denied, and every other error propagate. The caller has not
+    changed the incident yet, and the SQS handler returns that record as a
+    partial-batch failure.
+    """
+
+    arn = _execution_arn(dependencies.state_machine_arn, incident_id)
+    executions = dependencies.executions
+    if executions is None:
+        raise RuntimeError("step functions are required to cancel")
+    try:
+        executions.stop_execution(executionArn=arn, error="Cancelled", cause="dashboard_cancel")
+    except ClientError as exc:
+        if not _is_finished_execution(exc):
+            raise
+
+
+def _execution_arn(state_machine_arn: str, incident_id: str) -> str:
+    """The execution ARN ingest would have started for this incident."""
+
+    from oerf.platform.ingest.handler import _execution_name
+
+    if _STATE_MACHINE not in state_machine_arn:
+        raise RuntimeError("STATE_MACHINE_ARN is required to cancel")
+    prefix, machine = state_machine_arn.split(_STATE_MACHINE, 1)
+    return f"{prefix}:execution:{machine}:{_execution_name(incident_id)}"
+
+
+def _is_finished_execution(exc: BaseException) -> bool:
+    code = None
+    if isinstance(exc, ClientError):
+        code = exc.response.get("Error", {}).get("Code")
+    return code in _FINISHED_EXECUTION
+
+
 def _resume(
     engagement: Engagement, payload: dict[str, Any], dependencies: InboundDependencies
 ) -> None:
     """Send a bounded allowlisted response, then consume the waiting engagement."""
     if engagement.status != "WAITING":
-        logger.info("Ignoring non-waiting engagement=%s", engagement.engagement_id)
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring non-waiting engagement={engagement.engagement_id}",
+            tenant_id=engagement.tenant_id,
+            incident_id=engagement.incident_id,
+            engagement_id=engagement.engagement_id,
+            outcome="ignored",
+        )
         return
     resumed = {**payload, "engagement": _engagement_block(engagement)}
     output = json.dumps(resumed, separators=(",", ":"), ensure_ascii=False)
@@ -443,7 +763,15 @@ def _resume(
             raise
         # The wait state timed out or was already resumed, so the rung closes
         # without a second callback and a later reply correlates to nothing.
-        logger.info("Ignoring expired task token engagement=%s", engagement.engagement_id)
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring expired task token engagement={engagement.engagement_id}",
+            tenant_id=engagement.tenant_id,
+            incident_id=engagement.incident_id,
+            engagement_id=engagement.engagement_id,
+            outcome="ignored",
+        )
     dependencies.engagements.answer(
         engagement.tenant_id, engagement.incident_id, engagement.engagement_id
     )
@@ -512,7 +840,13 @@ def _release(dedupe: MessageDedupePort, message_id: str) -> None:
     try:
         dedupe.forget(message_id)
     except Exception:
-        logger.warning("Could not release dedupe id=%s for retry", message_id)
+        log(
+            logger,
+            logging.WARNING,
+            f"Could not release dedupe id={message_id} for retry",
+            outcome="error",
+            count=1,
+        )
 
 
 def _nonblank(value: Any) -> str | None:

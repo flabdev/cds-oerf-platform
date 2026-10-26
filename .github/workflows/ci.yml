@@ -3,8 +3,12 @@ name: CI
 # Pull-request and main-branch checks for this repo. A failing job blocks the change.
 #
 # Python installs the package with the dev extra, then runs ruff, pytest with the aws
-# marker excluded, and two CDK synths: the default stacks, then dashboard:enabled=true.
-# Synth uses account 000000000000 and --lookups false, so it makes no AWS API calls.
+# marker excluded, pytest -m security as its own step, and four CDK synths: the default
+# stacks, dashboard:enabled=true,
+# whatsapp:wabaId, and agentcore:enabled=true. Every synth passes
+# -c account=000000000000 so ambient credentials cannot replace the placeholder.
+# --lookups false makes no AWS API calls. The AgentCore synth stages the image
+# asset only. The image is built on deploy, not here.
 # Web runs npm ci and node --test in web/.
 #
 # The job token can read the repo and nothing else. It does not request OIDC or AWS
@@ -54,15 +58,27 @@ jobs:
       - name: Pytest
         run: pytest -q -m "not aws"
 
+      - name: Security tests
+        run: pytest -q -m security
+
       # aws-cdk-lib is the library. The cdk command is the CLI, same install as deploy.yml.
       - name: Install CDK CLI
         run: npm install -g aws-cdk@2.1145.0
 
       - name: CDK synth
-        run: cdk synth --lookups false --quiet
+        run: cdk synth --lookups false --quiet -c account=000000000000
 
       - name: CDK synth with dashboard
-        run: cdk synth --lookups false --quiet -c dashboard:enabled=true
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c dashboard:enabled=true
+
+      - name: CDK synth with WhatsApp WABA id
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c whatsapp:wabaId=waba-0000000000000000
+
+      # DockerImageAsset fingerprints the context into cdk.out. cdk synth does
+      # not publish assets, so this step does not run docker build. deploy.yml
+      # builds the linux/arm64 image when the agentcore input is true.
+      - name: CDK synth with AgentCore
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c agentcore:enabled=true
 
   web:
     name: Web

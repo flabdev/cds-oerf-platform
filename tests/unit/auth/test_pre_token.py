@@ -1,7 +1,11 @@
 """Pre-token trigger copies custom:tenant_id onto both Cognito tokens."""
 
+import pytest
+
 from oerf.platform.api.claims import TENANT_CLAIM as CLAIMS_TENANT
 from oerf.platform.auth.pre_token import TENANT_CLAIM, apply_tenant_claim, handler
+
+pytestmark = pytest.mark.security
 
 
 def test_claim_name_matches_the_authorizer_contract() -> None:

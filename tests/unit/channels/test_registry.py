@@ -26,6 +26,7 @@ def test_shared_number_returns_every_tenant_match(registry) -> None:
     }
 
 
+@pytest.mark.security
 def test_a_tenant_number_does_not_include_another_tenant(registry) -> None:
     registry.register_contact("t1", "C-T1-DRV", "driver", "+910000000101")
     registry.register_contact("t2", "C-T2-OPS", "ops_manager", "+910000000201")

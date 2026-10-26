@@ -1,5 +1,6 @@
 """DynamoDB incident and lock adapters, exercised with a fake client."""
 
+import hashlib
 import threading
 from datetime import UTC, datetime
 
@@ -103,53 +104,56 @@ def test_concurrent_creates_open_one_incident() -> None:
 def test_record_reading_writes_an_idempotent_read_row_for_open_incident() -> None:
     client = FakeDynamoClient()
     store = DynamoIncidentStore(client, "incident", clock=_clock)
+    memory = IncidentRepository(clock=_clock)
     incident = store.create(tenant_id="t1", shipment_id="PH-2841", reason="TEMPERATURE_ABOVE_MAX")
+    remembered = memory.create(
+        tenant_id="t1",
+        shipment_id="PH-2841",
+        reason="TEMPERATURE_ABOVE_MAX",
+    )
+    stamp = "2026-10-20T10:16:00Z"
+    expires_at = int(datetime(2026, 10, 20, 10, 16, tzinfo=UTC).timestamp()) + 90 * 24 * 60 * 60
+    suffix = hashlib.sha256(b"event-1").hexdigest()
+    sk = f"READ#{stamp}#000000000007#{suffix}"
 
-    assert store.record_reading(
-        "t1",
-        "PH-2841",
-        event_id="event-1",
-        timestamp="2026-10-20T10:16:00+00:00",
-        temperature_c=8.4,
-        device_id="RF-1",
-        sequence=7,
-        latitude=17.4,
-        longitude=78.3,
-    ) is True
-    assert store.record_reading(
-        "t1",
-        "PH-2841",
-        event_id="event-1",
-        timestamp="2026-10-20T10:16:00+00:00",
-        temperature_c=8.4,
-        device_id="RF-1",
-        sequence=7,
-        latitude=17.4,
-        longitude=78.3,
-    ) is False
+    assert store.record_reading("t1", "PH-2841", **_reading()) is True
+    assert store.record_reading("t1", "PH-2841", **_reading()) is False
+    assert memory.record_reading("t1", "PH-2841", **_reading()) is True
+    assert memory.record_reading("t1", "PH-2841", **_reading()) is False
+
     rows = client.query(
         TableName="incident",
         KeyConditionExpression="pk = :pk AND begins_with(sk, :prefix)",
         ExpressionAttributeValues={":pk": {"S": incident.pk}, ":prefix": {"S": "READ#"}},
     )["Items"]
     assert len(rows) == 1
-    assert rows[0]["ts"]["S"] == "2026-10-20T10:16:00+00:00"
+    assert set(rows[0]) == {"pk", "sk", "tenant_id", "ts", "temperature_c", "expires_at"}
+    assert rows[0]["pk"]["S"] == incident.pk
+    assert rows[0]["sk"]["S"] == sk
+    assert rows[0]["tenant_id"]["S"] == "t1"
+    assert rows[0]["ts"]["S"] == stamp
     assert rows[0]["temperature_c"]["N"] == "8.4"
-    assert rows[0]["device_id"]["S"] == "RF-1"
+    assert rows[0]["expires_at"]["N"] == str(expires_at)
+    remembered_rows = memory.readings("t1", remembered.incident_id)
+    assert remembered_rows == [
+        {
+            "pk": remembered.pk,
+            "sk": sk,
+            "tenant_id": "t1",
+            "ts": stamp,
+            "temperature_c": 8.4,
+            "expires_at": expires_at,
+        }
+    ]
+    assert remembered_rows[0]["sk"] == rows[0]["sk"]["S"]
 
 
 def test_readings_without_an_open_incident_are_not_persisted() -> None:
     store = DynamoIncidentStore(FakeDynamoClient(), "incident", clock=_clock)
+    memory = IncidentRepository(clock=_clock)
 
-    assert store.record_reading(
-        "t1",
-        "PH-2841",
-        event_id="event-1",
-        timestamp="2026-10-20T10:16:00Z",
-        temperature_c=8.4,
-        device_id="RF-1",
-        sequence=7,
-    ) is False
+    assert store.record_reading("t1", "PH-2841", **_reading()) is False
+    assert memory.record_reading("t1", "PH-2841", **_reading()) is False
 
 
 def test_transition_appends_the_next_sequence() -> None:
@@ -225,6 +229,15 @@ def test_cancel_removes_the_lock_in_the_same_transaction() -> None:
     assert store.get("t1", incident.incident_id).state == "CANCELLED"
     assert store.lock.get_lock("t1", "PH-2841") is None
     assert client.transactions[-1] == ["Update", "Put", "Delete"]
+
+
+def _reading() -> dict[str, object]:
+    return {
+        "event_id": "event-1",
+        "timestamp": "2026-10-20T10:16:00+00:00",
+        "temperature_c": 8.4,
+        "sequence": 7,
+    }
 
 
 def _clock() -> datetime:

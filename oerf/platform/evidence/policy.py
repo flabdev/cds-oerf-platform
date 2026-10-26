@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from oerf.platform.observability.logging import get_logger, log
 from oerf.platform.tenancy.config_resolver import (
     ConfigError,
     ResolvedConfig,
@@ -27,7 +28,7 @@ from oerf.platform.tenancy.config_resolver import (
 from oerf.platform.tenancy.context import TenantContext
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 #: The domain the cold-chain MVP configures evidence for.
@@ -161,16 +162,30 @@ def _codes(tenant: FaultCodeReader | None, tenant_id: str) -> set[str]:
         return set()
     try:
         return {code.strip().upper() for code in tenant.fault_codes(tenant_id) if code.strip()}
-    except Exception as exc:  # noqa: BLE001 - a read failure degrades, it never fails the call
-        logger.warning("tenant %s fault-code catalog unreadable: %s", tenant_id, exc)
+    except Exception:  # noqa: BLE001 - a read failure degrades, it never fails the call
+        log(
+            logger,
+            logging.WARNING,
+            f"tenant {tenant_id} fault-code catalog unreadable",
+            tenant_id=tenant_id,
+            outcome="error",
+            count=1,
+        )
         return set()
 
 
 def _config(config: ConfigReader | None, tenant_id: str) -> ResolvedConfig | None:
     try:
         return get_config(tenant_id, DOMAIN, repository=config)
-    except ConfigError as exc:
-        logger.info("tenant %s evidence config unavailable: %s", tenant_id, exc)
+    except ConfigError:
+        log(
+            logger,
+            logging.INFO,
+            f"tenant {tenant_id} evidence config unavailable",
+            tenant_id=tenant_id,
+            outcome="unavailable",
+            count=1,
+        )
         return None
 
 
