@@ -7,7 +7,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__ENGAGEMENT_STUB_ARN__",
+        "FunctionName": "__ENGAGE_CADENCE_ARN__",
         "Payload": {"step_name": "EngagementComputeNextRung", "workflow.$": "$"}
       },
       "OutputPath": "$.Payload",
@@ -49,7 +49,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
       "Parameters": {
-        "FunctionName": "__ENGAGEMENT_STUB_ARN__",
+        "FunctionName": "__CHANNEL_ROUTER_ARN__",
         "Payload": {
           "step_name": "EngagementSendViaRouter",
           "task_token.$": "$$.Task.Token",
@@ -58,7 +58,6 @@
       },
       "ResultPath": "$.reply",
       "TimeoutSecondsPath": "$.cadence.timeout_seconds",
-      "HeartbeatSeconds": 300,
       "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2}],
       "Catch": [
         {"ErrorEquals": ["States.Timeout"], "ResultPath": "$.rung_timeout", "Next": "AdvanceRung"},
@@ -70,7 +69,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__ENGAGEMENT_STUB_ARN__",
+        "FunctionName": "__ENGAGE_INTERPRET_ARN__",
         "Payload": {"step_name": "EngagementInterpret", "workflow.$": "$"}
       },
       "OutputPath": "$.Payload",
@@ -106,7 +105,7 @@
     "AdvanceRung": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {"FunctionName": "__ENGAGEMENT_STUB_ARN__", "Payload": {"step_name": "EngagementAdvanceRung", "workflow.$": "$"}},
+      "Parameters": {"FunctionName": "__ENGAGE_CADENCE_ARN__", "Payload": {"step_name": "EngagementAdvanceRung", "workflow.$": "$"}},
       "OutputPath": "$.Payload",
       "TimeoutSeconds": 30,
       "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}],

@@ -15,7 +15,13 @@ class FakeProvider:
         self.calls: list[tuple[str, str, str]] = []
         self._count = 0
 
-    def send(self, recipient: str, body: str, template_id: str) -> ProviderResult:
+    def send(
+        self,
+        recipient: str,
+        body: str,
+        template_id: str,
+        parameters: tuple[str, ...] = (),
+    ) -> ProviderResult:
         self.calls.append((recipient, body, template_id))
         self._count += 1
         if self.simulated:

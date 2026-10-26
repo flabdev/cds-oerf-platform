@@ -131,6 +131,8 @@ class OerfComputeStack(Stack):
             timeout=Duration.seconds(30),
             environment={
                 "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
+                "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
+                "TENANT_TABLE_NAME": data_stack.tenant_table.table_name,
                 "USE_MOCK_WHATSAPP": channel_mock,
                 "USE_MOCK_SMS": channel_mock,
                 "WHATSAPP_PHONE_NUMBER_ID": whatsapp_phone_number_id,
@@ -140,6 +142,27 @@ class OerfComputeStack(Stack):
             },
         )
         data_stack.routing_table.grant_read_write_data(self.channel_router_fn)
+        incident_arn = data_stack.incident_table.table_arn
+        tenant_arn = data_stack.tenant_table.table_arn
+        # ENG# lives on the incident table. CONTACTENG# is written in the same
+        # transaction as the engagement row. The transaction is authorised by
+        # the item-level actions.
+        self.channel_router_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                ],
+                resources=[incident_arn],
+            )
+        )
+        self.channel_router_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["dynamodb:GetItem"],
+                resources=[tenant_arn],
+            )
+        )
         if ses_source_email:
             # SESv2 SendEmail authorizes as ses:SendEmail on the identity ARN.
             self.channel_router_fn.add_to_role_policy(
@@ -189,7 +212,11 @@ class OerfComputeStack(Stack):
                     (
                         f"arn:aws:ssm:{self.region}:{self.account}:parameter"
                         "/oerf/whatsapp/phone-number-id"
-                    )
+                    ),
+                    (
+                        f"arn:aws:ssm:{self.region}:{self.account}:parameter"
+                        "/oerf/demo-numbers/*"
+                    ),
                 ],
             )
         )
@@ -641,6 +668,7 @@ class OerfComputeStack(Stack):
         # 9. AgentCore runtime (OERF-312). Off unless agentcore:enabled.
         # ---------------------------------------------------------
         # The image build needs Docker, so CI synth leaves this out.
+        self.agent_runtime_arn = None
         if _context_enabled(self, "agentcore:enabled", default=False):
             agent = AgentCoreRuntime(
                 self,
@@ -652,6 +680,7 @@ class OerfComputeStack(Stack):
                 guardrail_version=self.guardrail.guardrail_version,
                 model_id=bedrock_model_id,
             )
+            self.agent_runtime_arn = agent.agent_runtime_arn
             # Export names cannot contain underscores. The env name stays
             # AGENT_RUNTIME_ARN; this export is the cross-stack form.
             CfnOutput(
@@ -674,6 +703,7 @@ class OerfComputeStack(Stack):
         CfnOutput(self, "HttpApiUrl", value=self.http_api.url or "")
         CfnOutput(self, "CognitoAppClientId", value=user_pool_client.user_pool_client_id)
         CfnOutput(self, "ChannelRouterArn", value=self.channel_router_fn.function_arn)
+        CfnOutput(self, "InboundQueueUrl", value=self.inbound_queue.queue_url)
         CfnOutput(self, "EvidenceAnalyzerArn", value=self.evidence_analyzer_fn.function_arn)
         CfnOutput(self, "ReportGeneratorArn", value=self.report_generator_fn.function_arn)
         pin_source_account(self)
@@ -726,9 +756,11 @@ class OerfComputeStack(Stack):
                 self._grant_step_data(
                     function,
                     data_stack,
-                    update=phase != "qa",
+                    update=phase not in {"qa", "diagnose"},
                     delete=phase == "close",
+                    query_tenant=phase == "diagnose",
                 )
+        self._engage_functions(data_stack, code)
 
     def _grant_step_data(
         self,
@@ -738,6 +770,7 @@ class OerfComputeStack(Stack):
         update: bool,
         delete: bool,
         tenant: bool = True,
+        query_tenant: bool = False,
     ) -> None:
         """The actions ``run_step`` actually calls. No table-wide grant helper."""
 
@@ -758,6 +791,53 @@ class OerfComputeStack(Stack):
         if delete:
             function.add_to_role_policy(
                 iam.PolicyStatement(actions=["dynamodb:DeleteItem"], resources=[incident])
+            )
+        if query_tenant:
+            function.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=["dynamodb:Query"],
+                    resources=[data_stack.tenant_table.table_arn],
+                )
+            )
+
+    def _engage_functions(self, data_stack: OerfDataStack, code: lambda_.Code) -> None:
+        """Cadence and interpret. Neither role can send or resume a token.
+
+        ``SendViaRouter`` invokes ``oerf-channel-router`` from the state machine.
+        """
+
+        del data_stack
+        self._function(
+            "CadenceFunction",
+            function_name="oerf-engage-cadence",
+            handler="oerf.platform.cadence.engage.handler",
+            code=code,
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            environment={"LOG_LEVEL": "INFO"},
+        )
+        environment = {"LOG_LEVEL": "INFO", "AGENTCORE_ENABLED": "false"}
+        if self.agent_runtime_arn is not None:
+            environment = {
+                "LOG_LEVEL": "INFO",
+                "AGENTCORE_ENABLED": "true",
+                "AGENT_RUNTIME_ARN": self.agent_runtime_arn,
+            }
+        interpret = self._function(
+            "InterpretFunction",
+            function_name="oerf-engage-interpret",
+            handler="oerf.platform.cadence.interpret.handler",
+            code=code,
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            environment=environment,
+        )
+        if self.agent_runtime_arn is not None:
+            interpret.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=["bedrock-agentcore:InvokeAgentRuntime"],
+                    resources=[self.agent_runtime_arn],
+                )
             )
 
     def _function(

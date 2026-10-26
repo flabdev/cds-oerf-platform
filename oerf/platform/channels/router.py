@@ -23,7 +23,12 @@ from oerf.platform.channels.engagement import EngagementStore
 from oerf.platform.channels.phone_id import _whatsapp_phone_number_id as _resolve_phone_number_id
 from oerf.platform.channels.providers.base import MessageProvider
 from oerf.platform.channels.registry import PhoneRegistry
-from oerf.platform.channels.templates import MissingFacts, MissingTemplate, render_message
+from oerf.platform.channels.templates import (
+    MissingFacts,
+    MissingTemplate,
+    parameter_values,
+    render_message,
+)
 from oerf.platform.observability.logging import get_logger, log
 from oerf.platform.sandbox.join import SANDBOX_TENANT, SandboxGate
 
@@ -140,8 +145,18 @@ def record_outbound_message(
     table.put_item(Item=item)
 
 
-def send_whatsapp(recipient: str, message: str) -> dict[str, Any]:
-    """Send WhatsApp via AWS End User Messaging Social, simulating if configured."""
+def send_whatsapp(
+    recipient: str,
+    message: str,
+    template_id: str | None = None,
+    parameters: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Send WhatsApp via AWS End User Messaging Social, simulating if configured.
+
+    A mocked send returns a synthetic id and does not call the API. A live
+    send with a template id uses ``oerf_<logical_name>`` and the parameters in
+    template order. Session text remains for callers that have no template.
+    """
     msg_id = f"wa-{uuid.uuid4().hex[:12]}"
     if USE_MOCK_WHATSAPP:
         log(logger, logging.INFO, "send_simulated", channel="WHATSAPP", outcome="simulated")
@@ -171,13 +186,7 @@ def send_whatsapp(recipient: str, message: str) -> dict[str, Any]:
     # Live integration via AWS End User Messaging (Social Messaging)
     try:
         eum = boto3.client("socialmessaging")
-        payload = {
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": recipient,
-            "type": "text",
-            "text": {"preview_url": False, "body": message},
-        }
+        payload = _whatsapp_payload(recipient, message, template_id, parameters)
         resp = eum.send_whatsapp_message(
             originationPhoneNumberId=phone_number_id,
             metaApiVersion="v20.0",
@@ -193,6 +202,40 @@ def send_whatsapp(recipient: str, message: str) -> dict[str, Any]:
     except Exception as exc:
         log(logger, logging.ERROR, "send_failed", channel="WHATSAPP", outcome="error")
         return {"success": False, "error": str(exc), "channel": "WHATSAPP"}
+
+
+def _whatsapp_payload(
+    recipient: str,
+    message: str,
+    template_id: str | None,
+    parameters: tuple[str, ...],
+) -> dict[str, Any]:
+    """A Utility template when the rung names one, otherwise session text."""
+
+    if not template_id:
+        return {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": recipient,
+            "type": "text",
+            "text": {"preview_url": False, "body": message},
+        }
+    name = template_id if template_id.startswith("oerf_") else f"oerf_{template_id}"
+    template: dict[str, Any] = {"name": name, "language": {"code": "en"}}
+    if parameters:
+        template["components"] = [
+            {
+                "type": "body",
+                "parameters": [{"type": "text", "text": str(value)} for value in parameters],
+            }
+        ]
+    return {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": recipient,
+        "type": "template",
+        "template": template,
+    }
 
 
 def send_sms(recipient: str, message: str) -> dict[str, Any]:
@@ -253,13 +296,16 @@ def send_email(recipient: str, subject: str, body: str) -> dict[str, Any]:
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Lambda entry point for channel router.
+
+    An engagement rung stores its task token on ``ENG#`` and sends through
+    ``send_rung``. The legacy payload below does not.
     
     Expected event payload:
     {
         "tenant_id": "T1",
         "incident_id": "INC-001",
         "recipient_role": "driver",
-        "recipient_phone": "+1234567890",
+        "recipient_phone": "+910000000101",
         "recipient_email": "driver@example.com",
         "message": "Cold-chain alert: temperature exceeded limit.",
         "subject": "OERF Alert: Excursion Detected",
@@ -267,6 +313,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         "channel_priority": ["WHATSAPP", "SMS", "EMAIL"]
     }
     """
+    if event.get("step_name") == "EngagementSendViaRouter":
+        from oerf.platform.channels.engagement_send import send_engagement
+
+        return send_engagement(event)
     tenant_id = _required_text(event.get("tenant_id"))
     incident_id = event.get("incident_id", "unknown")
     if tenant_id is None:
@@ -438,7 +488,12 @@ def route_outbound(
         if not recipient:
             attempts.append(_attempt(request, channel, delivered=False, reason="no_recipient"))
             continue
-        sent = provider.send(recipient, body, request.template_id)
+        parameters = (
+            tuple(parameter_values(messages, request.template_id, channel, request.facts))
+            if channel == "whatsapp"
+            else ()
+        )
+        sent = provider.send(recipient, body, request.template_id, parameters=parameters)
         attempts.append(
             _attempt(
                 request,
@@ -449,11 +504,20 @@ def route_outbound(
             )
         )
         if sent.simulated:
+            if sent.provider_msg_id:
+                engagement = engagements.get(
+                    request.tenant_id, request.incident_id, request.engagement_id
+                )
+                if engagement is None:
+                    raise ValueError(f"engagement {request.engagement_id!r} is not open")
+                engagements.register_outbound(sent.provider_msg_id, engagement)
+                engagements.register_address(channel, recipient, engagement)
             return _result(
                 request,
                 attempts,
                 delivered=False,
                 channel=channel,
+                provider_msg_id=sent.provider_msg_id,
                 reason="simulated",
                 simulated=True,
             )

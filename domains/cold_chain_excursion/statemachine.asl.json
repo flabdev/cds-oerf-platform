@@ -79,7 +79,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_DIAGNOSE_ARN__",
         "Payload": {
           "step_name": "Diagnose",
           "workflow.$": "$"
@@ -155,14 +155,14 @@
         "Input": {
           "tenant_id.$": "$.tenant_id",
           "incident_id.$": "$.incident_id",
-          "engagement_id.$": "$.diagnosis.engagement_id",
+          "engagement_id.$": "$.workflow.diagnosis.engagement_id",
           "role": "driver",
           "ask": "diagnose",
-          "policy_id.$": "$.diagnosis.policy_id",
+          "policy_id.$": "$.workflow.diagnosis.policy_id",
           "facts.$": "$.context"
         }
       },
-      "ResultPath": "$.diagnosis.engagement_result",
+      "ResultPath": "$.workflow.diagnosis.engagement_result",
       "TimeoutSeconds": 86400,
       "Catch": [
         {
