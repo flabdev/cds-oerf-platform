@@ -13,7 +13,15 @@ from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk.assertions import Template
 
 from infra.stacks.data_stack import OerfDataStack
-from infra.step_functions import STEP_FUNCTION_NAMES, WIRED_STATES, function_arn
+from infra.step_functions import (
+    ASL_ENGAGE_PLACEHOLDERS,
+    ASL_STEP_PLACEHOLDERS,
+    CHANNEL_ROUTER_NAME,
+    ENGAGE_FUNCTION_NAMES,
+    STEP_FUNCTION_NAMES,
+    WIRED_STATES,
+    function_arn,
+)
 
 ACCOUNT = "123456789012"
 REGION = "us-east-1"
@@ -225,6 +233,186 @@ def test_cold_chain_role_invokes_only_the_wired_steps_and_the_stub(template: Tem
     assert "oerf-channel-router" in engagement
     assert "*" not in engagement or '":*"' in engagement
     assert '"*"' not in engagement
+
+
+_ASL_DIR = Path(__file__).resolve().parents[2] / "domains" / "cold_chain_excursion"
+_SYNC_RESOURCES = {
+    "arn:aws:states:::states:startExecution.sync",
+    "arn:aws:states:::states:startExecution.sync:2",
+}
+_LAMBDA_WAIT = "arn:aws:states:::lambda:invoke.waitForTaskToken"
+_MANAGED_RULE = "rule/StepFunctionsGetEventsForStepFunctionsExecutionRule"
+_ASL_TO_MACHINE = (
+    ("statemachine.asl.json", "cold_chain_excursion_v1"),
+    ("engage_party.asl.json", "engage_party_v1"),
+)
+
+
+def _function_marker(token: str) -> str:
+    if token in {"__STUB_ARN__", "__ENGAGEMENT_STUB_ARN__"}:
+        return "ColdChainWorkflowStub"
+    if token == "__CHANNEL_ROUTER_ARN__":
+        return f"function:{CHANNEL_ROUTER_NAME}"
+    if token in ASL_STEP_PLACEHOLDERS:
+        return f"function:{STEP_FUNCTION_NAMES[ASL_STEP_PLACEHOLDERS[token]]}"
+    if token in ASL_ENGAGE_PLACEHOLDERS:
+        return f"function:{ENGAGE_FUNCTION_NAMES[ASL_ENGAGE_PLACEHOLDERS[token]]}"
+    if token.startswith("arn:aws:lambda:"):
+        return token
+    raise AssertionError(f"unknown Lambda token {token}")
+
+
+def _state_machine_name(token: str) -> str:
+    if token == "__ENGAGE_PARTY_ARN__":
+        return "oerf-engage-party"
+    marker = ":stateMachine:"
+    if marker in token:
+        return token.rsplit(marker, 1)[1]
+    raise AssertionError(f"unknown state machine token {token}")
+
+
+def _required_grants(state: dict) -> list[tuple[str, str]] | None:
+    """Actions this integration needs on the state machine role.
+
+    ``None`` means the resource is not a .sync or .waitForTaskToken task.
+    An unknown integration raises so a new service cannot pass uncoded.
+    """
+
+    resource = state.get("Resource", "")
+    if resource in _SYNC_RESOURCES:
+        # https://docs.aws.amazon.com/step-functions/latest/dg/connect-stepfunctions.html
+        name = _state_machine_name(state["Parameters"]["StateMachineArn"])
+        return [
+            ("states:StartExecution", f"stateMachine:{name}"),
+            ("states:DescribeExecution", f":execution:{name}:"),
+            ("states:StopExecution", f":execution:{name}:"),
+            ("events:PutTargets", _MANAGED_RULE),
+            ("events:PutRule", _MANAGED_RULE),
+            ("events:DescribeRule", _MANAGED_RULE),
+        ]
+    if resource == _LAMBDA_WAIT:
+        # https://docs.aws.amazon.com/step-functions/latest/dg/connect-lambda.html
+        # Callback invoke needs lambda:InvokeFunction. SendTask* is the caller's.
+        marker = _function_marker(state["Parameters"]["FunctionName"])
+        return [("lambda:InvokeFunction", marker)]
+    if (
+        resource.endswith(".sync:2")
+        or resource.endswith(".sync")
+        or resource.endswith(".waitForTaskToken")
+    ):
+        raise AssertionError(f"no permission set encoded for {resource}")
+    return None
+
+
+def _iter_tasks(machine: dict):
+    for name, state in machine.get("States", {}).items():
+        if not isinstance(state, dict):
+            continue
+        if state.get("Type") == "Task":
+            yield name, state
+        branches = state.get("Branches")
+        if isinstance(branches, list):
+            for branch in branches:
+                if isinstance(branch, dict):
+                    yield from _iter_tasks(branch)
+        for field in ("ItemProcessor", "Iterator"):
+            nested = state.get(field)
+            if isinstance(nested, dict) and "States" in nested:
+                yield from _iter_tasks(nested)
+
+
+def _role_logical_id(machine: dict) -> str:
+    role = machine["Properties"]["RoleArn"]
+    attribute = role["Fn::GetAtt"]
+    if isinstance(attribute, str):
+        return attribute.split(".", 1)[0]
+    return attribute[0]
+
+
+def _resource_labels(logical: str, resources: dict) -> list[str]:
+    labels = [logical]
+    props = resources[logical]["Properties"]
+    if "StateMachineName" in props:
+        labels.append(f"stateMachine:{props['StateMachineName']}")
+    function_name = props.get("FunctionName")
+    if isinstance(function_name, str):
+        labels.append(f"function:{function_name}")
+    return labels
+
+
+def _flatten_resource(value: object, resources: dict) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        found: list[str] = []
+        for item in value:
+            found.extend(_flatten_resource(item, resources))
+        return found
+    if not isinstance(value, dict):
+        return [json.dumps(value)]
+    if "Ref" in value and value["Ref"] in resources:
+        return _resource_labels(value["Ref"], resources)
+    if "Fn::GetAtt" in value:
+        attribute = value["Fn::GetAtt"]
+        logical = attribute.split(".", 1)[0] if isinstance(attribute, str) else attribute[0]
+        return _resource_labels(logical, resources)
+    if "Fn::Join" in value:
+        separator, parts = value["Fn::Join"]
+        rendered: list[str] = []
+        for part in parts:
+            if isinstance(part, str):
+                rendered.append(part)
+            elif isinstance(part, dict) and "Ref" in part:
+                rendered.append(
+                    {"AWS::Region": REGION, "AWS::AccountId": ACCOUNT}.get(part["Ref"], "")
+                )
+            else:
+                rendered.append("".join(_flatten_resource(part, resources)))
+        return [separator.join(rendered)]
+    return [json.dumps(value)]
+
+
+def _grant_covers(statements: list[dict], action: str, marker: str, resources: dict) -> bool:
+    for statement in statements:
+        if statement.get("Effect", "Allow") == "Deny":
+            continue
+        names = _as_list(statement.get("Action", []))
+        if action not in names:
+            continue
+        for resource in _flatten_resource(statement.get("Resource"), resources):
+            if marker in resource:
+                return True
+    return False
+
+
+@pytest.mark.security
+def test_sync_and_task_token_tasks_have_integration_permissions(template: Template) -> None:
+    """Each .sync and .waitForTaskToken task is granted what that integration needs."""
+
+    resources = template.to_json()["Resources"]
+    machines = template.find_resources("AWS::StepFunctions::StateMachine")
+    missing: list[str] = []
+    seen = 0
+    for filename, comment in _ASL_TO_MACHINE:
+        definition = json.loads((_ASL_DIR / filename).read_text(encoding="utf-8"))
+        matches = [
+            machine
+            for machine in machines.values()
+            if comment in json.dumps(machine["Properties"].get("DefinitionString", ""))
+        ]
+        assert len(matches) == 1, comment
+        statements = _statements_for_role(template, _role_logical_id(matches[0]))
+        for name, state in _iter_tasks(definition):
+            required = _required_grants(state)
+            if required is None:
+                continue
+            seen += 1
+            resource = state["Resource"]
+            for action, marker in required:
+                if not _grant_covers(statements, action, marker, resources):
+                    missing.append(f"{filename} {name} ({resource}) missing {action} on {marker}")
+    assert seen > 0
+    assert not missing, "\n".join(missing)
 
 
 def test_cold_chain_workflow_tasks_retry_and_catch_failures(
