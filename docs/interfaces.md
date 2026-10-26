@@ -1,9 +1,20 @@
 # OERF interface contract
 
-**FROZEN v1.11** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.22** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.22 (2026-10-25) The HTTP API action route is retired. Section 3.2 places frozen `POST /incidents/{id}/actions` on the OerfApiStack REST API. Section 7.1 lists `GET /incidents` and `GET /incidents/{id}` on `oerf-http-api`. `INBOUND_QUEUE_URL` is set only on the REST dashboard action function. Section 9 resolves the account as context `account`, then `CDK_DEFAULT_ACCOUNT`, then the placeholder `000000000000`, and the region as `CDK_DEFAULT_REGION`, then context `region`, then `us-east-1`.
+- v1.21 (2026-10-25) Dashboard `POST /incidents/{id}/actions` is served by the OerfApiStack REST API (`oerf.platform.api.dashboard.handler`). `oerf-http-api` does not expose that route. `oerf-action-handler` reads `GET /incidents` and `GET /incidents/{id}` and does not send to the inbound queue. Its role has no `sqs:SendMessage` on that queue. `INBOUND_QUEUE_URL` is set on the REST dashboard action function.
+- v1.20 (2026-10-24) One `READ#` writer: ingest calls `IncidentStore.record_reading` while the shipment lock is present and the incident is not terminal. `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}#{sha256}` where `ts` is `YYYY-MM-DDTHH:MM:SSZ`, `seq` is twelve digits, and `sha256` is the hex SHA-256 of `event_id`. Stored attributes are `pk`, `sk`, `tenant_id`, `ts`, `temperature_c`, and `expires_at`. `expires_at` is the reading `ts` in epoch seconds plus 90 days. Incident-table TTL deletes on `expires_at`. `device_id`, `latitude`, `longitude`, `shipment_id`, and `event_id` are not stored. A conditional put leaves an existing key unchanged. The broadcaster stream filter stays `SK=META`. `EVT#` and `READ#` are not delivered. A record whose `tenant_id` contradicts `TENANT#{tid}#INC#{iid}` is dropped.
+- v1.19 (2026-10-23) Ingest writes one temperature row while the shipment lock is present: `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}` with `seq` six digits, attributes `ts` and `temperature_c` only, `expires_at` 90 days from the reading. A conditional put leaves an existing key unchanged. The report temperature section reads those rows. The broadcaster stream filter stays on `SK=META`, so `READ#` is not delivered.
+- v1.18 (2026-10-23) Combined with origin/main (PR #30). `DemoDeviceSeed` is created only when context `demo:seedDevices` is true; a normal deploy does not write seed rows. `DeviceSeedFunctionRole` and its X-Ray `Resource: *` exist only in that synth (`docs/security/iam-exceptions.md`). The report generator writes an S3 key only when it is absent (`IfNoneMatch`), pages through every list result, fills the temperature section from `READ#`, and the state timeline from `EVT#`. A missing tenant, a missing incident, or a META `tenant_id` that does not match the event still fails closed. The broadcaster envelope stays the v1.16 shape. The desk rejects another tenant, another incident, and a private field; this broadcaster does not send `shipment_id`, `config_version`, `latest_reading`, `from_state`, `to_state`, or `timeline`.
+- v1.17 (2026-10-23) WhatsApp media is stored by End User Messaging `GetWhatsAppMessageMedia`. The handler checks `mimeType` and `fileSize` with `metadataOnly`, then signs a presigned PUT (`headers` empty, no SSE header, 300 seconds) for `tenants/{tenant_id}/inbound/{sha256}/{uuid}{ext}`. The bucket default SSE-KMS `aws/s3` applies. Allowed types are `image/jpeg`, `image/png`, `image/webp`, and `application/pdf`. The size cap is `INBOUND_MEDIA_MAX_BYTES`, default 10 MB. The origination phone id is `WA_PHONE_NUMBER_ID_PARAM` from SSM, or `WHATSAPP_PHONE_NUMBER_ID` when that parameter name is unset. No Meta token is read.
+- v1.16 (2026-10-23) Incident-scope `INCIDENT_UPDATE` `data` is `incident_id`, `state`, `stage`, integer `version`, and `updated_at` when the image has one. `incident_id` and `version` match the envelope. `opened_at`, `recommended_option`, and `option_ids` are not sent. `INCIDENT_SUMMARY` is unchanged. The desk allowlist in `web/src/deskEvents.js` accepts this payload.
+- v1.15 (2026-10-23) Combined with origin/main (PRs #28 and #29). An unquoted provider reply resumes only when exactly one waiting engagement is stored for that sender; zero or several are ignored. WhatsApp media is downloaded with the Meta Graph API (`https://graph.facebook.com/v21.0/{media_id}`, secret `oerf/whatsapp/access_token`) and stored at `tenants/{tenant_id}/inbound/{sha256}/{uuid}`. Vision writes `evidence_analysis` and `evidence_verification` on incident META. `DemoDeviceSeed` is the only device-seed custom resource and runs on every `OerfComputeStack` deploy. WebSocket `event_type` values stay `INCIDENT_SUMMARY` and `INCIDENT_UPDATE`. `POST /incidents/trigger` stays retired.
+- v1.14 (2026-10-23) `POST /incidents/trigger` is retired. The action handler does not call `states:StartExecution`. Ingest (`sim.reefer` on EventBridge) is the only start of an incident and its execution.
+- v1.13 (2026-10-23, ADR-019) `cancel` is implemented in the inbound handler. It stops the execution ingest started, sets the incident to `CANCELLED` through the repository, and does not resume a task token. A duplicate action or a `CLOSED` or `CANCELLED` incident does not call `StopExecution` again. `ExecutionDoesNotExist` is already finished and is not an error. Authorised roles are `platform_admin`, `tenant_admin`, and `ops_user`. The queued message carries that token `role`.
+- v1.12 (2026-10-23, OERF-308) the broadcaster envelope is `event_type`, `tenant_id`, `incident_id`, `version`, `emitted_at`, and `data`. Incident `data` is `state`, `stage`, `opened_at`, `updated_at`, `recommended_option`, and `option_ids`. Tenant-list `data` is `incident_id`, `state`, `stage`, and `version`. `timeline` and `evidence_analysis` are not sent. A subscription row with no `scope` receives nothing. `REMOVE` is not an event.
 - v1.11 (2026-10-22, ADR-019) a `cancel` action is handled by the inbound handler. It stops the `oerf-cold-chain` execution, sets the incident to `CANCELLED`, and the repository releases the lock. That handler logic is not implemented. The action handler has no task-token actions.
 - v1.10 (2026-10-22, OERF-303) the logger writes each JSON object to stdout and does not pass the record to a logging handler. A failed route sets `channel` to `none` when no channel was selected.
 - v1.9 (2026-10-22, ADR-018) records object retention. Evidence objects expire after 90 days, and noncurrent evidence versions after 30. Report objects stay. Noncurrent report versions expire after 90 days.
@@ -106,7 +117,7 @@ ADR-013: incident open stores `config_version` and `config_snapshot` on the inci
 
 Owner: Mudita (OERF-208 implements the handler, OERF-302 owns the route).
 
-Frozen route: `POST /incidents/{id}/actions`. Cognito JWT. The body schema rejects unknown fields, so `tenant_id` is not a client field.
+Frozen route: `POST /incidents/{id}/actions` on the OerfApiStack REST API (`RestApiUrl`, `oerf.platform.api.dashboard.handler`). Cognito JWT. The body schema rejects unknown fields, so `tenant_id` is not a client field. `oerf-http-api` does not serve this route.
 
 ```json
 {
@@ -151,6 +162,7 @@ Queued message (tenant and user come from the token):
   "action": "pick_option",
   "option_id": "OPT-B",
   "user_id": "user-1",
+  "role": "ops_user",
   "type": "text",
   "text": null,
   "media_ref": null,
@@ -162,7 +174,7 @@ Dedupe key: `INMSG#{action_id}` (section 5). An action whose engagement is no lo
 
 Deployed deviation, Mudita (208/302) to migrate: `POST /incidents/{id}/action` accepts `APPROVE`, `REJECT`, and `OVERRIDE`. The handler does not call `SendTaskSuccess`.
 
-`cancel` enters through this queue. The inbound handler stops the `oerf-cold-chain` execution (`states:StopExecution` on that machine's executions only), sets the incident to `CANCELLED`, and the repository releases the shipment lock (ADR-019). The handler logic is not implemented. The project lead owns it.
+`cancel` enters through this queue. The inbound handler stops the execution ingest started (`states:StopExecution` on that machine's executions only). The execution name is the incident id sanitized the same way ingest names `StartExecution`, under `STATE_MACHINE_ARN`. The handler then sets the incident to `CANCELLED` through the repository, which writes the timeline event and releases the shipment lock (ADR-019). It does not call `states:SendTaskSuccess`. A duplicate `action_id`, or an incident already `CLOSED` or `CANCELLED`, does not call `StopExecution` again. `ExecutionDoesNotExist` means the execution is already finished and is not an error. Authorised roles are `platform_admin`, `tenant_admin`, and `ops_user`. Any other role is ignored. The queued `role` is the token role, not a client field. When `engagement_id` is present, the tenant cancelled is that stored engagement's tenant. Otherwise it is the stored incident's tenant. A message `tenant_id` that does not match the stored engagement is ignored.
 
 ## 4. Event envelopes
 
@@ -248,6 +260,7 @@ Owner: inbound handler (name pending, OERF-201–207). The queue message, after 
     "action": { "enum": ["confirm_transfer", "pick_option", "cancel", null] },
     "option_id": { "type": ["string", "null"] },
     "user_id": { "type": ["string", "null"] },
+    "role": { "enum": ["platform_admin", "tenant_admin", "ops_user"] },
     "type": { "enum": ["button", "text", "image", "audio", "document"] },
     "text": { "type": ["string", "null"] },
     "media_ref": { "type": ["string", "null"] },
@@ -262,21 +275,21 @@ Pre-correlation WhatsApp normalization is `NormalizedMessage` in [oerf/platform/
 
 ## 5. Inbound, JOIN, and correlation
 
-Owner: inbound handler (name pending, OERF-201–207). Library pieces that already exist: `oerf.platform.inbound.normalize`, `dedupe`, `dynamo`, and `oerf.platform.inbound.handler`. No inbound Lambda is deployed.
+Owner: inbound handler (`oerf-inbound`). Library pieces that already exist: `oerf.platform.inbound.normalize`, `dedupe`, `dynamo`, and `oerf.platform.inbound.handler`.
 
 Order for a provider message:
 
 1. Dedupe. Duplicate `INMSG#` rows are dropped.
 2. Opt-out keywords (`STOP`, `UNSUBSCRIBE`, and the tenant's local equivalents) before correlation. Set opt-in false and stop that contact's engagements.
 3. `JOIN` (exact text, case-insensitive) when `PHONE#{e164}` has no item whose sort key is a non-sandbox tenant. A number registered to any non-sandbox tenant is not joined. A repeat `JOIN` returns that judge's existing sandbox shipment. The daily counter is `PK=SANDBOX#JOINS#{date}`, `SK=META`, conditional increment while `count` is below `sandbox.max_joins_per_day` (platform setting, default 20). Over the cap, the reply logical name is `sandbox_full`. Under the cap, the sandbox tenant gains a contact (opted in) and a shipment, and the logical reply is `judge_welcome`. Both replies go out through the channel router.
-4. Correlation. `context_msg_id` loads `OUTMSG#{id}`. With no context id, `ADDR#{channel}#{address}` loads open engagements: one match is used, several tenants get `disambiguation`, none gets the out-of-context reply. The channel router writes that address row, SK `ENG#{tid}#{iid}#{eid}`, when it registers an outbound message, and deletes it when the engagement leaves `WAITING`. The address is the phone or email that was sent; it is not taken from the inbound body.
-5. Media is stored as evidence. The handler then calls `states:SendTaskSuccess` on the current rung token. Classification happens in the engagement Interpret step (ADR-017), not here.
+4. Correlation. `context_msg_id` loads `OUTMSG#{id}`. With no context id, `ADDR#{channel}#{address}` loads open engagements. Exactly one match is used. Zero or several are ignored; the handler does not send a disambiguation reply. The channel router writes that address row, SK `ENG#{tid}#{iid}#{eid}`, when it registers an outbound message, and deletes it when the engagement leaves `WAITING`. The address is the phone or email that was sent; it is not taken from the inbound body.
+5. WhatsApp media is stored by End User Messaging `GetWhatsAppMessageMedia`. A `metadataOnly` call must return an allowed `mimeType` (`image/jpeg`, `image/png`, `image/webp`, `application/pdf`) and a `fileSize` at or under `INBOUND_MEDIA_MAX_BYTES` (default 10 MB). The handler then signs a presigned PUT for `tenants/{tenant_id}/inbound/{sha256(message_id)}/{uuid}{ext}` with SigV4 in `us-east-1`, a 300 second expiry, and no extra headers. It does not set server-side encryption; the evidence bucket default SSE-KMS `aws/s3` applies. A second call passes that URL as `destinationS3PresignedUrl`. The handler does not download the bytes and does not read a Meta token. A disallowed type, an oversize file, or an invalid media id is acknowledged and omitted from the callback. Throttling and a 5xx are retried. A missing origination phone id fails closed. The handler then calls `states:SendTaskSuccess` on the current rung token. Classification happens in the engagement Interpret step (ADR-017), not here. Vision later writes `evidence_analysis` and `evidence_verification` on incident META.
 
 Dashboard messages skip steps 2–4 and correlate on `engagement_id`.
 
 The handler resumes only when the resolved sender's `tenant_id` and `contact_id` both match the correlated engagement: a quoted message id cannot cross a tenant boundary, and a shared number stays bound to the party that was contacted. Every duplicate, unknown, late, invalid, or mismatched record is acknowledged and logged without a callback.
 
-`oerf.platform.inbound.handler` covers steps 1 and 2, the `OUTMSG#` half of step 4, and the resume in step 5. The `ADDR#` fallback with its `disambiguation` and out-of-context replies, `JOIN` in step 3, and evidence storage in step 5 are not in that module yet and remain open.
+`oerf.platform.inbound.handler` covers steps 1 and 2, both halves of step 4, media storage in step 5, and the resume. `JOIN` in step 3 is not in that module yet and remains open.
 
 Dedupe item, agreed by the spec and [oerf/platform/inbound/dedupe.py](../oerf/platform/inbound/dedupe.py):
 
@@ -299,9 +312,9 @@ Correlation keys, agreed by the LLD and [oerf/platform/storage/dynamo.py](../oer
 
 Owner: OERF-112 for the repository (Mudita). Data-stack owner for indexes. Authoritative incident key, from the LLD and `incident_pk()`:
 
-`PK=TENANT#{tid}#INC#{iid}`, `SK=META`. Timeline rows: `SK=EVT#{iso-timestamp}#{seq}`.
+`PK=TENANT#{tid}#INC#{iid}`, `SK=META`. Timeline rows: `SK=EVT#{iso-timestamp}#{seq}`. Temperature rows, written by `IncidentStore.record_reading` only while `OPEN_INCIDENT` is present and the incident is not terminal: `SK=READ#{ts}#{seq}#{sha256}`. `ts` is `YYYY-MM-DDTHH:MM:SSZ`. `seq` is twelve digits. `sha256` is the hex SHA-256 of `event_id`. Stored attributes are `pk`, `sk`, `tenant_id`, `ts`, `temperature_c`, and `expires_at` (epoch seconds of `ts` plus 90 days). `device_id`, coordinates, `shipment_id`, and `event_id` are not attributes. A second put of the same key does not replace the row.
 
-Deployed deviation, Mudita (208): the action handler writes `PK=TENANT#{tid}`, `SK=INCIDENT#{id}`. That shape is not the contract.
+Ingest writes the authoritative key. The retired trigger route no longer writes a separate incident item.
 
 Lock item (ADR-016): `PK=TENANT#{tid}#SHIP#{sid}`, `SK=OPEN_INCIDENT`, conditional put, deleted on close or cancel.
 
@@ -326,6 +339,7 @@ Lock item (ADR-016): `PK=TENANT#{tid}#SHIP#{sid}`, `SK=OPEN_INCIDENT`, condition
 | 17 | Phone registry | routing | `PK=PHONE#{e164}` |
 | 18 | Sandbox JOIN counter | routing | `PK=SANDBOX#JOINS#{date}`, `SK=META` |
 | 19 | Platform settings | platform | `PK=SETTINGS`, `SK=PLATFORM` |
+| 20 | Temperature readings in order | incident | `SK` begins_with `READ#` |
 
 Pattern 12 is not deployed. The incident table has no GSI, and the data-stack unit test asserts that. `GET /incidents` (OERF-302) depends on it. Change request: [2026-10-18-incident-gsi1-by-status.md](change-requests/2026-10-18-incident-gsi1-by-status.md).
 
@@ -336,6 +350,7 @@ Pattern 12 is not deployed. The incident table has no GSI, and the data-stack un
 | Item | Table | Key | Retention | TTL deletes the row |
 | --- | --- | --- | --- | --- |
 | `INGEST#` | incident | `PK=INGEST#{event_id}`, `SK=META` | 7 days from accept | yes |
+| `READ#` | incident | `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}#{sha256}` | 90 days from the reading `ts`. `expires_at` is epoch seconds of `ts` plus 90 days. Attributes: `pk`, `sk`, `tenant_id`, `ts`, `temperature_c`, `expires_at`. | yes |
 | `DEBOUNCE#` | incident | `PK=DEBOUNCE#{tid}#{shipment_id}#{device_id}`, `SK=META` | 10 minutes from the reading | yes |
 | `INMSG#` | routing | `PK=INMSG#{id}`, `SK=META` | 7 days from accept, not from `received_at` | yes |
 | `OUTMSG#` | routing | `PK=OUTMSG#{provider_msg_id}`, `SK=ENG#{tid}#{iid}#{eid}` | 90 days from registration | yes |
@@ -367,11 +382,10 @@ API `oerf-http-api`. Cognito JWT authorizer, identity source `Authorization`. CO
 
 | Route | Contract |
 | --- | --- |
-| `POST /incidents/{id}/actions` | Section 3.2. Frozen. |
 | `GET /incidents/{id}` | Incident META for the token tenant and path id: `incident_id`, `tenant_id`, `shipment_id`, `state`, `reason`, `opened_at`, `config_version`. `config_snapshot` is included on this authenticated read. `pk` and `sk` stay off the wire. |
 | `GET /incidents` | List for the token tenant. Blocked on GSI1 (pattern 12). Each row is the summary object in section 7.3. |
 
-Deployed and non-conformant: `POST /incidents/{id}/action`, and `POST /incidents/trigger` (the action handler writes an incident and calls `StartExecution`). Ingest is the EventBridge path in section 4.1. Whether `POST /incidents/trigger` remains as a demo hook is open (section 14).
+Dashboard `POST /incidents/{id}/actions` is section 3.2 on the REST API. Ingest (`sim.reefer` / `TemperatureReading`) is the only way an incident and its execution start.
 
 ### 7.2 Subscribe
 
@@ -395,9 +409,11 @@ Connection items stay on the routing table: `PK=WS#{connection_id}` / `SK=METADA
 
 Shared by OERF-302 and OERF-308. Times are UTC `YYYY-MM-DDTHH:MM:SSZ`.
 
-`version` is the integer on incident META when that attribute exists. Until OERF-112 stores one, the broadcaster sets `version` to the count of `EVT#` rows, or `1` when there are none. `stage` is the playbook stage when the workflow has set it. Until then, `stage` equals `state`.
+`version` is the integer `version` on incident META when that attribute exists, otherwise `event_seq`, otherwise `1`. `stage` is `stage` when that attribute is set, otherwise `current_stage`, otherwise `state`. `emitted_at` is the time the broadcaster built the message.
 
-Incident scope (`event_type` `INCIDENT_UPDATE`). Sanitized projection. Allowed `data` keys are fixed; adding a key is a minor version of this contract.
+The envelope is exactly these keys. `scope` is not a field. The subscription row chooses which `data` object is sent. Adding a `data` key is a minor version of this contract.
+
+Incident scope (`event_type` `INCIDENT_UPDATE`). `data` is `incident_id`, `state`, `stage`, and integer `version`, plus `updated_at` when the image has one. `incident_id` is the same value as the envelope. `version` is the same integer as the envelope. `state` and `stage` are always present. `updated_at` is copied only when it is `YYYY-MM-DDTHH:MM:SSZ` or a non-negative integer epoch second. `opened_at`, `recommended_option`, and `option_ids` are not sent. The desk also allows `config_version`, `from_state`, `latest_reading`, `shipment_id`, `timeline`, and `to_state`; this broadcaster does not send them.
 
 ```json
 {
@@ -406,24 +422,15 @@ Incident scope (`event_type` `INCIDENT_UPDATE`). Sanitized projection. Allowed `
   "incident_id": "INC-000123",
   "version": 4,
   "emitted_at": "2026-10-18T12:00:00Z",
-  "scope": "incident",
   "data": {
     "incident_id": "INC-000123",
     "state": "VERIFYING",
     "stage": "verify",
-    "version": 4,
-    "shipment_id": "PH-2841",
     "updated_at": "2026-10-18T12:00:00Z",
-    "config_version": 2,
-    "from_state": "IN_TRANSIT",
-    "to_state": "VERIFYING",
-    "latest_reading": { "ts": "2026-10-18T11:59:30Z", "temperature_c": 7.4 },
-    "timeline": [{ "type": "state_changed", "at": "2026-10-18T12:00:00Z", "state": "VERIFYING" }]
+    "version": 4
   }
 }
 ```
-
-`from_state` and `to_state` are present only on a state transition, and they match section 4.2. Timeline entries are `{type, at, state}` only.
 
 Tenant-list scope (`event_type` `INCIDENT_SUMMARY`). `data` is exactly these four fields:
 
@@ -434,7 +441,6 @@ Tenant-list scope (`event_type` `INCIDENT_SUMMARY`). `data` is exactly these fou
   "incident_id": "INC-000123",
   "version": 4,
   "emitted_at": "2026-10-18T12:00:00Z",
-  "scope": "tenant",
   "data": {
     "incident_id": "INC-000123",
     "state": "VERIFYING",
@@ -444,9 +450,7 @@ Tenant-list scope (`event_type` `INCIDENT_SUMMARY`). `data` is exactly these fou
 }
 ```
 
-Neither payload carries a raw DynamoDB image, message text, `evidence_analysis`, phone numbers, names, task tokens, prompts, images, or model output. A record with no tenant id is skipped. A connection subscribed to tenant A never receives tenant B. An incident subscription receives only that incident's `INCIDENT_UPDATE`.
-
-The broadcaster sends `INCIDENT_SUMMARY` to a `tenant` subscription and `INCIDENT_UPDATE` to the matching `incident` subscription. It does not send `evidence_analysis`, and it does not deliver to `ALL` or `*`.
+Neither payload carries a raw DynamoDB image, `opened_at`, `recommended_option`, `option_ids`, `timeline`, `evidence_analysis`, message text, phone numbers, names, task tokens, prompts, images, or model output. A record whose key is not `TENANT#{tid}#INC#{id}` / `META`, or that has no tenant id and incident id, is skipped. `REMOVE` is skipped. This contract has no removed event. A connection subscribed to tenant A never receives tenant B. An incident subscription receives only that incident's `INCIDENT_UPDATE`. A row whose `scope` is missing, `ALL`, or `*` receives nothing. A `scope` of `tenant` is the tenant list and receives `INCIDENT_SUMMARY` only.
 
 ## 8. Handler entry points
 
@@ -465,11 +469,11 @@ IAM column is the target. Current wildcards are called out and are not the targe
 | `oerf.platform.ingest.handler` | `handler` | pending (OERF-201–207) | EventBridge `sim.reefer` / `TemperatureReading` | Read routing device item and tenant config. Transact incident META plus lock. `states:StartExecution` on `STATE_MACHINE_ARN` only. | not deployed |
 | `oerf.platform.inbound.handler` | `handler` | pending (OERF-201–207) | SQS inbound queue | Read/write routing and incident. Write evidence objects. `states:SendTaskSuccess` only; section 5 keeps reply classification in Interpret, so this role sends no `states:SendTaskFailure`. `states:StopExecution` on executions of `oerf-cold-chain` only. No channel-send APIs. | not deployed |
 | `oerf.platform.channels.router` | `handler` | Mudita | Step Functions / direct invoke | Read/write routing (`OUTMSG#`, `ADDR#`). The only role with WhatsApp, SMS, and SES send. | deployed `oerf-channel-router` |
-| `oerf.platform.report.generator` | `handler` | Mudita (OERF-117) | Step Functions | Read incident. Write `REPORT_BUCKET_NAME`. SES send is not the target (ADR-008). | deployed `oerf-report-generator` |
+| `oerf.platform.report.generator` | `handler` | Mudita (OERF-117) | Step Functions | Read incident META, `EVT#`, and `READ#`. Write `REPORT_BUCKET_NAME` only when the key is absent. SES send is not the target (ADR-008). | deployed `oerf-report-generator` |
 | `oerf.platform.api.stream_broadcaster` | `handler` | Ananda (OERF-308) | Incident table stream | Read incident stream. Read routing subscriptions. Delete gone connections. `execute-api:ManageConnections` on this API. No Step Functions, no incident writes. | deployed `oerf-stream-broadcaster` |
 | `oerf.platform.api.ws_handler` | `handler` | Mudita (OERF-302) | `$connect`, `$disconnect`, `subscribe` | Read/write routing connection items only. | deployed `oerf-ws-handler` |
 | `oerf.platform.api.ws_authorizer` | `handler` | Mudita (OERF-302) | WebSocket `$connect` authorizer | `cognito-idp:GetUser`. Write the connection binding. | deployed `oerf-ws-authorizer` |
-| `oerf.platform.api.action_handler` | `handler` | Mudita (OERF-208) | HTTP API | Read token claims. Send the action message to the inbound queue. Read incident for `GET`. No `states:SendTaskSuccess`. | deployed `oerf-action-handler` |
+| `oerf.platform.api.action_handler` | `handler` | Mudita (OERF-208) | HTTP API | Read token claims. Read incident for `GET`. No inbound-queue send. No `states:SendTaskSuccess`. | deployed `oerf-action-handler` |
 | `oerf.platform.evidence.vision` | `handler` | OERF-207 (behaviour, name pending). Ananda (OERF-310) for model and guardrail env. | Step Functions / async invoke | Read evidence object. Write the evidence result on the incident. `bedrock:InvokeModel` on the approved model ARN. `bedrock:ApplyGuardrail` on the guardrail ARN and on `us.guardrail.v1:0` in us-east-1, us-east-2, and us-west-2. | deployed `oerf-evidence-analyzer` |
 | AgentCore runtime | `oerf/platform/agent/agentcore/app.py` | OERF-206 behaviour. Ananda (OERF-312) for the runtime. | Invoke from Interpret | Read incident and tenant tables. `bedrock:InvokeModel` on Nova Lite. `bedrock:ApplyGuardrail` on the guardrail ARN and on `us.guardrail.v1:0` in us-east-1, us-east-2, and us-west-2. Pull the CDK asset repository. No incident writes, no channel send, no task token. | synth when context `agentcore:enabled` is true; default false |
 
@@ -501,21 +505,22 @@ This ticket does not rename variables on deployed functions. OERF-301 sets missi
 | `EVIDENCE_BUCKET_NAME` | required when a function reads or writes evidence. Vision does not read this variable yet. | OERF-301 |
 | `REPORT_BUCKET_NAME` | deployed on the report function | compute stack |
 | `EVENT_BUS_NAME` | value `oerf-events`. Required on ingest and any publisher. | OERF-301 |
-| `STATE_MACHINE_ARN` | deployed on the action handler. Ingest reads it for `StartExecution`. | compute stack |
-| `INBOUND_QUEUE_URL` | Inbound queue URL. Set on the action handler. OERF-208 reads it to send the dashboard action. | OERF-301 |
+| `STATE_MACHINE_ARN` | Inbound and ingest. Ingest uses it for `StartExecution`. Inbound uses it to derive the execution ARN for `StopExecution`. | compute stack |
+| `INBOUND_QUEUE_URL` | Inbound queue URL. Set on the OerfApiStack dashboard action function, which sends the dashboard action. Not set on `oerf-action-handler`. | OERF-301 |
 | `CONFIG_ROOT` | directory of domain packages inside the asset. Value `domains`. The config library currently resolves the installed `domains` package and does not read this variable. | OERF-301, when a function needs an explicit root |
 | `LOG_LEVEL` | logging level name. Default `INFO` when unset. | OERF-301 / OERF-303 |
 | `USER_POOL_ID` | deployed on the WebSocket authorizer | compute stack |
 | `USER_POOL_CLIENT_ID` | deployed on the WebSocket authorizer | compute stack |
 | `WEBSOCKET_ENDPOINT` | deployed on the broadcaster | compute stack |
-| `WHATSAPP_PHONE_NUMBER_ID` | Router. Value is context `whatsapp:phoneNumberId`, default empty. | WhatsApp infra |
+| `WHATSAPP_PHONE_NUMBER_ID` | Router and inbound. Value is context `whatsapp:phoneNumberId`, default empty. Used only when `WA_PHONE_NUMBER_ID_PARAM` is unset. | WhatsApp infra |
 | `SES_SOURCE_EMAIL` | deployed on the router and the report function | compute stack |
 | `USE_MOCK_WHATSAPP` | Router. Default `true`. `false` only when context `channels:live` is true. | WhatsApp infra |
 | `USE_MOCK_SMS` | Router. Same default as `USE_MOCK_WHATSAPP`. | WhatsApp infra |
 | `USE_MOCK_EMAIL` | Router. Same default as `USE_MOCK_WHATSAPP`. | WhatsApp infra |
 | `USE_MOCK_BEDROCK` | Vision. Default `true`. `false` only when context `channels:live` is true. | ADR-020 |
 | `BEDROCK_MODEL_ID` | Vision. Context `bedrock:modelId`, default `amazon.nova-lite-v1:0`. | ADR-020 |
-| `WA_PHONE_NUMBER_ID_PARAM` | Router. Value `/oerf/whatsapp/phone-number-id`. The handler does not read it yet. | WhatsApp infra |
+| `WA_PHONE_NUMBER_ID_PARAM` | Router and inbound. Value `/oerf/whatsapp/phone-number-id`. The handler reads that SSM parameter once per process. An empty or failed read does not fall back to `WHATSAPP_PHONE_NUMBER_ID`. | WhatsApp infra |
+| `INBOUND_MEDIA_MAX_BYTES` | Inbound. Default `10485760` (10 MB). WhatsApp `fileSize` above this is rejected. | compute stack |
 | `GUARDRAIL_ID` | Vision only. Id of the guardrail in `OerfComputeStack`. | OERF-310 |
 | `GUARDRAIL_VERSION` | Vision only. Published version of that guardrail. | OERF-310 |
 | `AGENT_RUNTIME_ARN` | Value of stack output `AgentRuntimeArn` when context `agentcore:enabled` is true. Cross-stack export name is `AGENT-RUNTIME-ARN` because an export name cannot contain underscores. Not set on a function. Default synth leaves it unset. | OERF-312 |
@@ -538,7 +543,7 @@ The image is published to the CDK asset repository. The execution role pulls tha
 
 Provider secrets stay in Secrets Manager, referenced by name or ARN. They are not environment variables.
 
-Synth: [infra/app.py](../infra/app.py) takes the account from `CDK_DEFAULT_ACCOUNT`, then context `account`, then the placeholder `000000000000`. A CloudFormation rule rejects a deploy of that placeholder. Region defaults to `us-east-1`.
+Synth: [infra/app.py](../infra/app.py) takes the account from context `account`, then `CDK_DEFAULT_ACCOUNT`, then the placeholder `000000000000`. A CloudFormation rule rejects a deploy of that placeholder. Region resolves `CDK_DEFAULT_REGION`, then context `region`, then `us-east-1`.
 
 ## 10. Logger
 
@@ -611,7 +616,7 @@ Mudita's other ticket numbers in this table are ownership for coordination. They
 | 1 | Resource env vars use `*_TABLE_NAME` and `*_BUCKET_NAME`. | Ananda, 301 (acked) |
 | 2 | Role comes from `cognito:groups`. `custom:role` is dropped. | contract |
 | 3 | Actions are `POST /incidents/{id}/actions` with `confirm_transfer`, `pick_option`, or `cancel`, plus `action_id`, via SQS. The deployed `/action` verbs are non-conformant. | Mudita, 208/302 |
-| 4 | Incident key `TENANT#{tid}#INC#{iid}` is authoritative. The action-handler key is non-conformant. | Mudita, 208 |
+| 4 | Incident key `TENANT#{tid}#INC#{iid}` is authoritative. Ingest writes it. | Mudita, 208 |
 | 5 | `states:SendTaskSuccess` belongs only to the inbound handler. | Ananda, 301 |
 | 6 | WebSocket scopes are incident (full sanitized event) and tenant list (summary only). No `ALL`. | Ananda 308, Mudita 302 |
 | 7 | Simulator `Detail` keeps `tenant_id` and `shipment_id`. Ingest uses `DEVICE#{id}` and drops the event when `detail.tenant_id` disagrees. | OERF-118 and ingest |
@@ -623,7 +628,7 @@ Mudita's other ticket numbers in this table are ownership for coordination. They
 ## 14. Open items
 
 1. OERF-201–207 owner names. Blank on purpose.
-2. `POST /incidents/trigger` on the action handler starts the placeholder state machine and writes the non-conformant incident key. The frozen ingest path is EventBridge. Owner to confirm whether the route stays as a demo hook: Mudita (208) with Ananda (301).
+2. Retired in v1.14. `POST /incidents/trigger` is removed. Ingest is the only start path.
 3. The report function's role has `ses:SendEmail`. ADR-008 puts SES send on the channel router. Mudita (117) confirms the report email path.
 4. `custom:tenant_id` is a data-stack change, not a product choice. It is HIGH and unblocked: [change request](change-requests/2026-10-18-cognito-custom-tenant-id.md).
 5. GSI1 is a data-stack change, dependency of OERF-302: [change request](change-requests/2026-10-18-incident-gsi1-by-status.md).

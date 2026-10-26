@@ -163,6 +163,7 @@ def test_converse_failure_does_not_call_a_second_model(
     assert "claude" not in result["error"].lower()
 
 
+@pytest.mark.security
 def test_missing_tenant_does_not_read_s3_or_write_dynamodb(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(vision, "INCIDENT_TABLE_NAME", "incidents")
     monkeypatch.setattr(vision, "get_s3", lambda: (_ for _ in ()).throw(AssertionError("s3")))
@@ -202,6 +203,7 @@ def _live(monkeypatch: pytest.MonkeyPatch, text: str, *, response: dict | None =
     return vision.handler(_EVENT, None)
 
 
+@pytest.mark.security
 def test_a_key_outside_the_tenant_prefix_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(vision, "USE_MOCK_BEDROCK", True)
     monkeypatch.setattr(vision, "TENANT_TABLE_NAME", "")
@@ -241,6 +243,7 @@ def test_a_well_formed_reading_is_validated_and_stored(
     assert stored["ExpressionAttributeValues"][":k"] == _EVENT["key"]
 
 
+@pytest.mark.security
 def test_the_model_call_trace_carries_only_sanitized_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -340,6 +343,7 @@ def test_the_tenant_floor_and_catalog_govern_the_verdict(
     assert result["verification"]["requires_confirmation"] is False
 
 
+@pytest.mark.security
 def test_tenant_key_accepts_only_the_tenant_prefix() -> None:
     assert vision.tenant_key("t1", "tenants/t1/photos/a.jpg") is True
     assert vision.tenant_key("t1", "tenants/t11/photos/a.jpg") is False

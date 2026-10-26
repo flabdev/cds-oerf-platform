@@ -11,6 +11,8 @@ EventBridge rule for ``sim.reefer`` / ``TemperatureReading``, the dead-letter
 queue, ``states:StartExecution`` on the cold-chain state machine, and the
 environment below. Ingest state is kept on the incident table because that is
 the only table this role may write: routing and tenant access is read-only.
+While the shipment lock is present, each accepted reading is one ``READ#``
+row, written by ``IncidentStore.record_reading``.
 
 ``TODO(OERF-301)``: no DynamoDB TTL is configured on any table, so the
 ``expires_at`` attribute on dedupe and debounce items does not delete them yet.
@@ -36,12 +38,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from oerf.platform.incidents.debounce import DebounceStore, observe
 from oerf.platform.incidents.dynamo import DynamoIncidentStore
 from oerf.platform.incidents.repository import IncidentStore
+from oerf.platform.observability.logging import get_logger, log
 from oerf.platform.rules.trigger import TemperatureEvent, breach_reason, evaluate_trigger
-from oerf.platform.storage.dynamo import is_conditional_failure, key, n, text
+from oerf.platform.storage.dynamo import is_conditional_failure, iso_z, key, n, text
 from oerf.platform.tenancy.config_resolver import ResolvedConfig, get_config
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 SOURCE = "sim.reefer"
@@ -228,7 +231,13 @@ def handler(
     try:
         reading = Reading.model_validate(event.get("detail"))
     except (ValidationError, TypeError):
-        logger.info("Ignoring malformed temperature reading event_id=%s", event_id)
+        log(
+            logger,
+            logging.INFO,
+            f"Ignoring malformed temperature reading event_id={event_id}",
+            outcome="ignored",
+            count=1,
+        )
         return {"status": "ignored", "reason": "invalid_reading"}
 
     ports = dependencies or build_dependencies()
@@ -279,17 +288,7 @@ def handler(
             consecutive_breaches=max(1, streak),
         )
         if not decision.triggered:
-            ports.incidents.record_reading(
-                tenant_id,
-                shipment_id,
-                event_id=event_id,
-                timestamp=reading.ts.isoformat(),
-                temperature_c=reading.temperature_c,
-                device_id=reading.device_id,
-                sequence=reading.seq,
-                latitude=reading.lat,
-                longitude=reading.lon,
-            )
+            _record_reading(ports, tenant_id, shipment_id, reading, event_id)
             return {
                 "status": "accepted",
                 "reason": "debouncing" if streak else "within_range",
@@ -304,17 +303,7 @@ def handler(
             config_version=config.version,
             config_snapshot=config.model_dump(mode="json"),
         )
-        ports.incidents.record_reading(
-            tenant_id,
-            shipment_id,
-            event_id=event_id,
-            timestamp=reading.ts.isoformat(),
-            temperature_c=reading.temperature_c,
-            device_id=reading.device_id,
-            sequence=reading.seq,
-            latitude=reading.lat,
-            longitude=reading.lon,
-        )
+        _record_reading(ports, tenant_id, shipment_id, reading, event_id)
         execution_name = _execution_name(incident.incident_id)
         if ports.incidents.get(tenant_id, incident.incident_id).state != "OPEN":
             return {
@@ -349,11 +338,16 @@ def handler(
                 },
             },
         )
-        logger.info(
-            "Started cold-chain execution tenant=%s shipment=%s incident=%s",
-            tenant_id,
-            shipment_id,
-            incident.incident_id,
+        log(
+            logger,
+            logging.INFO,
+            (
+                "Started cold-chain execution "
+                f"tenant={tenant_id} shipment={shipment_id} incident={incident.incident_id}"
+            ),
+            tenant_id=tenant_id,
+            incident_id=incident.incident_id,
+            outcome="started",
         )
         return {
             "status": "triggered",
@@ -418,6 +412,25 @@ class _DynamoConfigReader:
 
     def get(self, tenant_id: str, domain: str) -> ResolvedConfig:
         return get_config(tenant_id, domain, repository=self._repository)
+
+
+def _record_reading(
+    ports: IngestDependencies,
+    tenant_id: str,
+    shipment_id: str,
+    reading: Reading,
+    event_id: str,
+) -> None:
+    """Store the reading on the open incident. ``record_reading`` is the only writer."""
+
+    ports.incidents.record_reading(
+        tenant_id,
+        shipment_id,
+        event_id=event_id,
+        timestamp=iso_z(reading.ts),
+        temperature_c=reading.temperature_c,
+        sequence=reading.seq,
+    )
 
 
 def _event_identity(event: Mapping[str, Any]) -> str:

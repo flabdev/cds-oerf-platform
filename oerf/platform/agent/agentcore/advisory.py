@@ -19,8 +19,9 @@ import time
 from typing import Any
 
 from oerf.platform.observability.ai_trace import TraceRejected, record_invocation
+from oerf.platform.observability.logging import get_logger, log
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 #: The model the stack passes in ``BEDROCK_MODEL_ID``.
@@ -51,7 +52,13 @@ def build_agent(*, model: str | None = None) -> Any | None:
         from strands import Agent
         from strands.models import BedrockModel
     except ImportError:
-        logger.info("strands is not installed; the advisory stays rules-only")
+        log(
+            logger,
+            logging.INFO,
+            "strands is not installed; the advisory stays rules-only",
+            outcome="fallback",
+            count=1,
+        )
         return None
 
     kwargs: dict[str, Any] = {"model_id": model or model_id(), "max_tokens": MAX_TOKENS}
@@ -65,8 +72,14 @@ def build_agent(*, model: str | None = None) -> Any | None:
     try:
         bedrock = BedrockModel(**kwargs)
         return Agent(model=bedrock, system_prompt=SYSTEM_PROMPT)
-    except Exception as exc:  # noqa: BLE001 - an agent that cannot start is a fallback
-        logger.warning("the advisory agent did not build: %s", exc)
+    except Exception:  # noqa: BLE001 - an agent that cannot start is a fallback
+        log(
+            logger,
+            logging.WARNING,
+            "the advisory agent did not build",
+            outcome="fallback",
+            count=1,
+        )
         return None
 
 
@@ -87,9 +100,15 @@ def note_for(state: str, reason: str, fault_codes: list[str], agent: Any = None)
         result = agent(prompt)
         response = _response_dict(result)
         note = _note_from_result(result)
-    except Exception as exc:  # noqa: BLE001 - a model failure is a fallback, not an error
+    except Exception:  # noqa: BLE001 - a model failure is a fallback, not an error
         _record(latency_ms=_elapsed_ms(started), response=None, outcome="ERROR")
-        logger.error("the advisory note call failed: %s", exc)
+        log(
+            logger,
+            logging.ERROR,
+            "the advisory note call failed",
+            outcome="error",
+            count=1,
+        )
         return None
     _record(latency_ms=_elapsed_ms(started), response=response, outcome="SUCCESS")
     return note
@@ -142,8 +161,14 @@ def _record(*, latency_ms: int, response: dict[str, Any] | None, outcome: str) -
     }
     try:
         record_invocation(metadata)
-    except TraceRejected as exc:
-        logger.warning("refusing the model-call trace: %s", exc)
+    except TraceRejected:
+        log(
+            logger,
+            logging.WARNING,
+            "refusing the model-call trace",
+            outcome="refused",
+            count=1,
+        )
 
 
 def _count(usage: Any, name: str) -> int:

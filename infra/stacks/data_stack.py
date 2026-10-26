@@ -227,6 +227,14 @@ class OerfDataStack(Stack):
         # ---------------------------------------------------------
         # Step Functions: cold_chain_excursion_v1 workflow skeleton
         # ---------------------------------------------------------
+        # Both machines invoke this function. Tracing adds the two X-Ray
+        # actions on Resource *. See iam-exceptions.md.
+        workflow_stub_logs = logs.LogGroup(
+            self,
+            "ColdChainWorkflowStubLogGroup",
+            retention=logs.RetentionDays.ONE_MONTH,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
         workflow_stub = lambda_.Function(
             self,
             "ColdChainWorkflowStub",
@@ -241,7 +249,9 @@ class OerfDataStack(Stack):
                 ),
                 exclude=["__pycache__", "*.pyc", ".gitkeep"],
             ),
+            log_group=workflow_stub_logs,
             timeout=Duration.seconds(30),
+            tracing=lambda_.Tracing.ACTIVE,
             description=(
                 "Temporary deterministic integration stub for cold_chain_excursion_v1"
             ),
@@ -440,6 +450,10 @@ class OerfDataStack(Stack):
             "repo:flabdev@25605151/cds-oerf-platform@1408373494:ref:refs/heads/main",
             "repo:flabdev/cds-oerf-platform:ref:refs/heads/main",
         ]
+        # Legacy custom resource. Its role grants the five iam:OpenIDConnect
+        # actions on Resource *. Replacing it with the native provider would
+        # replace the provider during the deploy-role change. See
+        # iam-exceptions.md.
         github_provider = iam.OpenIdConnectProvider(
             self,
             "GithubOIDCProvider",

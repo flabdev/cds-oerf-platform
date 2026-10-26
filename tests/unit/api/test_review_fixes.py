@@ -3,6 +3,8 @@
 import base64
 import json
 
+import pytest
+
 from oerf.platform.api import action_handler, ws_authorizer, ws_handler
 from oerf.platform.channels import router
 
@@ -32,6 +34,7 @@ class FakeDynamoDB:
         return self.table
 
 
+@pytest.mark.security
 def test_websocket_authorizer_returns_policy_and_binds_verified_tenant(monkeypatch):
     claims = {"client_id": "client-1", "sub": "user-1", "cognito:groups": "tenant_admin"}
     payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
@@ -100,6 +103,7 @@ def test_websocket_authorizer_works_when_gateway_omits_connection_id(monkeypatch
     assert result["context"]["tenant_id"] == "tenant-1"
 
 
+@pytest.mark.security
 def test_websocket_authorizer_denies_invalid_token_with_policy(monkeypatch):
     monkeypatch.setattr(ws_authorizer, "verify_token", lambda _token: {})
 
@@ -116,6 +120,7 @@ def test_websocket_authorizer_denies_invalid_token_with_policy(monkeypatch):
     assert "isAuthenticated" not in result
 
 
+@pytest.mark.security
 def test_subscribe_uses_connection_tenant_not_client_requested_tenant():
     table = FakeTable(
         {("WS#conn-1", "METADATA"): {"tenant_id": "tenant-1", "role": "ops_user"}}
@@ -147,6 +152,7 @@ def test_subscribe_uses_connection_tenant_not_client_requested_tenant():
     assert subscription["incident_id"] == "INC-1"
 
 
+@pytest.mark.security
 def test_subscribe_rejects_all_and_stores_a_tenant_scope():
     table = FakeTable({("WS#conn-1", "METADATA"): {"tenant_id": "tenant-1"}})
 
@@ -169,6 +175,7 @@ def test_subscribe_rejects_all_and_stores_a_tenant_scope():
     assert "incident_id" not in table.put_items[-1]
 
 
+@pytest.mark.security
 def test_subscribe_rejects_connection_without_tenant_binding():
     table = FakeTable()
 
@@ -198,42 +205,7 @@ def test_email_without_source_address_is_not_reported_as_success(monkeypatch):
     assert "SES_SOURCE_EMAIL not configured" in result["error"]
 
 
-def test_dashboard_action_is_queued_and_does_not_resume_the_workflow(monkeypatch):
-    sent = []
-
-    class Queue:
-        def send_message(self, **kwargs):
-            sent.append(kwargs)
-
-    monkeypatch.setattr(action_handler, "INBOUND_QUEUE_URL", "https://example/inbound")
-    monkeypatch.setattr(action_handler, "get_sqs", lambda: Queue())
-    monkeypatch.setattr(
-        action_handler,
-        "get_sfn",
-        lambda: (_ for _ in ()).throw(AssertionError("step functions")),
-    )
-
-    response = action_handler.handler(_action_event(), None)
-    body = json.loads(sent[0]["MessageBody"])
-
-    assert response["statusCode"] == 202
-    assert json.loads(response["body"]) == {"action_id": "act-1", "status": "queued"}
-    assert body["action"] == "confirm_transfer"
-    assert body["tenant_id"] == "t1"
-    assert body["user_id"] == "user-1"
-    assert body["text"] is None
-    assert "task_token" not in body
-
-
-def test_deployed_action_route_queues_the_contract_body(monkeypatch):
-    sent = []
-
-    class Queue:
-        def send_message(self, **kwargs):
-            sent.append(kwargs)
-
-    monkeypatch.setattr(action_handler, "INBOUND_QUEUE_URL", "https://example/inbound")
-    monkeypatch.setattr(action_handler, "get_sqs", lambda: Queue())
+def test_http_api_does_not_accept_a_dashboard_action():
     event = _action_event()
     queued = action_handler.handler(event, None)
     event["rawPath"] = "/incidents/INC-1/action"
@@ -242,10 +214,10 @@ def test_deployed_action_route_queues_the_contract_body(monkeypatch):
     event["body"] = json.dumps({"action": "APPROVE"})
     rejected = action_handler.handler(event, None)
 
-    assert queued["statusCode"] == 202
+    assert queued["statusCode"] == 404
     assert legacy["statusCode"] == 404
-    assert rejected["statusCode"] == 400
-    assert len(sent) == 1
+    assert rejected["statusCode"] == 404
+    assert "queued" not in queued["body"]
 
 
 def _action_event() -> dict:

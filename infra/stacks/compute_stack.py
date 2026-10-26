@@ -176,10 +176,10 @@ class OerfComputeStack(Stack):
                 resources=whatsapp_resources,
             )
         )
-        # WA_PHONE_NUMBER_ID_PARAM names the SSM parameter. GetParameter is
-        # limited to that one parameter. The ARN drops the leading slash.
-        # The router still reads WHATSAPP_PHONE_NUMBER_ID; it does not read
-        # this parameter name yet.
+        # WA_PHONE_NUMBER_ID_PARAM names the SSM parameter. The router reads
+        # it once per process and uses WHATSAPP_PHONE_NUMBER_ID only when
+        # this name is unset. GetParameter is limited to that one parameter.
+        # The ARN drops the leading slash.
         self.channel_router_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["ssm:GetParameter"],
@@ -384,6 +384,9 @@ class OerfComputeStack(Stack):
             enforce_ssl=True,
             retention_period=Duration.days(14),
         )
+        # Incident META is pk TENANT#{tid}#INC#{id}, sk META. Timeline is
+        # EVT#, the lock is OPEN_INCIDENT, and debounce/ingest use other
+        # pk prefixes. The handler still requires the #INC# key.
         self.stream_broadcaster_fn.add_event_source(
             event_sources.DynamoEventSource(
                 data_stack.incident_table,
@@ -394,6 +397,20 @@ class OerfComputeStack(Stack):
                 max_record_age=Duration.hours(24),
                 report_batch_item_failures=True,
                 on_failure=event_sources.SqsDlq(self.stream_dlq),
+                filters=[
+                    lambda_.FilterCriteria.filter(
+                        {
+                            "dynamodb": {
+                                "Keys": {
+                                    "pk": {
+                                        "S": lambda_.FilterRule.begins_with("TENANT#")
+                                    },
+                                    "sk": {"S": lambda_.FilterRule.is_equal("META")},
+                                }
+                            }
+                        }
+                    )
+                ],
             )
         )
 
@@ -452,6 +469,10 @@ class OerfComputeStack(Stack):
                 "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
                 "PLATFORM_TABLE_NAME": data_stack.platform_table.table_name,
                 "EVIDENCE_BUCKET_NAME": data_stack.evidence_bucket.bucket_name,
+                "STATE_MACHINE_ARN": data_stack.cold_chain_state_machine.state_machine_arn,
+                "WA_PHONE_NUMBER_ID_PARAM": _WA_PHONE_NUMBER_ID_PARAM,
+                "WHATSAPP_PHONE_NUMBER_ID": whatsapp_phone_number_id,
+                "INBOUND_MEDIA_MAX_BYTES": str(10 * 1024 * 1024),
                 "LOG_LEVEL": "INFO",
             },
         )
@@ -462,24 +483,33 @@ class OerfComputeStack(Stack):
         self.inbound_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["s3:PutObject"],
-                resources=[
-                    data_stack.evidence_bucket.arn_for_objects("tenants/*/inbound/*")
-                ],
+                resources=[data_stack.evidence_bucket.arn_for_objects("tenants/*/inbound/*")],
+            )
+        )
+        # Same phone-number-id ARN as SendWhatsAppMessage. Unset context keeps
+        # Resource * and is recorded in iam-exceptions.md.
+        self.inbound_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["social-messaging:GetWhatsAppMessageMedia"],
+                resources=whatsapp_resources,
             )
         )
         self.inbound_fn.add_to_role_policy(
             iam.PolicyStatement(
-                actions=["secretsmanager:GetSecretValue"],
+                actions=["ssm:GetParameter"],
                 resources=[
-                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:oerf/whatsapp/access_token-*"
+                    (
+                        f"arn:aws:ssm:{self.region}:{self.account}:parameter"
+                        "/oerf/whatsapp/phone-number-id"
+                    )
                 ],
             )
         )
         # Inbound is the role that resumes a paused execution (ADR-028).
         self._grant_task_token(self.inbound_fn)
         # ADR-019. StopExecution applies to an execution ARN, not the state
-        # machine. The handler that calls it is not implemented; the project
-        # lead owns that logic.
+        # machine. The handler derives that ARN from STATE_MACHINE_ARN and the
+        # execution name ingest used for StartExecution.
         data_stack.cold_chain_state_machine.grant_execution(
             self.inbound_fn, "states:StopExecution"
         )
@@ -502,14 +532,10 @@ class OerfComputeStack(Stack):
             environment={
                 "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
                 "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
-                "STATE_MACHINE_ARN": data_stack.cold_chain_state_machine.state_machine_arn,
-                "INBOUND_QUEUE_URL": self.inbound_queue.queue_url,
             },
         )
         data_stack.incident_table.grant_read_write_data(self.action_handler_fn)
         data_stack.routing_table.grant_read_write_data(self.action_handler_fn)
-        data_stack.cold_chain_state_machine.grant_start_execution(self.action_handler_fn)
-        self.inbound_queue.grant_send_messages(self.action_handler_fn)
 
         self.http_api = apigwv2.HttpApi(
             self,
@@ -519,7 +545,6 @@ class OerfComputeStack(Stack):
                 allow_headers=["Content-Type", "Authorization"],
                 allow_methods=[
                     apigwv2.CorsHttpMethod.GET,
-                    apigwv2.CorsHttpMethod.POST,
                     apigwv2.CorsHttpMethod.OPTIONS,
                 ],
                 allow_origins=["*"],
@@ -537,20 +562,8 @@ class OerfComputeStack(Stack):
             "ActionIntegration", self.action_handler_fn
         )
         self.http_api.add_routes(
-            path="/incidents/trigger",
-            methods=[apigwv2.HttpMethod.POST],
-            integration=action_integration,
-            authorizer=http_authorizer,
-        )
-        self.http_api.add_routes(
             path="/incidents",
             methods=[apigwv2.HttpMethod.GET],
-            integration=action_integration,
-            authorizer=http_authorizer,
-        )
-        self.http_api.add_routes(
-            path="/incidents/{id}/actions",
-            methods=[apigwv2.HttpMethod.POST],
             integration=action_integration,
             authorizer=http_authorizer,
         )
@@ -586,8 +599,7 @@ class OerfComputeStack(Stack):
         data_stack.tenant_table.grant_read_data(self.ingest_fn)
         data_stack.routing_table.grant_read_data(self.ingest_fn)
         data_stack.incident_table.grant_read_write_data(self.ingest_fn)
-        # The placeholder handler does not call StartExecution. The real ingest
-        # (project lead, OERF-201-205) starts this state machine and no other.
+        # Ingest is the only caller of StartExecution. Cancel rebuilds this name.
         data_stack.cold_chain_state_machine.grant_start_execution(self.ingest_fn)
 
         self.ingest_dlq = sqs.Queue(

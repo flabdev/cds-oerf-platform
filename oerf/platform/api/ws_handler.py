@@ -20,8 +20,9 @@ from typing import Any
 import boto3
 
 from oerf.platform.api.claims import DEFAULT_ROLE
+from oerf.platform.observability.logging import get_logger, log
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 ROUTING_TABLE_NAME = os.environ.get("ROUTING_TABLE_NAME", "")
@@ -61,8 +62,14 @@ def get_connection_binding(table, connection_id: str) -> dict[str, Any]:
     """Return the binding the authorizer stored for an authorized connection."""
     try:
         response = table.get_item(Key={"pk": f"WS#{connection_id}", "sk": "METADATA"})
-    except Exception as exc:
-        logger.error("Failed to read metadata for connection %s: %s", connection_id, exc)
+    except Exception:
+        log(
+            logger,
+            logging.ERROR,
+            f"Failed to read metadata for connection {connection_id}",
+            outcome="error",
+            count=1,
+        )
         return {}
     binding = response.get("Item")
     return binding if isinstance(binding, dict) else {}
@@ -102,15 +109,26 @@ def handle_connect(table, event: dict[str, Any], connection_id: str, ttl: int) -
     bound_tenant = str(binding.get("tenant_id") or "")
     if not tenant_id:
         # Fail closed: an unauthorized connection must not receive a usable id.
-        logger.warning("Rejecting connection %s with no authenticated tenant", connection_id)
+        log(
+            logger,
+            logging.WARNING,
+            f"Rejecting connection {connection_id} with no authenticated tenant",
+            outcome="denied",
+            count=1,
+        )
         return {"statusCode": 401, "body": "Unauthorized"}
 
     if bound_tenant and bound_tenant != tenant_id:
-        logger.error(
-            "Rejecting connection %s: authorized tenant %s does not match bound tenant %s",
-            connection_id,
-            tenant_id,
-            bound_tenant,
+        log(
+            logger,
+            logging.ERROR,
+            (
+                f"Rejecting connection {connection_id}: authorized tenant {tenant_id} "
+                f"does not match bound tenant {bound_tenant}"
+            ),
+            tenant_id=tenant_id,
+            outcome="denied",
+            count=1,
         )
         return {"statusCode": 401, "body": "Unauthorized"}
 
@@ -148,12 +166,24 @@ def handle_subscribe(
     binding = get_connection_binding(table, connection_id)
     tenant_id = binding.get("tenant_id")
     if not tenant_id:
-        logger.warning("Rejecting subscribe for unknown connection %s", connection_id)
+        log(
+            logger,
+            logging.WARNING,
+            f"Rejecting subscribe for unknown connection {connection_id}",
+            outcome="denied",
+            count=1,
+        )
         return {"statusCode": 401, "body": "Unauthorized"}
 
     subscription = parse_subscription(event)
     if subscription is None:
-        logger.warning("Rejecting subscribe for connection %s: invalid scope", connection_id)
+        log(
+            logger,
+            logging.WARNING,
+            f"Rejecting subscribe for connection {connection_id}: invalid scope",
+            outcome="denied",
+            count=1,
+        )
         return {"statusCode": 400, "body": "Invalid subscription"}
 
     item = {
@@ -178,12 +208,23 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     request_context = event.get("requestContext", {})
     route_key = request_context.get("routeKey", "$default")
     connection_id = str(request_context.get("connectionId", ""))
-    logger.info("WebSocket route: %s | connectionId: %s", route_key, connection_id)
+    log(
+        logger,
+        logging.INFO,
+        f"WebSocket route: {route_key} | connectionId: {connection_id}",
+        outcome="received",
+    )
 
     table = get_table()
     if table is None:
         # Local runs without a routing table are a no-op, as before.
-        logger.warning("ROUTING_TABLE_NAME not configured, skipping %s", route_key)
+        log(
+            logger,
+            logging.WARNING,
+            f"ROUTING_TABLE_NAME not configured, skipping {route_key}",
+            outcome="skipped",
+            count=1,
+        )
         return {"statusCode": 200, "body": "OK"}
 
     if route_key == "$connect":

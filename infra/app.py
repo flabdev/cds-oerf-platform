@@ -15,7 +15,7 @@ SYNTH_PLACEHOLDER_ACCOUNT = "000000000000"
 DEFAULT_REGION = "us-east-1"
 PLACEHOLDER_DEPLOY_MESSAGE = (
     "Refusing to deploy with the synth placeholder account "
-    "000000000000. Set CDK_DEFAULT_ACCOUNT or context key 'account'."
+    "000000000000. Set context key 'account' or CDK_DEFAULT_ACCOUNT."
 )
 
 
@@ -35,13 +35,23 @@ def _reject_placeholder_deploy(stack: cdk.Stack) -> None:
     )
 
 
+def _resolve_account(app: cdk.App) -> str:
+    """Context ``account`` wins over ``CDK_DEFAULT_ACCOUNT``.
+
+    ``cdk synth -c account=000000000000`` stays on the placeholder even when
+    the process has another account in the environment. Deploy of that
+    placeholder is still rejected.
+    """
+
+    context_account = app.node.try_get_context("account")
+    if isinstance(context_account, str) and context_account.strip():
+        return context_account.strip()
+    return os.environ.get("CDK_DEFAULT_ACCOUNT") or SYNTH_PLACEHOLDER_ACCOUNT
+
+
 app = cdk.App()
 
-account = (
-    os.environ.get("CDK_DEFAULT_ACCOUNT")
-    or app.node.try_get_context("account")
-    or SYNTH_PLACEHOLDER_ACCOUNT
-)
+account = _resolve_account(app)
 region = (
     os.environ.get("CDK_DEFAULT_REGION")
     or app.node.try_get_context("region")

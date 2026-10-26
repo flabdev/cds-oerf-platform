@@ -1,4 +1,4 @@
-name: Deploy CDK Infrastructure
+name: Deploy OERF
 
 on:
   workflow_dispatch:

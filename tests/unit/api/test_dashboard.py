@@ -2,6 +2,8 @@
 
 from datetime import UTC, datetime
 
+import pytest
+
 from oerf.platform.api.dashboard import (
     DashboardServices,
     MemoryActionQueue,
@@ -20,6 +22,7 @@ from tests.unit.support.fake_dynamo import FakeDynamoClient
 CLOCK = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
 
 
+@pytest.mark.security
 def test_incident_list_and_detail_stay_inside_the_claim_tenant() -> None:
     services = _services()
     t1 = Principal("t1", "ops_user", "user-1", True)
@@ -35,12 +38,14 @@ def test_incident_list_and_detail_stay_inside_the_claim_tenant() -> None:
     assert "pk" not in own[1]
 
 
+@pytest.mark.security
 def test_unauthenticated_request_is_rejected() -> None:
     response = handler({"httpMethod": "GET", "path": "/incidents"}, None)
 
     assert response["statusCode"] == 401
 
 
+@pytest.mark.security
 def test_action_is_queued_once_and_carries_no_task_token() -> None:
     services = _services()
     principal = Principal("t1", "ops_user", "user-1", True)
@@ -60,6 +65,7 @@ def test_action_is_queued_once_and_carries_no_task_token() -> None:
     assert "task_token" not in services.queue.messages[0]
 
 
+@pytest.mark.security
 def test_ops_user_cannot_publish_and_admin_publish_is_audited() -> None:
     services = _services()
     ops = Principal("t2", "ops_user", "ops-1", True)
@@ -107,6 +113,7 @@ def test_ops_user_cannot_publish_and_admin_publish_is_audited() -> None:
     assert incident.config_snapshot["excursion_allowance_min"] == 45
 
 
+@pytest.mark.security
 def test_other_tenant_admin_cannot_edit_contacts() -> None:
     services = _services()
     admin = Principal("t1", "tenant_admin", "admin-1", True)

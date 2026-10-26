@@ -30,6 +30,8 @@ _FORBIDDEN = {
 _ACCOUNT = "123456789012"
 _REGION = "us-east-1"
 
+pytestmark = pytest.mark.security
+
 
 def test_runtime_asset_contains_oerf_and_omits_docs_and_tests(tmp_path: Path) -> None:
     app = cdk.App(outdir=str(tmp_path))
