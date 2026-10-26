@@ -27,6 +27,12 @@ _NAMED_FUNCTIONS = {
     "oerf-ingest",
     "oerf-pre-token",
     "oerf-tenant-attribute",
+    "oerf-step-context",
+    "oerf-step-assess",
+    "oerf-step-act",
+    "oerf-step-verify",
+    "oerf-step-qa",
+    "oerf-step-close",
 }
 
 
@@ -88,6 +94,22 @@ def test_alarms_cover_every_dlq_machine_and_lambda(built) -> None:
     assert metrics.count("ExecutionsTimedOut") == len(machines)
     assert metrics.count("Errors") == len(functions)
     _assert_unique_function_alarms_keep_their_ids(alarms, functions)
+    for prefix in (
+        "ChannelRouterFunctionErrors",
+        "EvidenceAnalyzerFunctionErrors",
+        "ReportGeneratorFunctionErrors",
+        "InboundFunctionErrors",
+        "IngestFunctionErrors",
+        "ActionHandlerFunctionErrors",
+        "ColdChainWorkflowStubErrors",
+        "ContextFunctionErrors",
+        "AssessFunctionErrors",
+        "ActFunctionErrors",
+        "VerifyFunctionErrors",
+        "QaFunctionErrors",
+        "CloseFunctionErrors",
+    ):
+        assert any(logical_id.startswith(prefix) for logical_id in alarms), prefix
 
     topic = next(iter(template.find_resources("AWS::SNS::Topic")))
     for alarm in alarms.values():
