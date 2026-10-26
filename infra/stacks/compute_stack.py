@@ -145,14 +145,14 @@ class OerfComputeStack(Stack):
         incident_arn = data_stack.incident_table.table_arn
         tenant_arn = data_stack.tenant_table.table_arn
         # ENG# lives on the incident table. CONTACTENG# is written in the same
-        # transaction as the engagement row, so TransactWriteItems covers both.
+        # transaction as the engagement row. The transaction is authorised by
+        # the item-level actions.
         self.channel_router_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=[
                     "dynamodb:GetItem",
                     "dynamodb:PutItem",
                     "dynamodb:UpdateItem",
-                    "dynamodb:TransactWriteItems",
                 ],
                 resources=[incident_arn],
             )
@@ -161,12 +161,6 @@ class OerfComputeStack(Stack):
             iam.PolicyStatement(
                 actions=["dynamodb:GetItem"],
                 resources=[tenant_arn],
-            )
-        )
-        self.channel_router_fn.add_to_role_policy(
-            iam.PolicyStatement(
-                actions=["dynamodb:TransactWriteItems"],
-                resources=[data_stack.routing_table.table_arn],
             )
         )
         if ses_source_email:
