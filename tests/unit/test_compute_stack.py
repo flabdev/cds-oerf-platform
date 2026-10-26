@@ -11,8 +11,10 @@ import aws_cdk as cdk
 import pytest
 from aws_cdk.assertions import Template
 
+from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
+from infra.stacks.observability import OerfObservabilityStack, lambda_functions
 
 ACCOUNT = "123456789012"
 REGION = "us-east-1"
@@ -392,6 +394,130 @@ def test_no_role_is_granted_kms(template: Template) -> None:
         names = [action] if isinstance(action, str) else list(action)
         found.extend(name for name in names if name.startswith("kms:"))
     assert found == []
+
+
+# Service Authorization Reference actions for dynamodb. TransactWriteItems is
+# an API call, not an IAM action; the item operations authorise the transaction.
+_KNOWN_DYNAMODB_ACTIONS = {
+    "dynamodb:GetItem",
+    "dynamodb:PutItem",
+    "dynamodb:UpdateItem",
+    "dynamodb:DeleteItem",
+    "dynamodb:Query",
+    "dynamodb:Scan",
+    "dynamodb:BatchGetItem",
+    "dynamodb:BatchWriteItem",
+    "dynamodb:ConditionCheckItem",
+    "dynamodb:DescribeStream",
+    "dynamodb:GetRecords",
+    "dynamodb:GetShardIterator",
+    "dynamodb:ListStreams",
+    "dynamodb:DescribeTable",
+}
+
+
+def _action_strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        names: list[str] = []
+        for item in value:
+            names.extend(_action_strings(item))
+        return names
+    if isinstance(value, dict):
+        names = []
+        for item in value.values():
+            names.extend(_action_strings(item))
+        return names
+    return []
+
+
+def _policy_statements(template: Template):
+    resources = template.to_json().get("Resources", {})
+    for resource in resources.values():
+        props = resource.get("Properties") or {}
+        documents = []
+        document = props.get("PolicyDocument")
+        if isinstance(document, dict):
+            documents.append(document)
+        for inline in props.get("Policies") or []:
+            if isinstance(inline, dict) and isinstance(inline.get("PolicyDocument"), dict):
+                documents.append(inline["PolicyDocument"])
+        for document in documents:
+            statement = document.get("Statement", [])
+            statements = [statement] if isinstance(statement, dict) else statement
+            for item in statements:
+                if isinstance(item, dict):
+                    yield item
+
+
+def _synthesized_templates() -> dict[str, Template]:
+    """Every stack the five synths can emit, with the optional features on."""
+    app = cdk.App(
+        context={
+            "dashboard:enabled": "true",
+            "whatsapp:wabaId": "waba-0000000000000000",
+            "agentcore:enabled": "true",
+            "demo:seedDevices": "true",
+        }
+    )
+    env = cdk.Environment(account=ACCOUNT, region=REGION)
+    data = OerfDataStack(app, "OerfDataStack", env=env)
+    compute = OerfComputeStack(app, "OerfComputeStack", data_stack=data, env=env)
+    api = OerfApiStack(
+        app,
+        "OerfApiStack",
+        data_stack=data,
+        inbound_queue=compute.inbound_queue,
+        websocket_url=compute.ws_stage.url,
+        env=env,
+    )
+    observability = OerfObservabilityStack(
+        app,
+        "OerfObservabilityStack",
+        functions=lambda_functions(data, compute, api),
+        dead_letter_queues=[
+            compute.inbound_dlq,
+            compute.ingest_dlq,
+            compute.stream_dlq,
+        ],
+        state_machines=[
+            data.cold_chain_state_machine,
+            data.engage_party_state_machine,
+        ],
+        channel_router_log_group=compute.channel_router_fn.log_group,
+        env=env,
+    )
+    return {
+        stack.stack_name: Template.from_stack(stack)
+        for stack in (data, compute, api, observability)
+    }
+
+
+@pytest.mark.security
+def test_synthesized_stacks_use_only_known_dynamodb_actions() -> None:
+    """A DynamoDB IAM action outside the known list fails the synth review."""
+
+    saved = _without_synth_env()
+    try:
+        templates = _synthesized_templates()
+    finally:
+        _restore_env(saved)
+    assert set(templates) == {
+        "OerfDataStack",
+        "OerfComputeStack",
+        "OerfApiStack",
+        "OerfObservabilityStack",
+    }
+    offenders = []
+    for name, template in templates.items():
+        for statement in _policy_statements(template):
+            for action in _action_strings(statement.get("Action", [])):
+                if action.startswith("dynamodb:") and action not in _KNOWN_DYNAMODB_ACTIONS:
+                    offenders.append(f"{name} {action}")
+    assert offenders == [], (
+        "DynamoDB IAM action is not in the known allow-list: " + ", ".join(offenders)
+    )
 
 
 @pytest.mark.security
