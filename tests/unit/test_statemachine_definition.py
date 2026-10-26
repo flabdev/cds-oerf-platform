@@ -2,14 +2,26 @@
 
 These tests read the state machine definition directly so a broken transition
 target or an accidentally un-stubbed task fails fast, without needing AWS.
+The Step Functions CLI check is marked ``aws`` and is skipped when the CLI
+is not configured.
 """
 
 import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
+
+import pytest
 
 from domains.cold_chain_excursion.steps.workflow_stub import handler
 from infra.step_functions import (
+    ASL_ENGAGE_PLACEHOLDERS,
     ASL_STEP_PLACEHOLDERS,
+    CHANNEL_ROUTER_NAME,
+    ENGAGE_FUNCTION_NAMES,
     STEP_FUNCTION_NAMES,
     WIRED_STATES,
     function_arn,
@@ -227,6 +239,181 @@ def test_every_nested_engagement_transition_points_to_a_declared_state() -> None
             assert target in states, f"{name} -> {target}"
 
 
+def _nested_state_machines(state_name: str, state: dict) -> list[tuple[str, dict]]:
+    """Parallel branches and Map processors are their own state machines."""
+
+    nested: list[tuple[str, dict]] = []
+    branches = state.get("Branches")
+    if isinstance(branches, list):
+        for index, branch in enumerate(branches):
+            if isinstance(branch, dict):
+                nested.append((f"{state_name}/Branches[{index}]", branch))
+    for field in ("ItemProcessor", "Iterator"):
+        processor = state.get(field)
+        if isinstance(processor, dict):
+            nested.append((f"{state_name}/{field}", processor))
+    return nested
+
+
+def reachability_problems(machine: dict, label: str) -> list[str]:
+    """Missing targets and states Step Functions cannot reach from StartAt.
+
+    Each Parallel branch and each Map ``ItemProcessor`` (or legacy ``Iterator``)
+    is a separate graph. A state is reachable only by ``Next``, ``Default``,
+    ``Choices[].Next``, or ``Catch[].Next`` from ``StartAt`` of that graph.
+    """
+
+    problems: list[str] = []
+    states = machine.get("States")
+    if not isinstance(states, dict):
+        return [f"{label}: missing States object"]
+
+    for name, state in states.items():
+        if not isinstance(state, dict):
+            problems.append(f"{label}: {name} is not a state object")
+            continue
+        for target in transition_targets(state):
+            if target not in states:
+                problems.append(f"{label}: {name} -> {target} (state does not exist)")
+        for nested_label, nested in _nested_state_machines(name, state):
+            problems.extend(reachability_problems(nested, f"{label} > {nested_label}"))
+
+    start = machine.get("StartAt")
+    reachable: set[str] = set()
+    if not isinstance(start, str) or start not in states:
+        problems.append(f"{label}: StartAt {start!r} is not a state")
+    else:
+        pending = [start]
+        while pending:
+            name = pending.pop()
+            if name in reachable:
+                continue
+            reachable.add(name)
+            state = states[name]
+            if not isinstance(state, dict):
+                continue
+            for target in transition_targets(state):
+                if target in states and target not in reachable:
+                    pending.append(target)
+
+    for name in states:
+        if name not in reachable:
+            problems.append(f"{label}: {name} is not reachable")
+    return problems
+
+
+_PLACEHOLDER_REGION = "us-east-1"
+_PLACEHOLDER_ACCOUNT = "000000000000"
+_PLACEHOLDER_TOKEN = re.compile(r"__[A-Z0-9_]+__")
+
+
+def _placeholder_lambda_arn(name: str) -> str:
+    return function_arn(_PLACEHOLDER_REGION, _PLACEHOLDER_ACCOUNT, name)
+
+
+def _definition_with_placeholder_arns(text: str, *, engagement: bool) -> str:
+    if engagement:
+        for placeholder, phase in ASL_ENGAGE_PLACEHOLDERS.items():
+            text = text.replace(
+                placeholder, _placeholder_lambda_arn(ENGAGE_FUNCTION_NAMES[phase])
+            )
+        text = text.replace(
+            "__ENGAGEMENT_STUB_ARN__",
+            _placeholder_lambda_arn("oerf-workflow-stub"),
+        )
+        text = text.replace(
+            "__CHANNEL_ROUTER_ARN__", _placeholder_lambda_arn(CHANNEL_ROUTER_NAME)
+        )
+        return text
+    for placeholder, phase in ASL_STEP_PLACEHOLDERS.items():
+        text = text.replace(placeholder, _placeholder_lambda_arn(STEP_FUNCTION_NAMES[phase]))
+    text = text.replace("__STUB_ARN__", _placeholder_lambda_arn("oerf-workflow-stub"))
+    text = text.replace(
+        "__ENGAGE_PARTY_ARN__",
+        (
+            f"arn:aws:states:{_PLACEHOLDER_REGION}:{_PLACEHOLDER_ACCOUNT}:"
+            "stateMachine:oerf-engage-party"
+        ),
+    )
+    return text
+
+
+def _validate_with_step_functions(definition: str, label: str) -> dict:
+    if shutil.which("aws") is None:
+        pytest.skip("AWS CLI is not on PATH; install aws to validate the state machines")
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".json", delete=False, encoding="utf-8"
+    ) as handle:
+        handle.write(definition)
+        definition_path = handle.name
+    env = os.environ.copy()
+    env["AWS_EC2_METADATA_DISABLED"] = "true"
+    env.setdefault("AWS_REGION", _PLACEHOLDER_REGION)
+    env.setdefault("AWS_DEFAULT_REGION", _PLACEHOLDER_REGION)
+    completed = subprocess.run(
+        [
+            "aws",
+            "stepfunctions",
+            "validate-state-machine-definition",
+            "--definition",
+            f"file://{definition_path}",
+            "--type",
+            "STANDARD",
+            "--region",
+            _PLACEHOLDER_REGION,
+            "--output",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    Path(definition_path).unlink(missing_ok=True)
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        lowered = detail.lower()
+        if any(
+            token in lowered
+            for token in (
+                "unable to locate credentials",
+                "could not find credentials",
+                "the config profile",
+                "expiredtoken",
+                "token has expired",
+                "error when retrieving token",
+            )
+        ):
+            pytest.skip(f"AWS CLI is not configured: {detail}")
+        raise AssertionError(f"{label}: AWS CLI failed:\n{detail}")
+    body = json.loads(completed.stdout)
+    # CLI 2.36 reports ``result`` OK/FAIL. The API field is ``validationStatus``.
+    status = body.get("validationStatus", body.get("result"))
+    diagnostics = body.get("diagnostics") or []
+    errors = [item for item in diagnostics if item.get("severity") == "ERROR"]
+    assert status in {"VALID", "OK"} and not errors, (
+        f"{label} was {status}:\n" + json.dumps(body, indent=2)
+    )
+    return body
+
+
+@pytest.mark.aws
+def test_step_functions_accepts_both_definitions() -> None:
+    """Live syntax check. CI excludes this marker; it needs a configured AWS CLI."""
+
+    files = (
+        (ASL_PATH, False),
+        (ASL_PATH.parent / "engage_party.asl.json", True),
+    )
+    for path, engagement in files:
+        text = _definition_with_placeholder_arns(
+            path.read_text(encoding="utf-8"), engagement=engagement
+        )
+        leftover = _PLACEHOLDER_TOKEN.findall(text)
+        assert not leftover, f"{path.name} still has placeholders: {leftover}"
+        _validate_with_step_functions(text, path.name)
+
+
 def test_human_approval_uses_bounded_task_token_and_timeout_route() -> None:
     states = load_definition()["States"]
     approval = states["Approval"]
@@ -404,21 +591,14 @@ def test_definition_guards_against_orphaned_executions() -> None:
     definition = load_definition()
     assert definition["TimeoutSeconds"] == 86400
 
-    # Every declared state must be reachable from StartAt; AWS rejects a deploy
-    # with MISSING_TRANSITION_TARGET for orphaned states, and a `Next`-only walk
-    # of a hand-edited graph is exactly how the cancel gates were bypassed.
-    states = definition["States"]
-    reachable = set()
-    pending = [definition["StartAt"]]
-    while pending:
-        name = pending.pop()
-        if name in reachable or name not in states:
-            continue
-        reachable.add(name)
-        pending.extend(transition_targets(states[name]))
-
-    orphans = sorted(set(states) - reachable)
-    assert not orphans, f"unreachable states: {orphans}"
+    # Walk Next, Default, Choices[].Next, and Catch[].Next from StartAt.
+    # Nested Parallel branches and Map ItemProcessor/Iterator are separate
+    # graphs. A transition to a missing state is reported, not skipped.
+    # engage_party.asl.json is the same kind of definition.
+    problems = reachability_problems(definition, ASL_PATH.name)
+    engagement = json.loads((ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8"))
+    problems.extend(reachability_problems(engagement, "engage_party.asl.json"))
+    assert not problems, "ASL reachability:\n" + "\n".join(problems)
 
 
 # ---------------------------------------------------------------------------
