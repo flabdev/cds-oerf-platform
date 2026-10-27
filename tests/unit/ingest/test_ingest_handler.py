@@ -292,7 +292,7 @@ def test_reading_values_are_not_logged(capsys: pytest.CaptureFixture[str]) -> No
     text = capsys.readouterr().out
 
     assert "tenant=t1" in text
-    assert "shipment=PH-1" in text
+    assert "shipment=PH-1 incident=" in text
     assert "temperature_c" not in text
     assert "17.4" not in text
     assert "78.3" not in text
