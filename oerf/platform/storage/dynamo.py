@@ -83,8 +83,22 @@ def device_pk(device_id: str) -> str:
     return f"DEVICE#{device_id}"
 
 
+def canonical_e164(value: str) -> str:
+    """Return one E.164 form. Digits with or without ``+`` become ``+`` plus digits.
+
+    End User Messaging forwards the WhatsApp ``from`` as digits. The contact
+    registry and address rows store the same number with a leading ``+``.
+    """
+
+    compact = value.strip().replace(" ", "").replace("-", "")
+    digits = compact[1:] if compact.startswith("+") else compact
+    if digits.isdigit() and 8 <= len(digits) <= 15:
+        return f"+{digits}"
+    return value.strip()
+
+
 def phone_pk(e164: str) -> str:
-    return f"PHONE#{e164}"
+    return f"PHONE#{canonical_e164(e164)}"
 
 
 def contact_sk(tenant_id: str, contact_id: str) -> str:

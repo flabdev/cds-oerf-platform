@@ -72,7 +72,12 @@ from oerf.platform.channels.registry import (
 )
 from oerf.platform.inbound.dedupe import MessageDedupePort
 from oerf.platform.inbound.dynamo import DynamoMessageDedupe
-from oerf.platform.inbound.normalize import NormalizationError, NormalizedMessage, normalize_inbound
+from oerf.platform.inbound.normalize import (
+    NormalizationError,
+    NormalizedMessage,
+    normalize_inbound,
+    whatsapp_event_body,
+)
 from oerf.platform.incidents.dynamo import DynamoIncidentStore
 from oerf.platform.incidents.repository import (
     TERMINAL_STATES,
@@ -398,7 +403,17 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
     """Process one provider message or dashboard action; return its disposition."""
     if body.get("channel") == "dashboard":
         return _process_dashboard(body, dependencies)
-    message, context_id = _normalize_provider(body)
+    prepared = whatsapp_event_body(body)
+    if prepared is None:
+        log(
+            logger,
+            logging.INFO,
+            "Ignoring WhatsApp event with no inbound message",
+            outcome="ignored",
+            count=1,
+        )
+        return "ignored"
+    message, context_id = _normalize_provider(prepared)
     received = _parse_received_at(message.received_at)
     if dependencies.dedupe.register(
         message_id=message.provider_msg_id,

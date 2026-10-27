@@ -37,6 +37,16 @@ def test_a_tenant_number_does_not_include_another_tenant(registry) -> None:
     assert registry.get_contact("t2", "C-T1-DRV") is None
 
 
+def test_digits_without_a_plus_resolve_the_same_contact(registry) -> None:
+    registry.register_contact("t1", "C-T1-DRV", "driver", "+15550100001")
+
+    resolved = registry.resolve_sender("15550100001")
+
+    assert resolved.unknown is False
+    assert resolved.e164 == "+15550100001"
+    assert resolved.matches[0].contact_id == "C-T1-DRV"
+
+
 def test_unknown_sender_is_explicit(registry) -> None:
     resolved = registry.resolve_sender("+910000000999")
 
