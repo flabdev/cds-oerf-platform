@@ -147,6 +147,7 @@ def test_first_breach_waits_for_configured_threshold_and_second_starts_once() ->
     start_input = deps.executions.calls[0]["input"]
     assert start_input["tenant_id"] == "t1"
     assert start_input["shipment_id"] == "PH-1"
+    assert start_input["cancel_requested"] is False
     assert start_input["workflow"]["trigger"]["temperature_c"] == 9
     incident = deps.incidents.get("t1", second["incident_id"])
     assert incident.config_snapshot["tenant_id"] == "t1"

@@ -80,13 +80,28 @@ make reset-demo TENANT=t1 PROFILE=cds-oerf-poc
 
 ## Run the PH-2841 demo
 
-Reset the tenant first. A reset does not clear `INGEST#` rows, so a replayed reading id is ignored for 7 days. Publish a new EventBridge id each time. Direct Lambda invoke of the same JSON is deduped the same way.
+Reset the tenant first. A reset does not clear `INGEST#` rows, so a replayed reading id is ignored for 7 days. Each `put-events` call gets its own EventBridge id. Direct Lambda invoke of the same JSON is deduped the same way.
+
+`debounce_readings` is 2. Publish two readings above 8 °C within 10 minutes. One reading is accepted and opens no incident. The device `RF-7781` resolves to tenant `t1` and shipment `PH-2841`.
 
 1. `make reset-demo TENANT=t1 PROFILE=cds-oerf-poc`
-2. Publish one `sim.reefer` / `TemperatureReading` with `aws events put-events`. Use a new `id`. The device `RF-7781` resolves to tenant `t1` and shipment `PH-2841`.
-3. Watch `oerf-cold-chain` until `EngageDriverDiagnosis` is waiting on the child, and the child is waiting on `SendViaRouter`.
-4. Reply. With channels mocked, `python -m scripts.demo_reply --profile cds-oerf-poc --tenant t1 --shipment PH-2841 --role driver --button running`. With `channels:live` true, the driver replies on WhatsApp to template `oerf_driver_checkin`. The script reads the address from SSM `/oerf/demo-numbers/t1/driver` and prints the shipment and the message id, not the number.
-5. The child ends `answered` / `unit_running`. The parent takes the default of `NeedApproval?` into `SecureFacility` (still the stub), then real `Act`. The next state is `VerifyLoop`, which is unchanged and does not close this excursion by itself.
+2. Publish the first reading, 8.1 °C, thirty seconds ago:
+
+```bash
+PREV=$(date -u -v-30S +%Y-%m-%dT%H:%M:%SZ)
+aws events put-events --profile cds-oerf-poc --region us-east-1 --entries "$(PREV="$PREV" python3 -c 'import json,os; ts=os.environ["PREV"]; detail={"tenant_id":"t1","shipment_id":"PH-2841","device_id":"RF-7781","ts":ts,"temperature_c":8.1,"lat":17.44,"lon":78.38,"seq":1}; print(json.dumps([{"Source":"sim.reefer","DetailType":"TemperatureReading","EventBusName":"oerf-events","Time":ts,"Detail":json.dumps(detail)}]))')"
+```
+
+3. Publish the second reading, 8.6 °C, now. It must be within 10 minutes of step 2:
+
+```bash
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+aws events put-events --profile cds-oerf-poc --region us-east-1 --entries "$(NOW="$NOW" python3 -c 'import json,os; ts=os.environ["NOW"]; detail={"tenant_id":"t1","shipment_id":"PH-2841","device_id":"RF-7781","ts":ts,"temperature_c":8.6,"lat":17.44,"lon":78.38,"seq":2}; print(json.dumps([{"Source":"sim.reefer","DetailType":"TemperatureReading","EventBusName":"oerf-events","Time":ts,"Detail":json.dumps(detail)}]))')"
+```
+
+4. Watch `oerf-cold-chain` until `EngageDriverDiagnosis` is waiting on the child, and the child is waiting on `SendViaRouter`.
+5. Reply. With channels mocked, `python -m scripts.demo_reply --profile cds-oerf-poc --tenant t1 --shipment PH-2841 --role driver --button running`. With `channels:live` true, the driver replies on WhatsApp to template `oerf_driver_checkin`. The script reads the address from SSM `/oerf/demo-numbers/t1/driver` and prints the shipment and the message id, not the number.
+6. The child ends `answered` / `unit_running`. The parent takes the default of `NeedApproval?` into `SecureFacility` (still the stub), then real `Act`. The next state is `VerifyLoop`, which is unchanged and does not close this excursion by itself.
 
 `demo_reply` only posts a WhatsApp provider message to the inbound queue. It does not send a dashboard action and it does not call `SendTaskSuccess`.
 

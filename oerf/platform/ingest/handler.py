@@ -323,6 +323,7 @@ def handler(
                 "tenant_id": tenant_id,
                 "incident_id": incident.incident_id,
                 "shipment_id": shipment_id,
+                "cancel_requested": False,
                 "context": {},
                 "workflow": {
                     "domain": DOMAIN,
