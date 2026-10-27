@@ -1,9 +1,12 @@
 import { useMemo, useState } from "react";
 
 import {
+  actionNotice,
   actionRequest,
   allowanceDraft,
   incidentListView,
+  incidentView,
+  needsWaitingEngagement,
   rankingNote,
   sessionView,
   shipmentMark,
@@ -89,14 +92,16 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
       })
     : [];
   const current = rows.find((item) => item.incident_id === selectedId) || rows[0] || null;
+  const view = incidentView(current);
   const initial = session.displayName.slice(0, 1).toUpperCase();
 
   async function submit(action, optionId) {
     if (!current) {
       return;
     }
-    if ((action === "confirm_transfer" || action === "pick_option") && !current.engagement_id) {
-      setNotice("This shipment has no waiting engagement");
+    const engagement = typeof current.engagement_id === "string" ? current.engagement_id.trim() : "";
+    if (needsWaitingEngagement(action) && !engagement) {
+      setNotice(actionNotice(action, { missingEngagement: true }));
       return;
     }
     const actionId = globalThis.crypto?.randomUUID?.() || `${action}-${Date.now()}`;
@@ -105,13 +110,13 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
       action,
       optionId,
       actionId,
-      current.engagement_id,
+      engagement,
     );
     try {
       await onSubmit?.(request);
-      setNotice(`Queued ${request.body.action.replaceAll("_", " ")}`);
+      setNotice(actionNotice(action, { queued: true }));
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "The action was not queued");
+      setNotice(error instanceof Error ? error.message : actionNotice(action));
     }
   }
 
@@ -147,7 +152,7 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
             <button
               type="button"
               className={section === "incidents" ? "nav-item active" : "nav-item"}
-              onClick={() => setSection("incidents")}
+              onClick={() => { setSection("incidents"); setNotice(""); }}
             >
               <span className="dot teal" aria-hidden="true" />
               {sidebarOpen ? <span>Incidents</span> : <span className="sr-only">Incidents</span>}
@@ -156,7 +161,7 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
             <button
               type="button"
               className={section === "allowance" ? "nav-item active" : "nav-item"}
-              onClick={() => setSection("allowance")}
+              onClick={() => { setSection("allowance"); setNotice(""); }}
             >
               <span className="dot amber" aria-hidden="true" />
               {sidebarOpen ? <span>Allowance</span> : <span className="sr-only">Allowance</span>}
@@ -164,7 +169,7 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
             <button
               type="button"
               className={section === "actions" ? "nav-item active" : "nav-item"}
-              onClick={() => setSection("actions")}
+              onClick={() => { setSection("actions"); setNotice(""); }}
             >
               <span className="dot rose" aria-hidden="true" />
               {sidebarOpen ? <span>Actions</span> : <span className="sr-only">Actions</span>}
@@ -247,6 +252,7 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
                     className={current?.incident_id === item.incident_id ? "row selected" : "row"}
                     onClick={() => {
                       setSelectedId(item.incident_id);
+                      setNotice("");
                       onSelect?.(item.incident_id);
                     }}
                   >
@@ -278,7 +284,6 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
               <button type="button" disabled={!current} onClick={() => submit("confirm_transfer")}>Confirm transfer</button>
               <button type="button" disabled={!current} onClick={() => submit("pick_option", current?.recommendation)}>Pick option</button>
               <button type="button" className="send" disabled={!current} onClick={() => submit("cancel")}>Cancel</button>
-              {notice ? <p className="note">{notice}</p> : null}
             </div>
           ) : null}
           {section === "allowance" ? (
@@ -299,7 +304,6 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
               ) : (
                 <p>Allowance editing is available to a tenant admin on t2.</p>
               )}
-              {notice ? <p className="note">{notice}</p> : null}
             </div>
           ) : null}
         </section>
@@ -316,7 +320,9 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
                   </div>
                 </div>
                 <div className="detail-tools">
-                  <span className="status-pill">{current.engagement_status}</span>
+                  {view.engagementStatus ? (
+                    <span className="status-pill">{view.engagementStatus}</span>
+                  ) : null}
                 </div>
               </header>
               <div className="thread" id="shipment">
@@ -324,32 +330,46 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
                 <div className="stats">
                   <div>
                     <span>Allowance left</span>
-                    <strong>{current.allowance_remaining} min</strong>
+                    <strong>{view.allowanceLabel}</strong>
                   </div>
                   <div>
                     <span>Evidence</span>
-                    <strong>{current.evidence?.fault_code || "none"}</strong>
+                    <strong>{view.evidenceLabel}</strong>
                   </div>
                   <div>
                     <span>Recommendation</span>
-                    <strong>{current.recommendation || "Pending"}</strong>
+                    <strong>{view.recommendationLabel}</strong>
                   </div>
                 </div>
-                <svg className="chart" viewBox="0 0 120 40" role="img" aria-label="Temperature">
-                  <polyline fill="none" stroke="currentColor" points="0,30 40,12 80,8 120,18" />
+                <svg className="chart" viewBox="0 0 128 52" role="img" aria-label={`Temperature ${view.chart.unit}`}>
+                  <rect className="band" x="22" y={view.chart.bandY} width="100" height={view.chart.bandHeight} />
+                  {view.chart.ticks.map((tick) => (
+                    <text key={`${tick.label}-${tick.y}`} x="0" y={tick.y}>{tick.label}</text>
+                  ))}
+                  {view.chart.polyline ? (
+                    <polyline fill="none" stroke="currentColor" points={view.chart.polyline} />
+                  ) : null}
+                  <text className="unit" x="108" y="8">{view.chart.unit}</text>
                 </svg>
                 <ul className="options">
-                  {(current.options || []).map((option) => (
+                  {view.options.map((option) => (
                     <li key={option.id}>
                       {option.id}
                       <span>
-                        {option.projected_minutes != null ? `${option.projected_minutes} min · ` : ""}
+                        {option.spare_minutes != null ? `${option.spare_minutes} min spare · ` : ""}
+                        {option.spare_minutes == null && option.projected_minutes != null
+                          ? `${option.projected_minutes} min · `
+                          : ""}
                         {option.feasible ? "feasible" : "infeasible"}
                       </span>
                     </li>
                   ))}
                 </ul>
-                <p className="timeline">Timeline {(current.timeline || []).join(" · ")}</p>
+                <ul className="timeline">
+                  {view.timeline.map((entry) => (
+                    <li key={entry}>{entry}</li>
+                  ))}
+                </ul>
               </div>
               <form className="composer" id="actions" onSubmit={(event) => event.preventDefault()}>
                 <button type="button" onClick={() => submit("confirm_transfer")}>Confirm transfer</button>

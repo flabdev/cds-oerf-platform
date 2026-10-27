@@ -293,16 +293,7 @@ def _detail(
     item = services.queries.get_incident(principal.tenant_id or "", incident_id)
     if item is None:
         return 404, {"error": "not_found"}
-    return 200, {
-        "incident_id": item.get("incident_id"),
-        "tenant_id": item.get("tenant_id"),
-        "shipment_id": item.get("shipment_id"),
-        "state": item.get("state"),
-        "reason": item.get("reason") or "",
-        "opened_at": item.get("opened_at") or "",
-        "config_version": item.get("config_version"),
-        "config_snapshot": item.get("config_snapshot"),
-    }
+    return 200, _detail_body(item)
 
 
 def _action(
@@ -513,6 +504,42 @@ def _audit(
             "at": services.clock().strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
     )
+
+
+def _detail_body(item: dict[str, Any]) -> dict[str, Any]:
+    """The desk detail. Private step output and engagement documents stay off."""
+
+    recommendation = item.get("recommendation")
+    if not isinstance(recommendation, dict):
+        recommendation = None
+    options = item.get("options")
+    if not isinstance(options, list):
+        options = recommendation["options"] if recommendation else []
+    status = item.get("engagement_status")
+    engagement = item.get("engagement_id")
+    return {
+        "incident_id": item.get("incident_id"),
+        "tenant_id": item.get("tenant_id"),
+        "shipment_id": item.get("shipment_id"),
+        "state": item.get("state"),
+        "stage": item.get("stage") or item.get("state"),
+        "version": item.get("version") if isinstance(item.get("version"), int) else 1,
+        "reason": item.get("reason") or "",
+        "opened_at": item.get("opened_at") or "",
+        "config_version": item.get("config_version"),
+        "config_snapshot": item.get("config_snapshot"),
+        "allowance_remaining": item.get("allowance_remaining"),
+        "range_c": item.get("range_c"),
+        "evidence": item.get("evidence")
+        if isinstance(item.get("evidence"), dict)
+        else {"fault_codes": []},
+        "recommendation": recommendation,
+        "options": options,
+        "engagement_id": engagement if isinstance(engagement, str) and engagement.strip() else None,
+        "engagement_status": status if isinstance(status, str) and status.strip() else None,
+        "timeline": item.get("timeline") if isinstance(item.get("timeline"), list) else [],
+        "readings": item.get("readings") if isinstance(item.get("readings"), list) else [],
+    }
 
 
 def _summary_row(item: dict[str, Any]) -> dict[str, Any]:
