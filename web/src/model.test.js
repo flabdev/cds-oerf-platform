@@ -9,9 +9,11 @@ import {
   incidentListView,
   incidentView,
   needsWaitingEngagement,
+  oneDecimal,
   rankingNote,
   sessionView,
   temperatureChart,
+  terminalNote,
 } from "./model.js";
 import { presentIncident } from "./session.js";
 
@@ -43,6 +45,16 @@ test("incident list covers loading, empty, error, and a shipment", () => {
     { incident_id: "INC-1", shipment_id: "PH-2841", state: "ASSESSING" },
   ]);
   assert.equal(ready.incidents[0].shipment_id, "PH-2841");
+  const open = incidentListView([
+    { incident_id: "INC-1", state: "IN_TRANSIT" },
+    { incident_id: "INC-2", state: "CANCELLED" },
+    { incident_id: "INC-3", state: "CLOSED" },
+  ]);
+  assert.deepEqual(open.incidents.map((item) => item.incident_id), ["INC-1"]);
+  assert.equal(incidentListView([{ incident_id: "INC-2", state: "CANCELLED" }]).state, "empty");
+  assert.equal(terminalNote("CANCELLED"), "This incident is cancelled");
+  assert.equal(terminalNote("CLOSED"), "This incident is closed");
+  assert.equal(terminalNote("IN_TRANSIT"), "");
 });
 
 test("an action is a post with the client ids and no task token", () => {
@@ -66,7 +78,7 @@ test("a live detail maps the response and the chart uses the readings", () => {
     allowance_remaining: null,
     evidence: { fault_codes: ["AL02"] },
     recommendation: { recommended_option: "FACILITY_A" },
-    options: [{ id: "FACILITY_A", spare_minutes: 12.4, feasible: true }],
+    options: [{ id: "FACILITY_A", spare_minutes: 12.44, feasible: true }],
     engagement_status: "",
     timeline: [{ at: "2026-10-20T10:16:00Z", from_state: "OPEN", to_state: "DIAGNOSING" }],
     readings: [
@@ -77,19 +89,39 @@ test("a live detail maps the response and the chart uses the readings", () => {
   });
   const view = incidentView(presented);
   assert.equal(view.allowanceLabel, "—");
+  assert.equal(incidentView({ allowance_remaining: 41.94 }).allowanceLabel, "41.9 min");
+  assert.equal(oneDecimal(45), "45.0");
+  assert.equal(oneDecimal(null), null);
   assert.equal(view.evidenceLabel, "AL02");
   assert.equal(view.recommendationLabel, "FACILITY_A");
-  assert.equal(view.options[0].spare_minutes, 12.4);
+  assert.equal(view.options[0].spareLabel, "12.4");
   assert.equal(view.engagementStatus, "");
-  assert.equal(presented.timeline[0], "10:16 OPEN → DIAGNOSING");
+  const local = presentIncident({
+    opened_at: "2026-10-20T10:16:00Z",
+    timeline: [{ at: "2026-10-20T10:16:00Z", from_state: "OPEN", to_state: "DIAGNOSING" }],
+  }, "America/New_York");
+  assert.equal(local.time, "06:16");
+  assert.equal(local.timeline[0], "06:16 OPEN → DIAGNOSING");
   assert.equal(view.chart.unit, "°C");
   assert.deepEqual(view.chart.band, [2, 8]);
   assert.deepEqual(view.chart.points.map((point) => point.temperature_c), [9.1, 7.4]);
   assert.equal(view.chart.polyline, view.chart.points.map((point) => `${point.x},${point.y}`).join(" "));
+  assert.ok(view.chart.points[1].x - view.chart.points[0].x >= 14);
+  assert.ok(view.chart.ticks.some((tick) => tick.label === "2"));
+  assert.ok(view.chart.ticks.some((tick) => tick.label === "8"));
+  const close = temperatureChart([
+    { ts: "2026-10-20T10:00:00Z", temperature_c: 9 },
+    { ts: "2026-10-20T10:00:20Z", temperature_c: 9.2 },
+  ]);
+  assert.equal(close.points.length, 2);
+  assert.ok(close.points[1].x - close.points[0].x >= 13.9);
+  assert.ok(close.polyline.split(" ").length === 2);
   const empty = temperatureChart([]);
   assert.equal(empty.polyline, "");
   assert.equal(empty.empty, true);
   assert.deepEqual(empty.band, [2, 8]);
+  assert.ok(empty.ticks.some((tick) => tick.label === "2"));
+  assert.ok(empty.ticks.some((tick) => tick.label === "8"));
 });
 
 test("cancel does not need a waiting engagement", () => {

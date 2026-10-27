@@ -103,17 +103,35 @@ export async function sendDashboard(apiUrl, token, request, fetchImpl = fetch) {
   }, fetchImpl);
 }
 
-export function presentIncident(item) {
-  const timeline = (item.timeline || []).map(presentTimelineEntry).filter(Boolean);
+export function localTime(value, timeZone) {
+  if (typeof value !== "string" || !value.trim()) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    const match = value.match(/^(\d{2}:\d{2})/);
+    return match ? match[1] : "";
+  }
+  return new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone,
+  }).format(date);
+}
+
+export function presentIncident(item, timeZone) {
+  const timeline = (item.timeline || []).map((entry) => presentTimelineEntry(entry, timeZone)).filter(Boolean);
+  const clock = localTime(item.time, timeZone) || localTime(item.opened_at, timeZone);
   return {
     ...item,
     timeline,
     readings: Array.isArray(item.readings) ? item.readings : [],
-    time: item.time || "",
+    time: clock || (typeof item.time === "string" ? item.time : ""),
   };
 }
 
-function presentTimelineEntry(entry) {
+function presentTimelineEntry(entry, timeZone) {
   if (typeof entry === "string") {
     return entry;
   }
@@ -127,18 +145,10 @@ function presentTimelineEntry(entry) {
     const to = typeof entry.to_state === "string" && entry.to_state.trim()
       ? entry.to_state.trim()
       : (typeof entry.state === "string" ? entry.state : "—");
-    const at = clock(entry.at);
+    const at = localTime(entry.at, timeZone);
     return [at, `${from} → ${to}`].filter(Boolean).join(" ");
   }
   return [entry.state, entry.reason].filter(Boolean).join(" ");
-}
-
-function clock(value) {
-  if (typeof value !== "string") {
-    return "";
-  }
-  const match = value.match(/T(\d{2}:\d{2})/);
-  return match ? match[1] : value.trim();
 }
 
 async function apiResult(apiUrl, token, path, options, fetchImpl) {

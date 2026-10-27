@@ -403,6 +403,15 @@ h2 {
   fill: #e7f7f5;
 }
 
+.chart circle {
+  fill: currentColor;
+}
+
+.composer button:disabled,
+.allowance-card button:disabled {
+  opacity: 0.45;
+}
+
 .options {
   margin: 0;
   padding: 0;
@@ -483,6 +492,10 @@ h2 {
 .note {
   color: var(--muted);
   font-size: 0.875rem;
+}
+
+.detail > .note {
+  margin: 0 0.75rem;
 }
 
 .popup-backdrop {
