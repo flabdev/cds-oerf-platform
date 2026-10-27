@@ -7,10 +7,11 @@ the stored numbers already match the seed files.
     python -m scripts.seed_runtime --profile Fission-OERF --tenant t1
     python -m scripts.seed_runtime --profile Fission-OERF --tenant t1 --yes
 
-This writes tenant META, the seed shipment, the two facilities, and publishes
-the cold-chain config when no config is stored or ``PP-2-8-45`` is not already
-45 minutes. It does not write contacts, fault codes, or incidents, and it does
-not publish readings.
+This writes tenant META, the seed shipment, the two facilities, the contact
+rows, and publishes the cold-chain config when no config is stored or
+``PP-2-8-45`` is not already 45 minutes. Contact phones come from
+``SYNTHETIC_E164`` (the fictional 555-01xx range). It does not read SSM, write
+a real number, write fault codes or incidents, or publish readings.
 """
 
 from __future__ import annotations
@@ -31,6 +32,20 @@ REGION = "us-east-1"
 STACK = "OerfDataStack"
 DEMO_TENANTS = ("t1", "t2", "sbx")
 PROFILE_ID = "PP-2-8-45"
+#: Fictional NANP numbers. 555-0100 through 555-0199 are reserved for fiction.
+#: Mocked channels read these from the contact registry. Live channels read
+#: SSM ``/oerf/demo-numbers/{tenant}/{role}`` and never this map.
+SYNTHETIC_E164 = {
+    "driver": "+15550100001",
+    "ops": "+15550100002",
+    "ops_manager": "+15550100002",
+    "facility": "+15550100003",
+    "qa": "+15550100004",
+    "fleet_supervisor": "+15550100005",
+    "ops_director": "+15550100006",
+    "qa_lead": "+15550100007",
+}
+_KINDS = ("meta", "shipments", "facilities", "contacts", "config")
 _SKIP = frozenset({"PK", "SK", "pk", "sk"})
 _DRAFT_SKIP = frozenset(
     {
@@ -75,6 +90,10 @@ def seed_runtime(client: Any, table_name: str, tenant_id: str, *, apply: bool) -
             _put(client, table_name, _record_item(row), apply=apply)
             for row in seed["facilities"]
         ),
+        "contacts": sum(
+            _put(client, table_name, _contact_item(row), apply=apply)
+            for row in seed["contacts"]
+        ),
         "config": _publish_config(client, table_name, tenant_id, seed, apply=apply),
     }
     return counts
@@ -96,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     client = session.client("dynamodb", region_name=REGION)
     counts = seed_runtime(client, table_name, tenant_id, apply=args.yes)
     verb = "applied" if args.yes else "would change"
-    for name in ("meta", "shipments", "facilities", "config"):
+    for name in _KINDS:
         print(f"{verb} {tenant_id} {name} {counts[name]}")
     return 0
 
@@ -112,6 +131,34 @@ def _meta_item(tenant: dict[str, Any]) -> dict[str, Any]:
         "demo": {"BOOL": bool(tenant["demo"])},
         "clock_multiplier": {"N": str(int(tenant["clock_multiplier"]))},
     }
+
+
+def _contact_item(row: dict[str, Any]) -> dict[str, Any]:
+    """One ``CONTACT#`` row in the shape ``DynamoPhoneRegistry.get_contact`` reads.
+
+    ``role``, ``e164``, and ``opt_in`` are strings. ``opt_in`` is ``"true"`` or
+    ``"false"`` because the reader compares that text. The phone is the
+    synthetic number for ``party_role``, never the seed token or a literal
+    ``+91`` value. An email on the seed becomes ``{role}@example.com``.
+    """
+
+    role = str(row["party_role"])
+    number = SYNTHETIC_E164.get(role)
+    if number is None:
+        raise ValueError(f"no synthetic number for role {role!r}")
+    tenant_id = str(row["tenant_id"])
+    contact_id = str(row["contact_id"])
+    item = {
+        **key(f"TENANT#{tenant_id}", f"CONTACT#{contact_id}"),
+        "tenant_id": s(tenant_id),
+        "contact_id": s(contact_id),
+        "role": s(role),
+        "e164": s(number),
+        "opt_in": s("true" if row.get("opt_in") is True else "false"),
+    }
+    if isinstance(row.get("email"), str) and row["email"].strip():
+        item["email"] = s(f"{role}@example.com")
+    return item
 
 
 def _record_item(row: dict[str, Any]) -> dict[str, Any]:
