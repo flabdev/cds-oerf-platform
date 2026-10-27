@@ -1,6 +1,14 @@
 import { useMemo, useState } from "react";
 
-import { actionRequest, allowanceDraft, incidentListView, rankingNote, sessionView } from "./model.js";
+import {
+  actionRequest,
+  allowanceDraft,
+  incidentListView,
+  rankingNote,
+  sessionView,
+  shipmentMark,
+  textField,
+} from "./model.js";
 
 const SAMPLE = [
   {
@@ -72,7 +80,11 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
   const list = incidentListView(session.state === "signed-out" ? { error: "Sign in required" } : visible);
   const rows = list.state === "ready"
     ? list.incidents.filter((item) => {
-        const haystack = `${item.shipment_id} ${item.incident_id} ${item.state}`.toLowerCase();
+        const haystack = [
+          textField(item.shipment_id, ""),
+          textField(item.incident_id, ""),
+          textField(item.state, ""),
+        ].join(" ").toLowerCase();
         return haystack.includes(query.trim().toLowerCase());
       })
     : [];
@@ -206,7 +218,7 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
                 {section === "allowance"
                   ? selectedTenant
                   : section === "actions"
-                    ? (current?.shipment_id || "No shipment selected")
+                    ? textField(current?.shipment_id, "No shipment selected")
                     : `${rows.length} open`}
               </p>
             </div>
@@ -239,10 +251,10 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
                     }}
                   >
                     <span className="avatar small" aria-hidden="true">
-                      {(item.shipment_id || item.incident_id).slice(0, 1)}
+                      {shipmentMark(item.shipment_id)}
                     </span>
                     <span className="row-copy">
-                      <strong>{item.shipment_id || item.incident_id}</strong>
+                      <strong>{textField(item.shipment_id, textField(item.incident_id, "?"))}</strong>
                       <span>
                         {item.allowance_remaining == null
                           ? item.state
@@ -259,7 +271,7 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
             <div className="allowance-card" id="actions">
               <h2>Queue an action</h2>
               {current ? (
-                <p>These apply to {current.shipment_id}. They are queued and do not change the incident here.</p>
+                <p>These apply to {textField(current.shipment_id)}. They are queued and do not change the incident here.</p>
               ) : (
                 <p>Open Incidents and choose a shipment first.</p>
               )}
@@ -297,9 +309,9 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
             <>
               <header className="detail-head">
                 <div className="who">
-                  <span className="avatar small" aria-hidden="true">{current.shipment_id.slice(0, 1)}</span>
+                  <span className="avatar small" aria-hidden="true">{shipmentMark(current.shipment_id)}</span>
                   <div>
-                    <h2>{current.shipment_id}</h2>
+                    <h2>{textField(current.shipment_id)}</h2>
                     <p><span className="online" />{current.state}</p>
                   </div>
                 </div>

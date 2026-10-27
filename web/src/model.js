@@ -29,6 +29,15 @@ export function sessionView(principal) {
   };
 }
 
+export function textField(value, fallback = "?") {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+export function shipmentMark(shipmentId) {
+  const text = textField(shipmentId, "");
+  return text ? text.slice(0, 1).toUpperCase() : "?";
+}
+
 export function incidentListView(incidents) {
   if (incidents == null) {
     return { state: "loading" };
