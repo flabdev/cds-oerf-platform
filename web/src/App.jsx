@@ -7,9 +7,11 @@ import {
   incidentListView,
   incidentView,
   needsWaitingEngagement,
+  oneDecimal,
   rankingNote,
   sessionView,
   shipmentMark,
+  terminalNote,
   textField,
 } from "./model.js";
 
@@ -91,12 +93,16 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
         return haystack.includes(query.trim().toLowerCase());
       })
     : [];
-  const current = rows.find((item) => item.incident_id === selectedId) || rows[0] || null;
+  const selected = Array.isArray(visible)
+    ? visible.find((item) => item.incident_id === selectedId) || null
+    : null;
+  const current = selected || rows[0] || null;
   const view = incidentView(current);
+  const locked = terminalNote(current?.state);
   const initial = session.displayName.slice(0, 1).toUpperCase();
 
   async function submit(action, optionId) {
-    if (!current) {
+    if (!current || terminalNote(current.state)) {
       return;
     }
     const engagement = typeof current.engagement_id === "string" ? current.engagement_id.trim() : "";
@@ -262,9 +268,9 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
                     <span className="row-copy">
                       <strong>{textField(item.shipment_id, textField(item.incident_id, "?"))}</strong>
                       <span>
-                        {item.allowance_remaining == null
+                        {oneDecimal(item.allowance_remaining) == null
                           ? item.state
-                          : `${item.state} · ${item.allowance_remaining} min left`}
+                          : `${item.state} · ${oneDecimal(item.allowance_remaining)} min left`}
                       </span>
                     </span>
                     <time>{item.time}</time>
@@ -281,9 +287,9 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
               ) : (
                 <p>Open Incidents and choose a shipment first.</p>
               )}
-              <button type="button" disabled={!current} onClick={() => submit("confirm_transfer")}>Confirm transfer</button>
-              <button type="button" disabled={!current} onClick={() => submit("pick_option", current?.recommendation)}>Pick option</button>
-              <button type="button" className="send" disabled={!current} onClick={() => submit("cancel")}>Cancel</button>
+              <button type="button" disabled={!current || Boolean(locked)} onClick={() => submit("confirm_transfer")}>Confirm transfer</button>
+              <button type="button" disabled={!current || Boolean(locked)} onClick={() => submit("pick_option", current?.recommendation)}>Pick option</button>
+              <button type="button" className="send" disabled={!current || Boolean(locked)} onClick={() => submit("cancel")}>Cancel</button>
             </div>
           ) : null}
           {section === "allowance" ? (
@@ -347,8 +353,11 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
                     <text key={`${tick.label}-${tick.y}`} x="0" y={tick.y}>{tick.label}</text>
                   ))}
                   {view.chart.polyline ? (
-                    <polyline fill="none" stroke="currentColor" points={view.chart.polyline} />
+                    <polyline fill="none" stroke="currentColor" strokeWidth="1.4" points={view.chart.polyline} />
                   ) : null}
+                  {view.chart.points.map((point) => (
+                    <circle key={`${point.ts}-${point.x}`} cx={point.x} cy={point.y} r="1.8" />
+                  ))}
                   <text className="unit" x="108" y="8">{view.chart.unit}</text>
                 </svg>
                 <ul className="options">
@@ -356,9 +365,9 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
                     <li key={option.id}>
                       {option.id}
                       <span>
-                        {option.spare_minutes != null ? `${option.spare_minutes} min spare · ` : ""}
-                        {option.spare_minutes == null && option.projected_minutes != null
-                          ? `${option.projected_minutes} min · `
+                        {option.spareLabel != null ? `${option.spareLabel} min spare · ` : ""}
+                        {option.spareLabel == null && option.projectedLabel != null
+                          ? `${option.projectedLabel} min · `
                           : ""}
                         {option.feasible ? "feasible" : "infeasible"}
                       </span>
@@ -371,10 +380,11 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
                   ))}
                 </ul>
               </div>
+              {locked ? <p className="note">{locked}</p> : null}
               <form className="composer" id="actions" onSubmit={(event) => event.preventDefault()}>
-                <button type="button" onClick={() => submit("confirm_transfer")}>Confirm transfer</button>
-                <button type="button" onClick={() => submit("pick_option", current.recommendation)}>Pick option</button>
-                <button type="button" className="send" onClick={() => submit("cancel")}>Cancel</button>
+                <button type="button" disabled={Boolean(locked)} onClick={() => submit("confirm_transfer")}>Confirm transfer</button>
+                <button type="button" disabled={Boolean(locked)} onClick={() => submit("pick_option", current.recommendation)}>Pick option</button>
+                <button type="button" className="send" disabled={Boolean(locked)} onClick={() => submit("cancel")}>Cancel</button>
               </form>
             </>
           ) : (

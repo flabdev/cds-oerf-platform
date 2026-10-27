@@ -38,6 +38,30 @@ export function shipmentMark(shipmentId) {
   return text ? text.slice(0, 1).toUpperCase() : "?";
 }
 
+const TERMINAL = new Set(["CANCELLED", "CLOSED"]);
+
+export function isTerminal(state) {
+  return TERMINAL.has(String(state || "").trim().toUpperCase());
+}
+
+export function terminalNote(state) {
+  const name = String(state || "").trim().toUpperCase();
+  if (name === "CANCELLED") {
+    return "This incident is cancelled";
+  }
+  if (name === "CLOSED") {
+    return "This incident is closed";
+  }
+  return "";
+}
+
+export function openIncidents(incidents) {
+  if (!Array.isArray(incidents)) {
+    return [];
+  }
+  return incidents.filter((item) => !isTerminal(item?.state));
+}
+
 export function incidentListView(incidents) {
   if (incidents == null) {
     return { state: "loading" };
@@ -45,10 +69,18 @@ export function incidentListView(incidents) {
   if (incidents.error) {
     return { state: "error", message: incidents.error };
   }
-  if (incidents.length === 0) {
+  const open = openIncidents(incidents);
+  if (open.length === 0) {
     return { state: "empty" };
   }
-  return { state: "ready", incidents };
+  return { state: "ready", incidents: open };
+}
+
+export function oneDecimal(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  return (Math.round(value * 10) / 10).toFixed(1);
 }
 
 const ACTION_NAMES = {
@@ -69,6 +101,10 @@ export function actionNotice(action, { queued = false, missingEngagement = false
   return queued ? `${name} queued` : `${name} was not queued`;
 }
 
+const CHART_LEFT = 22;
+const CHART_RIGHT = 112;
+const CHART_MIN_GAP = 14;
+
 export function temperatureChart(readings, band = [2, 8]) {
   const low = Number(band?.[0]);
   const high = Number(band?.[1]);
@@ -80,20 +116,19 @@ export function temperatureChart(readings, band = [2, 8]) {
     }))
     .filter((row) => row.ts && Number.isFinite(row.temperature_c));
   const temps = series.map((row) => row.temperature_c);
-  const min = Math.min(range[0], ...(temps.length ? temps : [range[0]])) - 1;
-  const max = Math.max(range[1], ...(temps.length ? temps : [range[1]])) + 1;
+  const tickValues = yTicks(temps, range[0], range[1]);
+  const min = Math.min(...tickValues);
+  const max = Math.max(...tickValues);
   const span = max - min || 1;
   const plot = (temperature) => 4 + ((max - temperature) / span) * 40;
-  const points = series.map((row, index) => {
-    const x = 22 + (series.length === 1 ? 50 : (index / (series.length - 1)) * 100);
-    return {
-      x: round(x),
-      y: round(plot(row.temperature_c)),
-      ts: row.ts,
-      temperature_c: row.temperature_c,
-    };
-  });
-  const ticks = [max, range[1], range[0], min].map((value) => ({
+  const xs = chartXs(series);
+  const points = series.map((row, index) => ({
+    x: round(xs[index]),
+    y: round(plot(row.temperature_c)),
+    ts: row.ts,
+    temperature_c: row.temperature_c,
+  }));
+  const ticks = tickValues.map((value) => ({
     label: trimNumber(value),
     y: round(plot(value)),
   }));
@@ -109,6 +144,60 @@ export function temperatureChart(readings, band = [2, 8]) {
   };
 }
 
+function yTicks(temps, low, high) {
+  const dataMin = Math.min(low, ...(temps.length ? temps : [low]));
+  const dataMax = Math.max(high, ...(temps.length ? temps : [high]));
+  const span = Math.max(dataMax - dataMin, 1);
+  const step = span <= 16 ? 2 : span <= 40 ? 5 : 10;
+  const start = Math.floor(dataMin / step) * step;
+  const end = Math.ceil(dataMax / step) * step;
+  const values = new Set([low, high]);
+  for (let value = start; value <= end + step * 0.001; value += step) {
+    values.add(Math.round(value * 10) / 10);
+  }
+  return [...values].sort((left, right) => right - left);
+}
+
+function chartXs(series) {
+  const width = CHART_RIGHT - CHART_LEFT;
+  if (series.length === 0) {
+    return [];
+  }
+  if (series.length === 1) {
+    return [(CHART_LEFT + CHART_RIGHT) / 2];
+  }
+  const times = series.map((row) => Date.parse(row.ts));
+  const timed = times.every((time) => Number.isFinite(time));
+  let raw;
+  if (timed) {
+    const start = times[0];
+    const end = times[times.length - 1];
+    const span = Math.max(end - start, 0);
+    const pad = Math.max(span * 0.12, 60_000);
+    const domain = span + pad * 2;
+    raw = times.map((time) => CHART_LEFT + ((time - (start - pad)) / domain) * width);
+  } else {
+    raw = series.map((_, index) => CHART_LEFT + (index / (series.length - 1)) * width);
+  }
+  const placed = raw.slice();
+  for (let index = 1; index < placed.length; index += 1) {
+    const gap = placed[index - 1] + CHART_MIN_GAP;
+    if (placed[index] < gap) {
+      placed[index] = gap;
+    }
+  }
+  const overflow = placed[placed.length - 1] - CHART_RIGHT;
+  if (overflow > 0) {
+    const used = placed[placed.length - 1] - placed[0];
+    const scale = used > width ? width / used : 1;
+    const origin = placed[0];
+    for (let index = 0; index < placed.length; index += 1) {
+      placed[index] = CHART_LEFT + (placed[index] - origin) * scale;
+    }
+  }
+  return placed;
+}
+
 export function incidentView(item) {
   const evidence = item?.evidence && typeof item.evidence === "object" ? item.evidence : {};
   const codes = Array.isArray(evidence.fault_codes)
@@ -119,22 +208,26 @@ export function incidentView(item) {
   const recommended = typeof recommendation === "string"
     ? recommendation
     : recommendation?.recommended_option;
-  const options = Array.isArray(item?.options) && item.options.length
+  const options = (Array.isArray(item?.options) && item.options.length
     ? item.options
-    : (Array.isArray(recommendation?.options) ? recommendation.options : []);
-  const remaining = item?.allowance_remaining;
+    : (Array.isArray(recommendation?.options) ? recommendation.options : []))
+    .filter((option) => option && typeof option.id === "string")
+    .map((option) => ({
+      ...option,
+      spareLabel: oneDecimal(option.spare_minutes),
+      projectedLabel: oneDecimal(option.projected_minutes),
+    }));
+  const remaining = oneDecimal(item?.allowance_remaining);
   const readings = chartReadings(item);
   const band = Array.isArray(item?.range_c) && item.range_c.length === 2 ? item.range_c : [2, 8];
   const recommendationLabel = typeof recommended === "string" && recommended.trim()
     ? recommended.trim()
     : "—";
   return {
-    allowanceLabel: typeof remaining === "number" && Number.isFinite(remaining)
-      ? `${trimNumber(remaining)} min`
-      : "—",
+    allowanceLabel: remaining ? `${remaining} min` : "—",
     evidenceLabel: codes.length ? codes.join(", ") : (fault || "none"),
     recommendationLabel,
-    options: options.filter((option) => option && typeof option.id === "string"),
+    options,
     timeline: Array.isArray(item?.timeline) ? item.timeline.filter((entry) => typeof entry === "string") : [],
     chart: temperatureChart(readings, band),
     engagementStatus: typeof item?.engagement_status === "string" ? item.engagement_status.trim() : "",
