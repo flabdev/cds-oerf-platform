@@ -346,8 +346,10 @@ def handler(
             logger,
             logging.INFO,
             (
-                "Started cold-chain execution "
-                f"tenant={tenant_id} shipment={shipment_id} incident={incident.incident_id}"
+                "Started cold-chain execution"
+                f" tenant={tenant_id}"
+                f" shipment={shipment_id}"
+                f" incident={incident.incident_id}"
             ),
             tenant_id=tenant_id,
             incident_id=incident.incident_id,
