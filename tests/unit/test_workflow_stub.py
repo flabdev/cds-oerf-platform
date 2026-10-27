@@ -40,14 +40,16 @@ def test_happy_path_handlers_return_expected_choice_shapes() -> None:
         assert result[field][key] == value, step_name
 
 
-def test_unknown_step_passes_the_workflow_through(capsys: pytest.CaptureFixture[str]) -> None:
-    logging.getLogger("domains.cold_chain_excursion.steps.workflow_stub").setLevel(logging.INFO)
+def test_unknown_step_passes_the_workflow_through(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="domains.cold_chain_excursion.steps.workflow_stub")
     workflow = {"tenant_id": "t1", "shipment_id": "PH-2841", "marker": 1}
 
     result = handler({"step_name": "EngagementSendOneWay", "workflow": workflow}, None)
 
     assert result == workflow
-    assert "EngagementSendOneWay" in capsys.readouterr().out
+    assert "unknown workflow step EngagementSendOneWay" in caplog.text
+    assert "PH-2841" not in caplog.text
+    assert "marker" not in caplog.text
 
 
 def test_close_stub_marks_incident_closed() -> None:
