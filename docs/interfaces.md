@@ -1,9 +1,12 @@
 # OERF interface contract
 
-**FROZEN v1.28** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.31** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.31 (2026-10-27) `scripts.seed_runtime --live-contacts` skips a role whose `/oerf/demo-numbers/{tid}/{role}` parameter does not exist and prints `skipped {tid} live-contacts {role} (no parameter)`. A parameter that exists but is empty or not E.164 stops the command. `--roles` limits the roles. The value is not printed.
+- v1.30 (2026-10-27) `scripts.seed_runtime --live-contacts` reads SSM `/oerf/demo-numbers/{tid}/{role}` (SecureString, decrypted) and writes the `PHONE#` ownership row for each seeded contact of that role. The command prints the role and the count. Without the flag it does not read SSM.
+- v1.29 (2026-10-27) `scripts.seed_runtime` writes a routing `PHONE#{e164}` row for each synthetic contact. Inbound ownership is that row's tenant and contact. A WhatsApp sender with or without `+` is the same E.164. End User Messaging delivers `from` as digits inside `whatsAppWebhookEntry`. `ColdChainWorkflowStub` returns an unknown `step_name` unchanged.
 - v1.28 (2026-10-27) Ingest does not put `cancel_requested` on the `StartExecution` input. `CancelRequested?` and each `CancelAfter*` choice test `IsPresent` before `BooleanEquals`, so a missing flag is not a cancel.
 - v1.27 (2026-10-27) Mocked channel sends and `scripts.demo_reply` resolve the party from the contact registry. `scripts.seed_runtime` writes each `CONTACT#` row from `sim/seed/<tenant>/contacts.json` with `role`, `e164`, and `opt_in` as strings. `e164` is a fictional 555-01xx number from `SYNTHETIC_E164` (driver `+15550100001`, ops `+15550100002`, facility `+15550100003`). The seeder does not read SSM. A live run (`USE_MOCK_WHATSAPP=false`) ignores those rows and reads `/oerf/demo-numbers/{tid}/{role}`.
 - v1.26 (2026-10-27) Social-messaging IAM and the inbound topic `aws:SourceArn` use the resource id without the API prefix: `arn:aws:social-messaging:{region}:{account}:waba/{id}` and `...:phone-number-id/{id}`. Context `whatsapp:wabaId` (`waba-...`) and `whatsapp:phoneNumberId` (`phone-number-id-...`) stay prefixed on the custom resource and on `WHATSAPP_PHONE_NUMBER_ID`. An unset phone-number id still uses Resource `*`.
@@ -484,7 +487,7 @@ IAM column is the target. Current wildcards are called out and are not the targe
 
 `EngagementSendViaRouter` passes `step_name`, `task_token`, and `workflow`. The handler stores the token on `ENG#` and then calls `route_outbound`. The Lambda return is not the task success. Inbound remains the only `SendTaskSuccess` caller. The child result is stored at `$.workflow.diagnosis.engagement_result`.
 
-`python -m scripts.demo_reply` reads `InboundQueueUrl` from `OerfComputeStack` and posts one provider message. It does not call `SendTaskSuccess`. Button ids are the slugs of `oerf_driver_checkin` in `scripts/whatsapp/templates.json`. In mocked mode the sender is the contact registry row written by `scripts.seed_runtime` (synthetic 555-01xx `e164`). In live mode the sender is SSM `/oerf/demo-numbers/{tid}/{role}`.
+`python -m scripts.demo_reply` reads `InboundQueueUrl` from `OerfComputeStack` and posts one provider message. It does not call `SendTaskSuccess`. Button ids are the slugs of `oerf_driver_checkin` in `scripts/whatsapp/templates.json`. In mocked mode the sender is the contact registry row written by `scripts.seed_runtime` (synthetic 555-01xx `e164`). The seeder also writes `PHONE#{e164}` on the routing table. Inbound treats a sender with or without `+` as that same E.164. End User Messaging delivers the digits without `+` in `whatsAppWebhookEntry`. In live mode the sender is SSM `/oerf/demo-numbers/{tid}/{role}`. `scripts.seed_runtime --live-contacts` reads that SecureString and writes the matching `PHONE#` ownership row. A missing parameter is skipped (`skipped {tid} live-contacts {role} (no parameter)`). An empty or invalid value stops the command. `--roles` limits the roles. It prints the role and the count, not the value. Without the flag the seeder does not read SSM.
 
 Incident ids are allocated on the tenant table, `pk=TENANT#{tid}` / `sk=COUNTER#INCIDENT`, attribute `n`. `ADD` of 1 with `ReturnValues=UPDATED_NEW` yields `INC-{n:06d}`. Two tenants each start at `INC-000001`. Reset does not delete that row, tenant config, `INGEST#` dedupe rows, or `reports/{tid}/`.
 

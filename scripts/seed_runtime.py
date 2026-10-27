@@ -6,12 +6,20 @@ the stored numbers already match the seed files.
 
     python -m scripts.seed_runtime --profile Fission-OERF --tenant t1
     python -m scripts.seed_runtime --profile Fission-OERF --tenant t1 --yes
+    python -m scripts.seed_runtime --profile Fission-OERF --tenant t1 --yes --live-contacts
+    python -m scripts.seed_runtime --profile Fission-OERF --tenant t1 --yes \
+        --live-contacts --roles driver,qa
 
 This writes tenant META, the seed shipment, the two facilities, the contact
-rows, and publishes the cold-chain config when no config is stored or
-``PP-2-8-45`` is not already 45 minutes. Contact phones come from
-``SYNTHETIC_E164`` (the fictional 555-01xx range). It does not read SSM, write
-a real number, write fault codes or incidents, or publish readings.
+rows, the ``PHONE#`` index on the routing table, and publishes the cold-chain
+config when no config is stored or ``PP-2-8-45`` is not already 45 minutes.
+Contact phones come from ``SYNTHETIC_E164`` (the fictional 555-01xx range).
+It does not read SSM, write a real number, write fault codes or incidents, or
+publish readings unless ``--live-contacts`` is set. That flag reads
+``/oerf/demo-numbers/{tenant}/{role}`` and writes one ``PHONE#`` ownership row
+per seeded contact of that role. It prints the role and the count only. A role
+with no parameter is skipped. An empty or invalid value stops the command.
+``--roles`` limits the read to those seeded roles.
 """
 
 from __future__ import annotations
@@ -19,11 +27,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Collection
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from oerf.platform.agent.context import DOMAIN
-from oerf.platform.storage.dynamo import key, s
+from oerf.platform.channels.address import demo_number_name
+from oerf.platform.storage.dynamo import canonical_e164, contact_sk, key, phone_pk, s
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 from oerf.platform.tenancy.publisher import ConfigPublisher
 from sim.seed.load import load_seed
@@ -45,7 +55,7 @@ SYNTHETIC_E164 = {
     "ops_director": "+15550100006",
     "qa_lead": "+15550100007",
 }
-_KINDS = ("meta", "shipments", "facilities", "contacts", "config")
+_KINDS = ("meta", "shipments", "facilities", "contacts", "phones", "config")
 _SKIP = frozenset({"PK", "SK", "pk", "sk"})
 _DRAFT_SKIP = frozenset(
     {
@@ -74,12 +84,24 @@ def tenants_for(tenant: str) -> tuple[str, ...]:
     return (tenant,)
 
 
-def seed_runtime(client: Any, table_name: str, tenant_id: str, *, apply: bool) -> dict[str, int]:
-    """Put the rows this tenant's seed files define. Returns how many would change."""
+def seed_runtime(
+    client: Any,
+    table_name: str,
+    tenant_id: str,
+    *,
+    apply: bool,
+    routing_table: str | None = None,
+) -> dict[str, int]:
+    """Put the rows this tenant's seed files define. Returns how many would change.
+
+    ``routing_table`` receives one ``PHONE#`` row per contact. Inbound resolves
+    the sender from that index. Omit it only when the caller has no routing table.
+    """
 
     if tenant_id not in DEMO_TENANTS:
         raise ValueError(f"unknown tenant {tenant_id!r}")
     seed = load_seed(tenant_id)
+    contacts = seed["contacts"]
     counts = {
         "meta": _put(client, table_name, _meta_item(seed["tenant"]), apply=apply),
         "shipments": sum(
@@ -91,8 +113,14 @@ def seed_runtime(client: Any, table_name: str, tenant_id: str, *, apply: bool) -
             for row in seed["facilities"]
         ),
         "contacts": sum(
-            _put(client, table_name, _contact_item(row), apply=apply)
-            for row in seed["contacts"]
+            _put(client, table_name, _contact_item(row), apply=apply) for row in contacts
+        ),
+        "phones": (
+            0
+            if routing_table is None
+            else sum(
+                _put(client, routing_table, _phone_item(row), apply=apply) for row in contacts
+            )
         ),
         "config": _publish_config(client, table_name, tenant_id, seed, apply=apply),
     }
@@ -108,15 +136,31 @@ def main(argv: list[str] | None = None) -> int:
 
     args = _parser().parse_args(argv)
     tenant_id = tenants_for(args.tenant)[0]
+    chosen = _role_filter(args.roles)
+    if chosen is not None and not args.live_contacts:
+        raise SystemExit("--roles needs --live-contacts")
     import boto3
 
     session = boto3.Session(profile_name=args.profile, region_name=REGION)
-    table_name = _tenant_table(session, args.stack)
+    table_name, routing_table = _table_names(session, args.stack)
     client = session.client("dynamodb", region_name=REGION)
-    counts = seed_runtime(client, table_name, tenant_id, apply=args.yes)
+    counts = seed_runtime(
+        client, table_name, tenant_id, apply=args.yes, routing_table=routing_table
+    )
     verb = "applied" if args.yes else "would change"
     for name in _KINDS:
         print(f"{verb} {tenant_id} {name} {counts[name]}")
+    if args.live_contacts:
+        roles = seed_live_contacts(
+            client,
+            routing_table,
+            tenant_id,
+            session.client("ssm", region_name=REGION),
+            apply=args.yes,
+            roles=chosen,
+        )
+        for role, count in roles.items():
+            print(f"{verb} {tenant_id} live-contacts {role} {count}")
     return 0
 
 
@@ -133,6 +177,23 @@ def _meta_item(tenant: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _synthetic_contact(row: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    """Tenant, contact, role, canonical E.164, and the ``opt_in`` string."""
+
+    role = str(row["party_role"])
+    number = SYNTHETIC_E164.get(role)
+    if number is None:
+        raise ValueError(f"no synthetic number for role {role!r}")
+    opted_in = "true" if row.get("opt_in") is True else "false"
+    return (
+        str(row["tenant_id"]),
+        str(row["contact_id"]),
+        role,
+        canonical_e164(number),
+        opted_in,
+    )
+
+
 def _contact_item(row: dict[str, Any]) -> dict[str, Any]:
     """One ``CONTACT#`` row in the shape ``DynamoPhoneRegistry.get_contact`` reads.
 
@@ -142,23 +203,136 @@ def _contact_item(row: dict[str, Any]) -> dict[str, Any]:
     ``+91`` value. An email on the seed becomes ``{role}@example.com``.
     """
 
-    role = str(row["party_role"])
-    number = SYNTHETIC_E164.get(role)
-    if number is None:
-        raise ValueError(f"no synthetic number for role {role!r}")
-    tenant_id = str(row["tenant_id"])
-    contact_id = str(row["contact_id"])
+    tenant_id, contact_id, role, number, opted_in = _synthetic_contact(row)
     item = {
         **key(f"TENANT#{tenant_id}", f"CONTACT#{contact_id}"),
         "tenant_id": s(tenant_id),
         "contact_id": s(contact_id),
         "role": s(role),
         "e164": s(number),
-        "opt_in": s("true" if row.get("opt_in") is True else "false"),
+        "opt_in": s(opted_in),
     }
     if isinstance(row.get("email"), str) and row["email"].strip():
         item["email"] = s(f"{role}@example.com")
     return item
+
+
+def _phone_item(row: dict[str, Any]) -> dict[str, Any]:
+    """One routing ``PHONE#`` row in the shape ``resolve_sender`` queries."""
+
+    tenant_id, contact_id, role, number, opted_in = _synthetic_contact(row)
+    return _ownership_item(tenant_id, contact_id, role, number, opted_in)
+
+
+def _ownership_item(
+    tenant_id: str, contact_id: str, role: str, number: str, opted_in: str
+) -> dict[str, Any]:
+    """``PHONE#{e164}`` / ``TENANT#{tid}#CONTACT#{id}`` for sender ownership."""
+
+    return {
+        **key(phone_pk(number), contact_sk(tenant_id, contact_id)),
+        "tenant_id": s(tenant_id),
+        "contact_id": s(contact_id),
+        "role": s(role),
+        "e164": s(canonical_e164(number)),
+        "opt_in": s(opted_in),
+    }
+
+
+def seed_live_contacts(
+    client: Any,
+    routing_table: str,
+    tenant_id: str,
+    ssm: Any,
+    *,
+    apply: bool,
+    roles: Collection[str] | None = None,
+) -> dict[str, int]:
+    """Write one ``PHONE#`` row per seeded contact from that role's SSM number.
+
+    The return value is ``role -> row count`` for parameters that exist. It
+    does not contain the number. A missing parameter is printed and omitted.
+    Contacts that share a role share one SecureString and keep their own
+    contact id, which is what inbound ownership compares.
+    """
+
+    if tenant_id not in DEMO_TENANTS:
+        raise ValueError(f"unknown tenant {tenant_id!r}")
+    if not routing_table:
+        raise SystemExit("live contacts need the routing table")
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in load_seed(tenant_id)["contacts"]:
+        grouped.setdefault(str(row["party_role"]), []).append(row)
+    if roles is not None:
+        for role in roles:
+            if role not in grouped:
+                raise SystemExit(f"unknown role {role}")
+        grouped = {role: grouped[role] for role in roles}
+    counts: dict[str, int] = {}
+    for role, rows in grouped.items():
+        number = _demo_number(ssm, tenant_id, role)
+        if number is None:
+            print(f"skipped {tenant_id} live-contacts {role} (no parameter)")
+            continue
+        counts[role] = sum(
+            _put(
+                client,
+                routing_table,
+                _ownership_item(
+                    str(row["tenant_id"]),
+                    str(row["contact_id"]),
+                    role,
+                    number,
+                    "true" if row.get("opt_in") is True else "false",
+                ),
+                apply=apply,
+            )
+            for row in rows
+        )
+    return counts
+
+
+def _demo_number(ssm: Any, tenant_id: str, role: str) -> str | None:
+    """Read one SecureString. A missing parameter returns ``None``.
+
+    An empty or invalid value exits. The value is not included in an error.
+    """
+
+    name = demo_number_name(tenant_id, role)
+    try:
+        found = ssm.get_parameter(Name=name, WithDecryption=True)
+    except Exception as exc:
+        if _parameter_missing(exc):
+            return None
+        raise SystemExit(f"could not read {name}") from None
+    parameter = found.get("Parameter") if isinstance(found, dict) else None
+    raw = parameter.get("Value") if isinstance(parameter, dict) else None
+    number = canonical_e164(raw.strip()) if isinstance(raw, str) else ""
+    digits = number[1:]
+    if not (number.startswith("+") and digits.isdigit() and 8 <= len(digits) <= 15):
+        raise SystemExit(f"could not read {name}")
+    return number
+
+
+def _parameter_missing(exc: BaseException) -> bool:
+    """True only for SSM ``ParameterNotFound``. Other errors stay fatal."""
+
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return False
+    error = response.get("Error")
+    return isinstance(error, dict) and error.get("Code") == "ParameterNotFound"
+
+
+def _role_filter(raw: str | None) -> tuple[str, ...] | None:
+    """Comma-separated roles, in the order given. ``None`` means every role."""
+
+    if raw is None:
+        return None
+    chosen = tuple(dict.fromkeys(part.strip() for part in raw.split(",") if part.strip()))
+    if not chosen:
+        raise SystemExit("--roles needs at least one role")
+    return chosen
 
 
 def _record_item(row: dict[str, Any]) -> dict[str, Any]:
@@ -283,19 +457,31 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", required=True)
     parser.add_argument("--tenant", required=True)
     parser.add_argument("--yes", action="store_true")
+    parser.add_argument(
+        "--live-contacts",
+        action="store_true",
+        help="Write PHONE# rows from SSM /oerf/demo-numbers/{tenant}/{role}.",
+    )
+    parser.add_argument(
+        "--roles",
+        default=None,
+        help="Comma-separated roles for --live-contacts, for example driver,qa.",
+    )
     parser.add_argument("--stack", default=STACK)
     return parser
 
 
-def _tenant_table(session: Any, stack: str) -> str:
+def _table_names(session: Any, stack: str) -> tuple[str, str]:
     response = session.client("cloudformation", region_name=REGION).describe_stacks(StackName=stack)
-    for item in response["Stacks"][0].get("Outputs") or []:
-        if item.get("OutputKey") != "TenantTableName":
-            continue
-        name = str(item.get("OutputValue") or "").strip()
-        if name:
-            return name
-    raise LookupError("TenantTableName")
+    outputs = {
+        item.get("OutputKey"): str(item.get("OutputValue") or "").strip()
+        for item in response["Stacks"][0].get("Outputs") or []
+    }
+    tenant = outputs.get("TenantTableName") or ""
+    routing = outputs.get("RoutingTableName") or ""
+    if not tenant or not routing:
+        raise LookupError("TenantTableName and RoutingTableName")
+    return tenant, routing
 
 
 if __name__ == "__main__":

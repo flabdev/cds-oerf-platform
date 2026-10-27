@@ -1,5 +1,9 @@
 """Unit tests for the deterministic cold-chain workflow stub."""
 
+import logging
+
+import pytest
+
 from domains.cold_chain_excursion.steps.workflow_stub import handler
 from oerf.platform.agent.envelope import parse_envelope
 from oerf.platform.agent.handlers import assess
@@ -34,6 +38,16 @@ def test_happy_path_handlers_return_expected_choice_shapes() -> None:
     for step_name, (field, key, value) in expected.items():
         result = handler(_event(step_name), None)
         assert result[field][key] == value, step_name
+
+
+def test_unknown_step_passes_the_workflow_through(capsys: pytest.CaptureFixture[str]) -> None:
+    logging.getLogger("domains.cold_chain_excursion.steps.workflow_stub").setLevel(logging.INFO)
+    workflow = {"tenant_id": "t1", "shipment_id": "PH-2841", "marker": 1}
+
+    result = handler({"step_name": "EngagementSendOneWay", "workflow": workflow}, None)
+
+    assert result == workflow
+    assert "EngagementSendOneWay" in capsys.readouterr().out
 
 
 def test_close_stub_marks_incident_closed() -> None:
