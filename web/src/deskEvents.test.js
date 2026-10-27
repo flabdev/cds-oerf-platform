@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { acceptDeskEvent, mergeDeskRows, subscribeBody } from "./deskEvents.js";
+import { absorbDeskEvent, acceptDeskEvent, mergeDeskRows, subscribeBody } from "./deskEvents.js";
+import { shipmentMark } from "./model.js";
 
 const summary = {
   event_type: "INCIDENT_SUMMARY",
@@ -99,4 +100,52 @@ test("an accepted summary updates the matching row and leaves the other tenant's
   assert.equal(next[0].state, "VERIFYING");
   assert.equal(next[0].shipment_id, "PH-2841");
   assert.equal(next[1].shipment_id, "VX-3101");
+});
+
+test("an unknown incident summary fetches once and inserts the fetched row", async () => {
+  const accepted = acceptDeskEvent(summary, { tenantId: "t1", scope: "tenant", incidentId: "" });
+  let calls = 0;
+  const next = await absorbDeskEvent([], accepted, async (incidentId) => {
+    calls += 1;
+    assert.equal(incidentId, "INC-1");
+    return {
+      incident_id: "INC-1",
+      shipment_id: "PH-2841",
+      state: "OPEN",
+      stage: "open",
+      version: 4,
+    };
+  });
+  assert.equal(calls, 1);
+  assert.equal(next.length, 1);
+  assert.equal(next[0].shipment_id, "PH-2841");
+  assert.equal(next[0].incident_id, "INC-1");
+});
+
+test("a summary missing shipment_id never throws", async () => {
+  const rows = [{ incident_id: "INC-1", state: "OPEN", shipment_id: "PH-2841", version: 3 }];
+  const accepted = acceptDeskEvent(summary, { tenantId: "t1", scope: "tenant", incidentId: "" });
+  assert.equal(accepted.incident.shipment_id, undefined);
+  const next = await absorbDeskEvent(rows, accepted, async () => {
+    throw new Error("a known incident is not fetched");
+  });
+  assert.equal(next[0].state, "VERIFYING");
+  assert.equal(next[0].shipment_id, "PH-2841");
+  assert.equal(shipmentMark(accepted.incident.shipment_id), "?");
+  assert.equal(shipmentMark(next[0].shipment_id), "P");
+});
+
+test("an older version does not overwrite a newer row", () => {
+  const rows = [{
+    incident_id: "INC-1",
+    state: "RESOLVED",
+    stage: "closed",
+    version: 8,
+    shipment_id: "PH-2841",
+  }];
+  const accepted = acceptDeskEvent(summary, { tenantId: "t1", scope: "tenant", incidentId: "" });
+  const next = mergeDeskRows(rows, accepted);
+  assert.equal(next, rows);
+  assert.equal(next[0].state, "RESOLVED");
+  assert.equal(next[0].version, 8);
 });
