@@ -5,6 +5,7 @@ import json
 import time
 
 import pytest
+from botocore.exceptions import ClientError
 
 from oerf.platform.api import ws_authorizer
 
@@ -86,6 +87,29 @@ def test_id_token_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
+
+
+def test_get_user_failure_logs_the_cognito_code_only(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    token = "short-access-token"
+
+    class _Cognito:
+        def get_user(self, *, AccessToken: str) -> dict[str, str]:
+            assert AccessToken == token
+            raise ClientError(
+                {"Error": {"Code": "NotAuthorizedException", "Message": f"bad {token}"}},
+                "GetUser",
+            )
+
+    monkeypatch.setattr(ws_authorizer, "USER_POOL_ID", "pool-1")
+    monkeypatch.setattr(ws_authorizer, "get_cognito", lambda: _Cognito())
+
+    assert ws_authorizer.verify_token(token) == {}
+
+    text = capsys.readouterr().out
+    assert "NotAuthorizedException" in text
+    assert token not in text
 
 
 def test_expired_access_token_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:

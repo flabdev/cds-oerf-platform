@@ -205,17 +205,27 @@ def get_user_attributes(user: dict[str, Any]) -> dict[str, str]:
     return attributes
 
 
+def _cognito_error_code(exc: BaseException) -> str:
+    """Return the Cognito error code, never the message, which can echo the token."""
+    if isinstance(exc, ClientError):
+        error = (exc.response or {}).get("Error") or {}
+        code = error.get("Code")
+        if isinstance(code, str) and code.strip():
+            return code.strip()
+    return type(exc).__name__
+
+
 def verify_token(token: str) -> dict[str, Any]:
     """Return the Cognito user for ``token``, or an empty mapping when it is invalid."""
     if not token or not USER_POOL_ID:
         return {}
     try:
         return get_cognito().get_user(AccessToken=token)
-    except (ClientError, BotoCoreError):
+    except (ClientError, BotoCoreError) as exc:
         log(
             logger,
             logging.WARNING,
-            "WebSocket token rejected by Cognito",
+            f"WebSocket token rejected by Cognito: {_cognito_error_code(exc)}",
             outcome="denied",
             count=1,
         )
