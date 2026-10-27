@@ -135,6 +135,26 @@ test("a summary missing shipment_id never throws", async () => {
   assert.equal(shipmentMark(next[0].shipment_id), "P");
 });
 
+test("a newer cancel summary marks the shipment cancelled", () => {
+  const rows = [{
+    incident_id: "INC-1",
+    shipment_id: "PH-2841",
+    state: "IN_TRANSIT",
+    version: 4,
+  }];
+  const accepted = acceptDeskEvent({
+    event_type: "INCIDENT_SUMMARY",
+    tenant_id: "t1",
+    incident_id: "INC-1",
+    version: 5,
+    data: { incident_id: "INC-1", state: "CANCELLED", stage: "CANCELLED", version: 5 },
+  }, { tenantId: "t1", scope: "tenant", incidentId: "" });
+  const next = mergeDeskRows(rows, accepted);
+  assert.equal(next[0].state, "CANCELLED");
+  assert.equal(next[0].version, 5);
+  assert.equal(next[0].shipment_id, "PH-2841");
+});
+
 test("an older version does not overwrite a newer row", () => {
   const rows = [{
     incident_id: "INC-1",

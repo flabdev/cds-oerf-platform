@@ -1,9 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.32** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.33** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.33 (2026-10-28) `GET /incidents/{id}` adds the desk detail: `version` (`event_seq` when `version` is absent, same integer as the broadcaster), `allowance_remaining` from the pinned profile and `READ#` rows (null when it cannot be computed), `evidence.fault_codes`, the Assess `recommended_option` and ranked options (`id`, `spare_minutes`, `projected_minutes`, `feasible`), `engagement_id` and `engagement_status`, `timeline` (`at`, `from_state`, `to_state` from `EVT#`, oldest first), and `readings` (`ts`, `temperature_c` from `READ#`, oldest first). `pk`, `sk`, task tokens, and step output stay off the wire. The list `version` uses `event_seq` the same way.
 - v1.32 (2026-10-28) The WebSocket authorizer allows an access token whose `client_id` is `USER_POOL_CLIENT_ID` or listed in `ALLOWED_CLIENT_IDS`, plus the dashboard client id in SSM `/oerf/ws-allowed-clients/dashboard` when `OerfApiStack` has published it. An ID token and any other client id are denied. `GetUser`, expiry, and the tenant claim stay.
 - v1.31 (2026-10-27) `scripts.seed_runtime --live-contacts` skips a role whose `/oerf/demo-numbers/{tid}/{role}` parameter does not exist and prints `skipped {tid} live-contacts {role} (no parameter)`. A parameter that exists but is empty or not E.164 stops the command. `--roles` limits the roles. The value is not printed.
 - v1.30 (2026-10-27) `scripts.seed_runtime --live-contacts` reads SSM `/oerf/demo-numbers/{tid}/{role}` (SecureString, decrypted) and writes the `PHONE#` ownership row for each seeded contact of that role. The command prints the role and the count. Without the flag it does not read SSM.
@@ -392,7 +393,7 @@ API `oerf-http-api`. Cognito JWT authorizer, identity source `Authorization`. CO
 
 | Route | Contract |
 | --- | --- |
-| `GET /incidents/{id}` | Incident META for the token tenant and path id: `incident_id`, `tenant_id`, `shipment_id`, `state`, `reason`, `opened_at`, `config_version`. `config_snapshot` is included on this authenticated read. `pk` and `sk` stay off the wire. |
+| `GET /incidents/{id}` | Incident for the token tenant and path id. META fields: `incident_id`, `tenant_id`, `shipment_id`, `state`, `stage`, `version`, `reason`, `opened_at`, `config_version`, `config_snapshot`. `version` is `event_seq` when `version` is absent. Also `allowance_remaining` (null when the pinned profile or readings cannot compute it), `range_c`, `evidence` (`fault_codes` only), `recommendation`, `options`, `engagement_id`, `engagement_status`, `timeline`, and `readings`. Timeline and readings are the tenant's incident partition, `EVT#` and `READ#`, paged, oldest first. `pk`, `sk`, task tokens, and raw step output stay off the wire. |
 | `GET /incidents` | List for the token tenant. Blocked on GSI1 (pattern 12). Each row is the summary object in section 7.3. |
 
 Dashboard `POST /incidents/{id}/actions` is section 3.2 on the REST API. Ingest (`sim.reefer` / `TemperatureReading`) is the only way an incident and its execution start.

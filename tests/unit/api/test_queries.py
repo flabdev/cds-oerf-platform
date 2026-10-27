@@ -62,6 +62,66 @@ def test_list_and_detail_stay_in_one_tenant_and_hide_secrets() -> None:
     assert other == (404, {"error": "not_found"})
 
 
+def test_detail_returns_timeline_readings_assessment_and_hides_the_token() -> None:
+    client = _PagingClient()
+    queries = DynamoIncidentQuery(client, "incidents")
+    services = DashboardServices(queries=queries, queue=MemoryActionQueue())
+
+    status, body = dispatch(
+        "GET",
+        "/incidents/INC-1",
+        Principal("t1", "ops_user", "user-1", True),
+        None,
+        services,
+    )
+
+    assert status == 200
+    assert body["shipment_id"] == "PH-2841"
+    assert body["version"] == 6
+    assert body["allowance_remaining"] == 35.0
+    assert body["evidence"] == {"fault_codes": ["AL02"]}
+    assert body["recommendation"]["recommended_option"] == "FACILITY_A"
+    assert body["options"][0]["spare_minutes"] == 12.4
+    assert body["engagement_status"] == "WAITING"
+    assert body["engagement_id"] == "eng-1"
+    assert [row["to_state"] for row in body["timeline"]] == ["OPEN", "DIAGNOSING"]
+    assert [row["temperature_c"] for row in body["readings"]] == [9.0, 9.0]
+    assert client.event_pages == 2
+    encoded = json.dumps(body)
+    assert "secret-token" not in encoded
+    assert "task_token" not in encoded
+    assert "step_output" not in body
+
+
+def test_cancel_does_not_need_an_engagement() -> None:
+    services = DashboardServices(
+        queries=MemoryIncidentQuery(
+            [
+                {
+                    "tenant_id": "t1",
+                    "incident_id": "INC-1",
+                    "state": "IN_TRANSIT",
+                    "shipment_id": "PH-2841",
+                }
+            ]
+        ),
+        queue=MemoryActionQueue(),
+    )
+
+    queued = dispatch(
+        "POST",
+        "/incidents/INC-1/actions",
+        Principal("t1", "ops_user", "user-1", True),
+        {"action": "cancel", "action_id": "act-1"},
+        services,
+        idempotency_key="act-1",
+    )
+
+    assert queued == (202, {"action_id": "act-1", "status": "queued"})
+    assert services.queue.messages[0]["action"] == "cancel"
+    assert services.queue.messages[0]["engagement_id"] is None
+
+
 def test_list_pages_after_the_cursor() -> None:
     client = FakeDynamoClient()
     _incident(client, "t1", "INC-1", "PH-1", "OPEN")
@@ -250,6 +310,124 @@ def _incident(
     if allowance is not None:
         item["allowance_remaining"] = {"N": str(allowance)}
     client.put_item(TableName="incidents", Item=item)
+
+
+class _PagingClient:
+    """One incident whose timeline comes back a page at a time, newest page first."""
+
+    def __init__(self) -> None:
+        self.event_pages = 0
+
+    def get_item(self, *, TableName: str, Key: dict, **_: object) -> dict:
+        del TableName
+        pk = Key["pk"]["S"]
+        sk = Key["sk"]["S"]
+        if sk == "META":
+            return {
+                "Item": {
+                    **key(pk, "META"),
+                    "incident_id": s("INC-1"),
+                    "tenant_id": s("t1"),
+                    "shipment_id": s("PH-2841"),
+                    "state": s("IN_TRANSIT"),
+                    "reason": s("excursion"),
+                    "opened_at": s("2026-10-20T10:00:00Z"),
+                    "event_seq": {"N": "6"},
+                    "config_snapshot": s(
+                        json.dumps(
+                            {
+                                "product_profiles": [
+                                    {
+                                        "id": "PP-2-8-45",
+                                        "range_c": [2, 8],
+                                        "excursion_allowance_min": 45,
+                                    }
+                                ]
+                            }
+                        )
+                    ),
+                    "evidence_analysis": {
+                        "M": {
+                            "fault_codes": {"L": [{"S": "AL02"}]},
+                            "display_readout_summary": {"S": "secret-token in the summary"},
+                        }
+                    },
+                }
+            }
+        if sk == "STEP#Assess":
+            return {
+                "Item": {
+                    **key(pk, sk),
+                    "decision": s(
+                        json.dumps(
+                            {
+                                "recommended_option": "FACILITY_A",
+                                "ranked_options": [
+                                    {
+                                        "id": "FACILITY_A",
+                                        "spare_minutes": 12.4,
+                                        "projected_minutes": 20.8,
+                                        "feasible": True,
+                                    }
+                                ],
+                                "task_token": "secret-token",
+                            }
+                        )
+                    ),
+                    "step_output": s(json.dumps({"task_token": "secret-token"})),
+                }
+            }
+        return {}
+
+    def query(self, **kwargs: object) -> dict:
+        values = kwargs["ExpressionAttributeValues"]
+        prefix = values[":prefix"]["S"]
+        pk = values[":pk"]["S"]
+        if prefix == "EVT#":
+            self.event_pages += 1
+            later = {
+                **key(pk, "EVT#2026-10-20T10:16:00Z#0002"),
+                "previous_state": s("OPEN"),
+                "state": s("DIAGNOSING"),
+            }
+            earlier = {
+                **key(pk, "EVT#2026-10-20T10:00:00Z#0001"),
+                "previous_state": s(""),
+                "state": s("OPEN"),
+            }
+            if "ExclusiveStartKey" not in kwargs:
+                return {
+                    "Items": [later],
+                    "LastEvaluatedKey": {"pk": {"S": pk}, "sk": {"S": "next"}},
+                }
+            return {"Items": [earlier]}
+        if prefix == "READ#":
+            return {
+                "Items": [
+                    {
+                        **key(pk, "READ#2026-10-20T10:10:00Z#000000000002#aa"),
+                        "ts": s("2026-10-20T10:10:00Z"),
+                        "temperature_c": {"N": "9"},
+                    },
+                    {
+                        **key(pk, "READ#2026-10-20T10:00:00Z#000000000001#bb"),
+                        "ts": s("2026-10-20T10:00:00Z"),
+                        "temperature_c": {"N": "9"},
+                    },
+                ]
+            }
+        if prefix == "ENG#":
+            return {
+                "Items": [
+                    {
+                        **key(pk, "ENG#eng-1"),
+                        "status": s("WAITING"),
+                        "document": s('{"task_token": "secret-token"}'),
+                        "task_token": s("secret-token"),
+                    }
+                ]
+            }
+        return {"Items": []}
 
 
 class _FailingQueue:

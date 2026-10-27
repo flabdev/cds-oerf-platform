@@ -104,13 +104,41 @@ export async function sendDashboard(apiUrl, token, request, fetchImpl = fetch) {
 }
 
 export function presentIncident(item) {
-  const timeline = (item.timeline || []).map((entry) => {
-    if (typeof entry === "string") {
-      return entry;
-    }
-    return [entry.state, entry.reason].filter(Boolean).join(" ");
-  });
-  return { ...item, timeline, time: item.time || "" };
+  const timeline = (item.timeline || []).map(presentTimelineEntry).filter(Boolean);
+  return {
+    ...item,
+    timeline,
+    readings: Array.isArray(item.readings) ? item.readings : [],
+    time: item.time || "",
+  };
+}
+
+function presentTimelineEntry(entry) {
+  if (typeof entry === "string") {
+    return entry;
+  }
+  if (!entry || typeof entry !== "object") {
+    return "";
+  }
+  if ("from_state" in entry || "to_state" in entry || entry.at) {
+    const from = typeof entry.from_state === "string" && entry.from_state.trim()
+      ? entry.from_state.trim()
+      : "—";
+    const to = typeof entry.to_state === "string" && entry.to_state.trim()
+      ? entry.to_state.trim()
+      : (typeof entry.state === "string" ? entry.state : "—");
+    const at = clock(entry.at);
+    return [at, `${from} → ${to}`].filter(Boolean).join(" ");
+  }
+  return [entry.state, entry.reason].filter(Boolean).join(" ");
+}
+
+function clock(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const match = value.match(/T(\d{2}:\d{2})/);
+  return match ? match[1] : value.trim();
 }
 
 async function apiResult(apiUrl, token, path, options, fetchImpl) {
