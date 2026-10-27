@@ -1,9 +1,9 @@
 """WhatsApp Business Account event destination for the inbound topic.
 
 The WABA resource ARN is
-``arn:${Partition}:social-messaging:${Region}:${Account}:waba/${WabaId}``
-from the IAM Service Authorization Reference for ``social-messaging``:
-https://docs.aws.amazon.com/service-authorization/latest/reference/list_socialmessaging.html
+``arn:aws:social-messaging:{region}:{account}:waba/{id}``. ``{id}`` is the
+context value with a leading ``waba-`` removed. The custom resource still
+passes the prefixed id to the API.
 """
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ from aws_cdk import (
     custom_resources as cr,
 )
 from constructs import Construct
+
+from infra.constructs.social_messaging_arns import waba_arn
 
 _ASSET = Path(__file__).resolve().parents[1] / "custom_resources"
 _HANDLER = _ASSET / "waba_destination.py"
@@ -78,12 +80,10 @@ class WabaEventDestination(Construct):
         if not waba_id.startswith("waba-") or "/" in waba_id:
             raise ValueError("whatsapp:wabaId must look like waba-...")
         stack = Stack.of(self)
-        waba_arn = (
-            f"arn:aws:social-messaging:{stack.region}:{stack.account}:waba/{waba_id}"
-        )
-        _allow_publish(topic, waba_arn, stack.account)
-        _grant_topic_key(topic, waba_arn, stack.account)
-        function = _handler(self, waba_arn)
+        resource_arn = waba_arn(stack.region, stack.account, waba_id)
+        _allow_publish(topic, resource_arn, stack.account)
+        _grant_topic_key(topic, resource_arn, stack.account)
+        function = _handler(self, resource_arn)
         provider_logs = logs.LogGroup(
             self,
             "ProviderLogGroup",
