@@ -39,6 +39,12 @@ The account must already be bootstrapped (`CDKToolkit` in `us-east-1`). This rol
 
 An empty `waba_id`, `phone_number_id`, or `alarm_email` uses repository variables `WABA_ID`, `WA_PHONE_NUMBER_ID`, and `ALARM_EMAIL`. If that variable is also empty, the context key is omitted. AgentCore's default builds the ARM64 image.
 
+## DynamoDB encryption
+
+Context `dynamodb:kmsManaged` defaults to `false`. The four tables then omit `encryption` and stay on the AWS owned key. Pass `dynamodb:kmsManaged=true` only to move them to the AWS managed key `aws/dynamodb` (ADR-033). The evidence and report buckets still use SSE-KMS `aws/s3` either way.
+
+A table's encryption mode can change 4 times per 24 hours, then once per 6 hours. Never toggle the flag in a deploy that might roll back. A failed deploy and its rollback each count as a change. Enable it after the demo, in a single deploy, once that window has reset.
+
 ## Demo device seed
 
 `seed_demo_devices` writes `DEVICE#{device_id}` / `META` on the routing table from `sim/seed/*/shipments.json`. The row carries `tenant_id`, `shipment_id`, and `asset_id` (`truck`). Ingest only reads that row and still drops an unknown device. The files are the demo tenants `t1`, `t2`, and `sbx`. A second run replaces the same ids.
