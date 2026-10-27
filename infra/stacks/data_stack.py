@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from aws_cdk import (
@@ -14,6 +15,7 @@ from aws_cdk import (
     aws_logs as logs,
     aws_s3 as s3,
     aws_stepfunctions as sfn,
+    aws_xray as xray,
     custom_resources as cr,
 )
 from constructs import Construct
@@ -34,6 +36,55 @@ PITR_ENABLED = dynamodb.PointInTimeRecoverySpecification(
     point_in_time_recovery_enabled=True,
 )
 _AUTH_ASSET = Path(__file__).resolve().parents[2] / "oerf" / "platform" / "auth"
+
+
+def _agentcore_enabled(scope: Construct) -> bool:
+    """True only when context ``agentcore:enabled`` is the string ``true``."""
+    return scope.node.try_get_context("agentcore:enabled") == "true"
+
+
+def _enable_transaction_search(stack: Stack) -> xray.CfnTransactionSearchConfig:
+    """Let X-Ray write spans so a trace destination of CloudWatch Logs is active.
+
+    ``IndexingPercentage`` is omitted. CloudFormation then keeps the service default.
+    The ``*`` in each log-group ARN is the log stream, and the source ARN ``*`` is
+    any X-Ray resource in this account. See ``docs/security/iam-exceptions.md``.
+    """
+    account = stack.account
+    region = stack.region
+    document = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "TransactionSearchXRayAccess",
+                "Effect": "Allow",
+                "Principal": {"Service": "xray.amazonaws.com"},
+                "Action": "logs:PutLogEvents",
+                "Resource": [
+                    f"arn:aws:logs:{region}:{account}:log-group:aws/spans:*",
+                    (
+                        f"arn:aws:logs:{region}:{account}:log-group:"
+                        "/aws/application-signals/data:*"
+                    ),
+                ],
+                "Condition": {
+                    "ArnLike": {"aws:SourceArn": f"arn:aws:xray:{region}:{account}:*"},
+                    "StringEquals": {"aws:SourceAccount": account},
+                },
+            }
+        ],
+    }
+    policy = logs.CfnResourcePolicy(
+        stack,
+        "TransactionSearchXRayAccess",
+        policy_name="TransactionSearchXRayAccess",
+        policy_document=json.dumps(document),
+    )
+    # Account-wide singleton. Deleting it (stack delete, or a later deploy
+    # with agentcore off) turns Transaction Search off for the account.
+    config = xray.CfnTransactionSearchConfig(stack, "TransactionSearchConfig")
+    config.node.add_dependency(policy)
+    return config
 
 
 def _kms_managed(scope: Construct) -> bool:
@@ -115,6 +166,9 @@ class OerfDataStack(Stack):
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
+        self.transaction_search_config = (
+            _enable_transaction_search(self) if _agentcore_enabled(self) else None
+        )
         kms_managed = _kms_managed(self)
         table_encryption = (
             {"encryption": dynamodb.TableEncryption.AWS_MANAGED} if kms_managed else {}

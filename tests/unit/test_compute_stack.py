@@ -1192,6 +1192,16 @@ def test_agentcore_flag_scopes_the_runtime_and_the_caller() -> None:
     output = enabled.to_json()["Outputs"]["AgentRuntimeArn"]
     assert output["Export"]["Name"] == "AGENT-RUNTIME-ARN"
 
+    data = _stack.node.scope.node.try_find_child("OerfDataStack")
+    assert isinstance(data, OerfDataStack)
+    assert data in _stack.dependencies
+    config = data.transaction_search_config
+    assert config is not None
+    runtime = _stack.node.find_child("AgentCore").node.find_child("Runtime")
+    for child_id in ("TracesDeliverySource", "TracesDeliveryDest", "TracesDelivery"):
+        child = runtime.node.find_child(child_id)
+        assert config in child.node.dependencies, child_id
+
     trust = enabled.find_resources("AWS::IAM::Role")[execution]["Properties"][
         "AssumeRolePolicyDocument"
     ]
