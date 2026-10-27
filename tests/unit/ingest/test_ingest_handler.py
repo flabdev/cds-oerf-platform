@@ -9,8 +9,9 @@ from typing import Any
 
 import pytest
 
+from domains.cold_chain_excursion.steps.workflow_stub import handler as workflow_stub
 from oerf.platform.agent.context import StepDependencies
-from oerf.platform.agent.envelope import StepEnvelope
+from oerf.platform.agent.envelope import StepEnvelope, parse_envelope
 from oerf.platform.agent.handlers import gather_context
 from oerf.platform.agent.idempotency import MemoryStepResultStore
 from oerf.platform.incidents.debounce import MemoryDebounce
@@ -147,7 +148,7 @@ def test_first_breach_waits_for_configured_threshold_and_second_starts_once() ->
     start_input = deps.executions.calls[0]["input"]
     assert start_input["tenant_id"] == "t1"
     assert start_input["shipment_id"] == "PH-1"
-    assert start_input["cancel_requested"] is False
+    assert "cancel_requested" not in start_input
     assert start_input["workflow"]["trigger"]["temperature_c"] == 9
     incident = deps.incidents.get("t1", second["incident_id"])
     assert incident.config_snapshot["tenant_id"] == "t1"
@@ -215,6 +216,79 @@ def test_ph2841_seed_profile_reaches_gather_context() -> None:
         ),
     )
     assert gathered.context["product_profile_id"] == "PP-2-8-45"
+
+
+def _choice_roots(definition: dict[str, Any]) -> set[str]:
+    """Top-level fields any Choice comparison reads, including nested And/Or/Not."""
+
+    roots: set[str] = set()
+
+    def walk(rule: dict[str, Any]) -> None:
+        variable = rule.get("Variable")
+        if isinstance(variable, str) and variable.startswith("$."):
+            roots.add(variable.removeprefix("$.").split(".", 1)[0])
+        for key in ("And", "Or"):
+            for item in rule.get(key, []):
+                walk(item)
+        nested = rule.get("Not")
+        if isinstance(nested, dict):
+            walk(nested)
+
+    for state in definition["States"].values():
+        if state.get("Type") != "Choice":
+            continue
+        for choice in state.get("Choices", []):
+            walk(choice)
+    return roots
+
+
+def test_ph2841_open_output_parses_as_gather_context() -> None:
+    """The start input, after the real OPEN stub, is a GatherContext envelope."""
+
+    seed_path = Path(__file__).resolve().parents[3] / "sim" / "seed" / "t1" / "shipments.json"
+    row = next(
+        item
+        for item in json.loads(seed_path.read_text(encoding="utf-8"))
+        if item["shipment_id"] == "PH-2841"
+    )
+
+    class SeedShipments:
+        def get(self, tenant_id: str, shipment_id: str):
+            assert tenant_id == "t1"
+            assert shipment_id == "PH-2841"
+            return row
+
+    deps = _deps(
+        devices=Devices({"RF-7781": ("t1", "PH-2841")}),
+        shipments=SeedShipments(),
+    )
+    detail = {"device_id": "RF-7781", "shipment_id": "PH-2841"}
+    handler(_event("hot-1", detail=detail), None, dependencies=deps)
+    handler(_event("hot-2", detail={**detail, "seq": 8}), None, dependencies=deps)
+    start_input = deps.executions.calls[0]["input"]
+
+    opened = workflow_stub({"step_name": "OPEN", "workflow": start_input}, None)
+    envelope = parse_envelope({"step_name": "GatherContext", "workflow": opened})
+
+    assert envelope.step == "GatherContext"
+    assert envelope.tenant_id == "t1"
+    assert envelope.shipment_id == "PH-2841"
+    definition = json.loads(
+        (
+            Path(__file__).resolve().parents[3]
+            / "domains"
+            / "cold_chain_excursion"
+            / "statemachine.asl.json"
+        ).read_text(encoding="utf-8")
+    )
+    roots = _choice_roots(definition)
+    assert "cancel_requested" in roots
+    assert "cancel_requested" not in StepEnvelope.model_fields
+    assert "cancel_requested" not in start_input
+    allowed = set(StepEnvelope.model_fields)
+    for field in roots:
+        if field in start_input:
+            assert field in allowed
 
 
 def test_safe_reading_clears_streak_before_breach_restarts_it() -> None:
