@@ -451,16 +451,17 @@ def _policy_statements(template: Template):
                     yield item
 
 
-def _synthesized_templates() -> dict[str, Template]:
+def _synthesized_templates(context: dict | None = None) -> dict[str, Template]:
     """Every stack the five synths can emit, with the optional features on."""
-    app = cdk.App(
-        context={
-            "dashboard:enabled": "true",
-            "whatsapp:wabaId": "waba-0000000000000000",
-            "agentcore:enabled": "true",
-            "demo:seedDevices": "true",
-        }
-    )
+    merged = {
+        "dashboard:enabled": "true",
+        "whatsapp:wabaId": "waba-0000000000000000",
+        "agentcore:enabled": "true",
+        "demo:seedDevices": "true",
+    }
+    if context:
+        merged.update(context)
+    app = cdk.App(context=merged)
     env = cdk.Environment(account=ACCOUNT, region=REGION)
     data = OerfDataStack(app, "OerfDataStack", env=env)
     compute = OerfComputeStack(app, "OerfComputeStack", data_stack=data, env=env)
@@ -692,7 +693,8 @@ _WABA_ID = "waba-01234567890123456789012345678901"
 
 
 def _waba_arn() -> str:
-    return f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:waba/{_WABA_ID}"
+    bare = _WABA_ID.removeprefix("waba-")
+    return f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:waba/{bare}"
 
 
 def test_demo_device_seed_stays_out_unless_the_flag_is_set(template: Template) -> None:
@@ -981,6 +983,10 @@ def test_channel_mocks_default_true_and_whatsapp_is_unscoped_without_a_phone_id(
 
 def test_channels_live_disables_mocks_and_scopes_whatsapp_to_the_phone_number() -> None:
     phone_id = "phone-number-id-01234567890123456789012345678901"
+    phone_arn = (
+        f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:phone-number-id/"
+        "01234567890123456789012345678901"
+    )
     saved = _without_synth_env()
     try:
         _stack, live = synthesize(
@@ -1000,9 +1006,7 @@ def test_channels_live_disables_mocks_and_scopes_whatsapp_to_the_phone_number() 
     )
     send = _statements_with_action(statements, "social-messaging:SendWhatsAppMessage")
     assert len(send) == 1
-    assert _resource_list(send[0]["Resource"]) == [
-        f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:phone-number-id/{phone_id}"
-    ]
+    assert _resource_list(send[0]["Resource"]) == [phone_arn]
     assert "socialmessaging:*" not in role_actions(live, "oerf-channel-router")
     inbound_statements = statements_for_role(
         live, role_logical_id(functions_by_name(live)["oerf-inbound"])
@@ -1011,15 +1015,86 @@ def test_channels_live_disables_mocks_and_scopes_whatsapp_to_the_phone_number() 
         inbound_statements, "social-messaging:GetWhatsAppMessageMedia"
     )
     assert len(fetch) == 1
-    assert _resource_list(fetch[0]["Resource"]) == [
-        f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:phone-number-id/{phone_id}"
-    ]
+    assert _resource_list(fetch[0]["Resource"]) == [phone_arn]
     assert functions_by_name(live)["oerf-inbound"]["Environment"]["Variables"][
         "WHATSAPP_PHONE_NUMBER_ID"
     ] == phone_id
     vision = functions_by_name(live)["oerf-evidence-analyzer"]["Environment"]["Variables"]
     assert vision["USE_MOCK_BEDROCK"] == "false"
     assert vision["BEDROCK_MODEL_ID"] == "amazon.nova-lite-v1:0"
+
+
+def test_social_messaging_arns_drop_the_api_prefix() -> None:
+    """Prefixed context ids become bare resource segments in every template."""
+    waba_id = "waba-0000000000000000"
+    phone_id = "phone-number-id-1111111111111111"
+    waba_resource = f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:waba/0000000000000000"
+    phone_resource = (
+        f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:phone-number-id/1111111111111111"
+    )
+    saved = _without_synth_env()
+    try:
+        templates = _synthesized_templates(
+            {
+                "whatsapp:wabaId": waba_id,
+                "whatsapp:phoneNumberId": phone_id,
+            }
+        )
+    finally:
+        _restore_env(saved)
+
+    seen: set[str] = set()
+    for name, template in templates.items():
+        blob = json.dumps(template.to_json())
+        assert "waba/waba-" not in blob, name
+        assert "phone-number-id/phone-number-id-" not in blob, name
+        for statement in _policy_statements(template):
+            actions = _action_list(statement)
+            social = [action for action in actions if action.startswith("social-messaging:")]
+            if not social:
+                continue
+            resources = _resource_list(statement.get("Resource"))
+            seen.update(social)
+            for action in social:
+                expected = (
+                    phone_resource
+                    if action
+                    in {
+                        "social-messaging:SendWhatsAppMessage",
+                        "social-messaging:GetWhatsAppMessageMedia",
+                    }
+                    else waba_resource
+                )
+                assert resources == [expected], (name, action, resources)
+    assert seen == {
+        "social-messaging:SendWhatsAppMessage",
+        "social-messaging:GetWhatsAppMessageMedia",
+        "social-messaging:PutWhatsAppBusinessAccountEventDestinations",
+        "social-messaging:GetLinkedWhatsAppBusinessAccount",
+    }
+
+    compute = templates["OerfComputeStack"]
+    policies = compute.find_resources("AWS::SNS::TopicPolicy")
+    statements = next(iter(policies.values()))["Properties"]["PolicyDocument"]["Statement"]
+    publish = [
+        statement
+        for statement in statements
+        if _principal_services(statement) == ["social-messaging.amazonaws.com"]
+    ]
+    assert len(publish) == 1
+    assert publish[0]["Condition"]["StringEquals"]["aws:SourceArn"] == waba_resource
+    custom = next(
+        resource["Properties"]
+        for resource in compute.find_resources("AWS::CloudFormation::CustomResource").values()
+        if "WabaId" in resource["Properties"]
+    )
+    assert custom["WabaId"] == waba_id
+    assert (
+        functions_by_name(compute)["oerf-channel-router"]["Environment"]["Variables"][
+            "WHATSAPP_PHONE_NUMBER_ID"
+        ]
+        == phone_id
+    )
 
 
 def test_guardrail_is_versioned_and_only_vision_can_apply_it(template: Template) -> None:

@@ -33,6 +33,7 @@ from constructs import Construct
 
 from infra.constructs.agentcore_runtime import AgentCoreRuntime
 from infra.constructs.bedrock_guardrail import BedrockGuardrail
+from infra.constructs.social_messaging_arns import phone_number_arn
 from infra.constructs.waba_event_destination import WabaEventDestination
 from infra.iam_conditions import pin_source_account
 from infra.runtime_asset import runtime_code_args
@@ -199,18 +200,14 @@ class OerfComputeStack(Stack):
             )
         )
         # social-messaging:SendWhatsAppMessage requires resource type phone-number-id.
-        # arn:${Partition}:social-messaging:${Region}:${Account}:phone-number-id/${Id}
-        # Service Authorization Reference, list_socialmessaging.html.
+        # The ARN id drops a leading phone-number-id- prefix.
         if whatsapp_phone_number_id:
             whatsapp_resources = [
-                (
-                    f"arn:aws:social-messaging:{self.region}:{self.account}:"
-                    f"phone-number-id/{whatsapp_phone_number_id}"
-                )
+                phone_number_arn(self.region, self.account, whatsapp_phone_number_id)
             ]
         else:
-            # TODO: scope this to the phone-number-id ARN when context
-            # whatsapp:phoneNumberId is set. See docs/security/iam-exceptions.md.
+            # whatsapp:phoneNumberId is unset, so no phone-number-id ARN exists
+            # at synth. See docs/security/iam-exceptions.md.
             whatsapp_resources = ["*"]
         self.channel_router_fn.add_to_role_policy(
             iam.PolicyStatement(
