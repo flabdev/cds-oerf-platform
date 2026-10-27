@@ -2,7 +2,7 @@
 
 The dashboard is a local React page for the Operational Exception Resolution Framework. It shows cold-chain incidents, the ranked recovery options for a shipment that is being assessed, and the actions a desk user can queue.
 
-Without Cognito settings, the page reads the sample list in `src/App.jsx`. Refreshing the browser restores that list. With `VITE_API_URL`, `VITE_COGNITO_DOMAIN`, and `VITE_USER_POOL_CLIENT_ID` set, Sign in opens the Cognito hosted page and the desk loads `GET /incidents` with the id token. Actions are posted to the API. The contract is in `docs/interfaces.md`.
+Without Cognito settings, the page reads the sample list in `src/App.jsx`. Refreshing the browser restores that list. With `VITE_API_URL`, `VITE_COGNITO_DOMAIN`, and `VITE_USER_POOL_CLIENT_ID` set, Sign in opens the Cognito hosted page and the desk loads `GET /incidents` with the id token. The WebSocket uses the access token. Actions are posted to the API. The contract is in `docs/interfaces.md`.
 
 ## Setup
 
@@ -31,7 +31,7 @@ npm run build
 
 The page fills the browser window in three columns. Below 760px the columns stack.
 
-- **Left rail.** Profile initial, display name, and tenant. Desk links for Incidents, Allowance, and Actions. The footer has an info icon, a collapse control, and the OERF wordmark. Collapsing the rail hides the labels.
+- **Left rail.** Profile initial, display name, and tenant. Desk links for Incidents, Allowance, and Actions. Sign out ends the Cognito session in live mode, or shows the guest desk in sample mode. The footer has an info icon, a collapse control, and the OERF wordmark. Collapsing the rail hides the labels.
 - **Middle pane.** Search and the incident list, the allowance editor, or the action queue, depending on the Desk link.
 - **Right pane.** The selected shipment: state, minutes of allowance left, evidence, recommendation, a temperature sketch, facility rows, timeline, and the same three actions as the queue.
 
@@ -71,7 +71,9 @@ $env:VITE_WS_URL = "wss://example.execute-api.us-east-1.amazonaws.com/prod"
 npm run dev
 ```
 
-The hosted page redirects back to `http://localhost:5173` or `http://127.0.0.1:5173`. Those two callbacks are registered on the dashboard user-pool client, along with the CloudFront site URL. Leave the variables unset to keep the sample desk.
+`npm run dev` proxies `/api` to `VITE_API_URL`, so the browser calls `http://localhost:5173/api/incidents` and does not need REST CORS. Keep `VITE_API_URL` as `RestApiUrl`. Cognito and the WebSocket still use the hosted domain and `VITE_WS_URL`. A production `npm run build` calls `RestApiUrl` directly.
+
+The hosted page redirects back to `http://localhost:5173` or `http://127.0.0.1:5173`. Those two callbacks are registered on the dashboard user-pool client, along with the CloudFront site URL. Use one of those origins and do not mix them after Sign in. Leave the variables unset to keep the sample desk.
 
 ## Session
 

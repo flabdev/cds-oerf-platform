@@ -5,11 +5,14 @@ import {
   authorizeUrl,
   createVerifier,
   exchangeCode,
+  exchangeOnce,
   liveConfig,
   loadIncidents,
+  logoutUrl,
   presentIncident,
   principalFromIdToken,
   sendDashboard,
+  stripAuthCode,
 } from "./session.js";
 
 test("missing Cognito settings keep the sample desk", () => {
@@ -27,6 +30,17 @@ test("a live config drops a trailing slash and the https prefix", () => {
   assert.equal(config.apiUrl, "https://api.example.com");
   assert.equal(config.domain, "oerf.auth.us-east-1.amazoncognito.com");
   assert.equal(config.wsUrl, "");
+});
+
+test("dev live mode calls the Vite proxy instead of RestApiUrl", () => {
+  const config = liveConfig({
+    DEV: true,
+    VITE_API_URL: "https://api.example.com/prod/",
+    VITE_COGNITO_DOMAIN: "oerf.auth.us-east-1.amazoncognito.com",
+    VITE_USER_POOL_CLIENT_ID: "client-1",
+  });
+  assert.equal(config.mode, "live");
+  assert.equal(config.apiUrl, "/api");
 });
 
 test("the websocket url is the compute stack output", () => {
@@ -52,6 +66,17 @@ test("the id token supplies the tenant and role, and an expired token signs out"
   assert.equal(principal.role, "tenant_admin");
   assert.equal(principal.name, "lead@example.com");
   assert.equal(principalFromIdToken(token, 3_000_000).authenticated, false);
+});
+
+test("the logout url is the hosted Cognito logout page", () => {
+  const url = new URL(logoutUrl({
+    domain: "oerf.auth.us-east-1.amazoncognito.com",
+    clientId: "client-1",
+    logoutUri: "http://localhost:5173",
+  }));
+  assert.equal(url.pathname, "/logout");
+  assert.equal(url.searchParams.get("client_id"), "client-1");
+  assert.equal(url.searchParams.get("logout_uri"), "http://localhost:5173");
 });
 
 test("the authorize url is the hosted Cognito page", async () => {
@@ -108,7 +133,7 @@ test("incidents and actions use the bearer token and hide no task token", async 
   assert.equal(calls[1].options.body.includes("task_token"), false);
 });
 
-test("the code exchange keeps the access token for the HTTP API", async () => {
+test("the code exchange keeps the id token for REST and the access token for WebSocket", async () => {
   const session = await exchangeCode({
     domain: "oerf.auth.us-east-1.amazoncognito.com",
     clientId: "client-1",
@@ -138,6 +163,44 @@ test("a failed code exchange does not invent a session", async () => {
     /Cognito did not return a session/,
   );
   assert.equal(presentIncident({ timeline: ["10:16 opened"] }).timeline[0], "10:16 opened");
+});
+
+test("a second exchange of the same code reuses the in-flight request", async () => {
+  let calls = 0;
+  let finish;
+  const fetchImpl = () => new Promise((resolve) => {
+    calls += 1;
+    finish = resolve;
+  });
+  const args = {
+    domain: "oerf.auth.us-east-1.amazoncognito.com",
+    clientId: "client-1",
+    redirectUri: "http://localhost:5173",
+    code: "code-once",
+    verifier: "verifier",
+    fetchImpl,
+  };
+  const first = exchangeOnce(args);
+  const second = exchangeOnce(args);
+  finish({
+    ok: true,
+    status: 200,
+    json: async () => ({ id_token: "id-1", access_token: "access-1" }),
+  });
+  const [one, two] = await Promise.all([first, second]);
+  assert.equal(calls, 1);
+  assert.equal(one.accessToken, "access-1");
+  assert.equal(two.accessToken, "access-1");
+});
+
+test("the callback drops the authorization code from the URL", () => {
+  const replaced = [];
+  const stripped = stripAuthCode(
+    { pathname: "/", search: "?code=abc&x=1", hash: "" },
+    (...args) => replaced.push(args),
+  );
+  assert.equal(stripped, true);
+  assert.equal(replaced[0][2], "/?x=1");
 });
 
 function jwt(payload) {
