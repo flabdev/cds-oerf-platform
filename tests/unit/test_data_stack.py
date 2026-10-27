@@ -827,3 +827,63 @@ def test_github_deploy_role_assumes_only_bootstrap_roles(template: Template) -> 
     assert statement["Effect"] == "Allow"
     assert _as_list(statement["Action"]) == ["sts:AssumeRole"]
     assert _as_list(statement["Resource"]) == [_BOOTSTRAP_ROLE_ARN]
+
+
+def _transaction_search_policies(template: Template) -> dict:
+    return {
+        logical_id: resource
+        for logical_id, resource in template.find_resources("AWS::Logs::ResourcePolicy").items()
+        if resource["Properties"].get("PolicyName") == "TransactionSearchXRayAccess"
+    }
+
+
+def test_transaction_search_is_absent_unless_agentcore_is_enabled(template: Template) -> None:
+    assert template.find_resources("AWS::XRay::TransactionSearchConfig") == {}
+    assert _transaction_search_policies(template) == {}
+
+
+def test_agentcore_enables_one_transaction_search_config() -> None:
+    app = cdk.App(context={"agentcore:enabled": "true"})
+    data = OerfDataStack(
+        app,
+        "OerfDataStack",
+        env=cdk.Environment(account=ACCOUNT, region=REGION),
+    )
+    template = Template.from_stack(data)
+    configs = template.find_resources("AWS::XRay::TransactionSearchConfig")
+    assert len(configs) == 1
+    _config_id, config = next(iter(configs.items()))
+    assert "IndexingPercentage" not in config.get("Properties", {})
+
+    policies = _transaction_search_policies(template)
+    assert len(policies) == 1
+    policy_id, policy = next(iter(policies.items()))
+    document = json.loads(policy["Properties"]["PolicyDocument"])
+    statement = document["Statement"]
+    assert len(statement) == 1
+    body = statement[0]
+    assert body["Principal"] == {"Service": "xray.amazonaws.com"}
+    assert body["Action"] == "logs:PutLogEvents"
+    assert body["Resource"] == [
+        f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:aws/spans:*",
+        f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:/aws/application-signals/data:*",
+    ]
+    assert body["Condition"] == {
+        "ArnLike": {"aws:SourceArn": f"arn:aws:xray:{REGION}:{ACCOUNT}:*"},
+        "StringEquals": {"aws:SourceAccount": ACCOUNT},
+    }
+    depends = config.get("DependsOn", [])
+    if isinstance(depends, str):
+        depends = [depends]
+    assert policy_id in depends
+
+    exceptions = (
+        Path(__file__).resolve().parents[2] / "docs" / "security" / "iam-exceptions.md"
+    ).read_text(encoding="utf-8")
+    for fragment in (
+        "TransactionSearchXRayAccess",
+        "log-group:aws/spans:*",
+        "log-group:/aws/application-signals/data:*",
+        "arn:aws:xray:{region}:{account}:*",
+    ):
+        assert fragment in exceptions, fragment

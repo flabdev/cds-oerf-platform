@@ -39,6 +39,12 @@ The account must already be bootstrapped (`CDKToolkit` in `us-east-1`). This rol
 
 An empty `waba_id`, `phone_number_id`, or `alarm_email` uses repository variables `WABA_ID`, `WA_PHONE_NUMBER_ID`, and `ALARM_EMAIL`. If that variable is also empty, the context key is omitted. AgentCore's default builds the ARM64 image.
 
+## X-Ray Transaction Search
+
+`agentcore:enabled=true` adds one account-wide `AWS::XRay::TransactionSearchConfig` to `OerfDataStack`, and the CloudWatch Logs resource policy `TransactionSearchXRayAccess`. AgentCore can deliver traces to X-Ray only after CloudWatch Logs is the trace segment destination. That config turns it on. Indexing stays at the service default (`IndexingPercentage` is not set).
+
+The account has a single Transaction Search configuration. Deleting the resource turns Transaction Search off for the whole account. A stack delete does that. A later deploy with `agentcore:enabled` unset or `false` does too, because the resource leaves the template and CloudFormation deletes it. `OerfComputeStack` is deployed after `OerfDataStack`, so the runtime's trace delivery is created only once that config exists.
+
 ## DynamoDB encryption
 
 Context `dynamodb:kmsManaged` defaults to `false`. The four tables then omit `encryption` and stay on the AWS owned key. Pass `dynamodb:kmsManaged=true` only to move them to the AWS managed key `aws/dynamodb` (ADR-033). The evidence and report buckets still use SSE-KMS `aws/s3` either way.

@@ -74,6 +74,23 @@ def _context_int(scope: Construct, key: str, default: int) -> int:
     return int(raw)
 
 
+_TRACE_DELIVERY_IDS = ("TracesDeliverySource", "TracesDeliveryDest", "TracesDelivery")
+
+
+def _trace_delivery_waits_for(runtime: Construct, data_stack: OerfDataStack) -> None:
+    """X-Ray delivery fails until Transaction Search has made CloudWatch Logs the destination."""
+    config = data_stack.transaction_search_config
+    if config is None:
+        raise RuntimeError(
+            "agentcore:enabled is true but OerfDataStack has no TransactionSearchConfig"
+        )
+    for child_id in _TRACE_DELIVERY_IDS:
+        child = runtime.node.try_find_child(child_id)
+        if child is None:
+            raise RuntimeError(f"AgentCore runtime is missing {child_id}")
+        child.node.add_dependency(config)
+
+
 class OerfComputeStack(Stack):
     def __init__(
         self,
@@ -689,6 +706,7 @@ class OerfComputeStack(Stack):
                 value=agent.agent_runtime_arn,
                 export_name="AGENT-RUNTIME-ARN",
             )
+            _trace_delivery_waits_for(agent.runtime, data_stack)
 
         # ---------------------------------------------------------
         # 10. Cold-chain step functions. Names are fixed so the data stack
@@ -706,6 +724,10 @@ class OerfComputeStack(Stack):
         CfnOutput(self, "InboundQueueUrl", value=self.inbound_queue.queue_url)
         CfnOutput(self, "EvidenceAnalyzerArn", value=self.evidence_analyzer_fn.function_arn)
         CfnOutput(self, "ReportGeneratorArn", value=self.report_generator_fn.function_arn)
+        # Trace delivery in this stack needs Transaction Search from the data
+        # stack. Table references usually create the same edge; add it if not.
+        if data_stack not in self.dependencies:
+            self.add_stack_dependency(data_stack)
         pin_source_account(self)
 
     def _step_functions(self, data_stack: OerfDataStack, code: lambda_.Code) -> None:
