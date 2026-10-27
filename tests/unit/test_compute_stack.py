@@ -58,7 +58,13 @@ EXPECTED_FUNCTIONS = {
     },
     "oerf-ws-authorizer": {
         "handler": "oerf.platform.api.ws_authorizer.handler",
-        "env": {"ROUTING_TABLE_NAME", "USER_POOL_ID", "USER_POOL_CLIENT_ID"},
+        "env": {
+            "ROUTING_TABLE_NAME",
+            "USER_POOL_ID",
+            "USER_POOL_CLIENT_ID",
+            "ALLOWED_CLIENT_IDS",
+            "DASHBOARD_CLIENT_PARAMETER",
+        },
     },
     "oerf-stream-broadcaster": {
         "handler": "oerf.platform.api.stream_broadcaster.handler",

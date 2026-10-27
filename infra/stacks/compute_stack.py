@@ -39,6 +39,7 @@ from infra.iam_conditions import pin_source_account
 from infra.runtime_asset import runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
 from infra.step_functions import STEP_FUNCTION_NAMES, STEP_HANDLERS
+from infra.ws_clients import DASHBOARD_CLIENT_PARAMETER
 
 # Task-token APIs have no resource type in the IAM Service Authorization
 # Reference. The resource stays "*"; see docs/security/iam-exceptions.md.
@@ -335,7 +336,22 @@ class OerfComputeStack(Stack):
                 "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
                 "USER_POOL_ID": data_stack.user_pool.user_pool_id,
                 "USER_POOL_CLIENT_ID": user_pool_client.user_pool_client_id,
+                "ALLOWED_CLIENT_IDS": user_pool_client.user_pool_client_id,
+                "DASHBOARD_CLIENT_PARAMETER": DASHBOARD_CLIENT_PARAMETER,
             },
+        )
+        # The dashboard client id is published by OerfApiStack. Naming the
+        # parameter here does not reference that stack.
+        self.ws_authorizer_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["ssm:GetParameter"],
+                resources=[
+                    (
+                        f"arn:aws:ssm:{self.region}:{self.account}:parameter"
+                        f"{DASHBOARD_CLIENT_PARAMETER}"
+                    )
+                ],
+            )
         )
         data_stack.routing_table.grant_read_write_data(self.ws_authorizer_fn)
         ws_authorizer = authorizers.WebSocketLambdaAuthorizer(

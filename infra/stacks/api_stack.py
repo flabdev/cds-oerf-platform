@@ -22,12 +22,14 @@ from aws_cdk import (
     aws_logs as logs,
     aws_s3 as s3,
     aws_sqs as sqs,
+    aws_ssm as ssm,
 )
 from constructs import Construct
 
 from infra.iam_conditions import pin_source_account
 from infra.runtime_asset import runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
+from infra.ws_clients import DASHBOARD_CLIENT_PARAMETER
 
 _DEFAULT_THROTTLE_RATE = 20
 _DEFAULT_THROTTLE_BURST = 40
@@ -253,6 +255,15 @@ class OerfApiStack(Stack):
             ),
         )
         self.user_pool_client.node.add_dependency(self.hosted_domain)
+        # The WebSocket authorizer lives in OerfComputeStack, which this stack
+        # depends on. Publishing the client id lets that function allow the
+        # hosted-UI client without a reference back to this stack.
+        ssm.StringParameter(
+            self,
+            "DashboardClientIdParameter",
+            parameter_name=DASHBOARD_CLIENT_PARAMETER,
+            string_value=self.user_pool_client.user_pool_client_id,
+        )
         CfnOutput(
             self,
             "CognitoDomain",

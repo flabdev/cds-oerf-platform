@@ -36,7 +36,12 @@ class FakeDynamoDB:
 
 @pytest.mark.security
 def test_websocket_authorizer_returns_policy_and_binds_verified_tenant(monkeypatch):
-    claims = {"client_id": "client-1", "sub": "user-1", "cognito:groups": "tenant_admin"}
+    claims = {
+        "client_id": "client-1",
+        "sub": "user-1",
+        "cognito:groups": "tenant_admin",
+        "token_use": "access",
+    }
     payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
     token = f"header.{payload}.signature"
     table = FakeTable()
@@ -77,7 +82,7 @@ def test_websocket_authorizer_returns_policy_and_binds_verified_tenant(monkeypat
 
 
 def test_websocket_authorizer_works_when_gateway_omits_connection_id(monkeypatch):
-    claims = {"client_id": "client-1", "sub": "user-1"}
+    claims = {"client_id": "client-1", "sub": "user-1", "token_use": "access"}
     payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
     token = f"header.{payload}.signature"
 

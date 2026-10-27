@@ -8,7 +8,9 @@ from aws_cdk import aws_cloudfront as cloudfront, aws_sqs as sqs
 from aws_cdk.assertions import Template
 
 from infra.stacks.api_stack import OerfApiStack
+from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
+from infra.ws_clients import DASHBOARD_CLIENT_PARAMETER
 
 ACCOUNT = "123456789012"
 REGION = "us-east-1"
@@ -265,6 +267,43 @@ def test_websocket_is_the_compute_endpoint_and_cors_is_cloudfront(
         rendered = str(origin)
         assert "*" not in rendered
         assert "DomainName" in rendered
+
+
+def test_websocket_allow_list_matches_the_hosted_ui_client() -> None:
+    app = cdk.App()
+    env = cdk.Environment(account=ACCOUNT, region=REGION)
+    data = OerfDataStack(app, "OerfDataStack", env=env)
+    compute = OerfComputeStack(app, "OerfComputeStack", data_stack=data, env=env)
+    api = OerfApiStack(
+        app,
+        "OerfApiStack",
+        data_stack=data,
+        inbound_queue=compute.inbound_queue,
+        websocket_url=WEBSOCKET_URL,
+        env=env,
+    )
+    api_template = Template.from_stack(api)
+    compute_template = Template.from_stack(compute)
+
+    parameter = next(iter(api_template.find_resources("AWS::SSM::Parameter").values()))
+    assert parameter["Properties"]["Name"] == DASHBOARD_CLIENT_PARAMETER
+    hosted = api_template.find_resources("AWS::Cognito::UserPoolClient")
+    client_id = parameter["Properties"]["Value"]["Ref"]
+    assert hosted[client_id]["Properties"]["AllowedOAuthFlows"] == ["code"]
+
+    variables = _authorizer_env(compute_template)
+    assert variables["DASHBOARD_CLIENT_PARAMETER"] == DASHBOARD_CLIENT_PARAMETER
+    assert variables["ALLOWED_CLIENT_IDS"] == variables["USER_POOL_CLIENT_ID"]
+    assert variables["USER_POOL_CLIENT_ID"] != parameter["Properties"]["Value"]
+
+
+def _authorizer_env(template: Template) -> dict[str, object]:
+    for resource in template.find_resources("AWS::Lambda::Function").values():
+        props = resource["Properties"]
+        if props.get("Handler") != "oerf.platform.api.ws_authorizer.handler":
+            continue
+        return props["Environment"]["Variables"]
+    raise AssertionError("WebSocket authorizer is missing")
 
 
 def _sqs_statements(template: Template) -> tuple[list[list[str]], list[object]]:

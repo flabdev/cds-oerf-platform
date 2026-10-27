@@ -1,9 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.31** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.32** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.32 (2026-10-28) The WebSocket authorizer allows an access token whose `client_id` is `USER_POOL_CLIENT_ID` or listed in `ALLOWED_CLIENT_IDS`, plus the dashboard client id in SSM `/oerf/ws-allowed-clients/dashboard` when `OerfApiStack` has published it. An ID token and any other client id are denied. `GetUser`, expiry, and the tenant claim stay.
 - v1.31 (2026-10-27) `scripts.seed_runtime --live-contacts` skips a role whose `/oerf/demo-numbers/{tid}/{role}` parameter does not exist and prints `skipped {tid} live-contacts {role} (no parameter)`. A parameter that exists but is empty or not E.164 stops the command. `--roles` limits the roles. The value is not printed.
 - v1.30 (2026-10-27) `scripts.seed_runtime --live-contacts` reads SSM `/oerf/demo-numbers/{tid}/{role}` (SecureString, decrypted) and writes the `PHONE#` ownership row for each seeded contact of that role. The command prints the role and the count. Without the flag it does not read SSM.
 - v1.29 (2026-10-27) `scripts.seed_runtime` writes a routing `PHONE#{e164}` row for each synthetic contact. Inbound ownership is that row's tenant and contact. A WhatsApp sender with or without `+` is the same E.164. End User Messaging delivers `from` as digits inside `whatsAppWebhookEntry`. `ColdChainWorkflowStub` returns an unknown `step_name` unchanged.
@@ -398,7 +399,7 @@ Dashboard `POST /incidents/{id}/actions` is section 3.2 on the REST API. Ingest 
 
 ### 7.2 Subscribe
 
-WebSocket API `oerf-ws-api`, stage `prod`. `$connect` is authorized. The client sends the Cognito access token as the `token` query parameter. The authorizer binds the connection to `custom:tenant_id`.
+WebSocket API `oerf-ws-api`, stage `prod`. `$connect` is authorized. The client sends the Cognito access token as the `token` query parameter. The authorizer accepts that token when `token_use` is `access`, it has not expired, `GetUser` succeeds, and `client_id` is the HTTP API client or the dashboard hosted-UI client. The dashboard client id is SSM `/oerf/ws-allowed-clients/dashboard`, written by `OerfApiStack`, because that stack already depends on the authorizer's stack. The authorizer binds the connection to `custom:tenant_id`.
 
 Route `subscribe`. Two scopes, both the bound tenant:
 
@@ -535,7 +536,9 @@ This ticket does not rename variables on deployed functions. OERF-301 sets missi
 | `CONFIG_ROOT` | directory of domain packages inside the asset. Value `domains`. The config library currently resolves the installed `domains` package and does not read this variable. | OERF-301, when a function needs an explicit root |
 | `LOG_LEVEL` | logging level name. Default `INFO` when unset. | OERF-301 / OERF-303 |
 | `USER_POOL_ID` | deployed on the WebSocket authorizer | compute stack |
-| `USER_POOL_CLIENT_ID` | deployed on the WebSocket authorizer | compute stack |
+| `USER_POOL_CLIENT_ID` | deployed on the WebSocket authorizer. The HTTP API client. Also included in the socket allow-list. | compute stack |
+| `ALLOWED_CLIENT_IDS` | Comma-separated app client ids that may open the socket, together with `USER_POOL_CLIENT_ID`. Deployed as the HTTP API client. | compute stack |
+| `DASHBOARD_CLIENT_PARAMETER` | SSM name `/oerf/ws-allowed-clients/dashboard`. The authorizer reads it once per cold start. `OerfApiStack` sets the value to the hosted-UI client id. A missing parameter adds no client. | compute stack reads, API stack writes |
 | `WEBSOCKET_ENDPOINT` | deployed on the broadcaster | compute stack |
 | `WHATSAPP_PHONE_NUMBER_ID` | Router and inbound. Value is context `whatsapp:phoneNumberId`, default empty. Used only when `WA_PHONE_NUMBER_ID_PARAM` is unset. | WhatsApp infra |
 | `SES_SOURCE_EMAIL` | deployed on the router and the report function | compute stack |
