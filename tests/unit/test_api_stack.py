@@ -259,7 +259,15 @@ def test_websocket_is_the_compute_endpoint_and_cors_is_cloudfront(
     template.resource_count_is("AWS::Cognito::UserPoolDomain", 1)
     template.has_resource_properties(
         "AWS::Cognito::UserPoolClient",
-        {"AllowedOAuthFlows": ["code"]},
+        {
+            "AllowedOAuthFlows": ["code"],
+            "AllowedOAuthScopes": [
+                "openid",
+                "email",
+                "profile",
+                "aws.cognito.signin.user.admin",
+            ],
+        },
     )
     origins = _allow_origins(template.to_json())
     assert origins

@@ -40,7 +40,7 @@ export function authorizeUrl({ domain, clientId, redirectUri, challenge }) {
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", clientId);
   url.searchParams.set("redirect_uri", redirectUri);
-  url.searchParams.set("scope", "openid email profile");
+  url.searchParams.set("scope", "openid email profile aws.cognito.signin.user.admin");
   url.searchParams.set("code_challenge", challenge);
   url.searchParams.set("code_challenge_method", "S256");
   return url.toString();

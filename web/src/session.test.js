@@ -65,6 +65,10 @@ test("the authorize url is the hosted Cognito page", async () => {
   assert.equal(url.pathname, "/oauth2/authorize");
   assert.equal(url.searchParams.get("client_id"), "client-1");
   assert.equal(url.searchParams.get("code_challenge_method"), "S256");
+  assert.equal(
+    url.searchParams.get("scope"),
+    "openid email profile aws.cognito.signin.user.admin",
+  );
 });
 
 test("incidents and actions use the bearer token and hide no task token", async () => {

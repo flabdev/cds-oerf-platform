@@ -249,6 +249,8 @@ class OerfApiStack(Stack):
                     cognito.OAuthScope.OPENID,
                     cognito.OAuthScope.EMAIL,
                     cognito.OAuthScope.PROFILE,
+                    # GetUser, which the WebSocket authorizer calls, requires this scope.
+                    cognito.OAuthScope.COGNITO_ADMIN,
                 ],
                 callback_urls=[dashboard_origin, "http://localhost:5173", "http://127.0.0.1:5173"],
                 logout_urls=[dashboard_origin, "http://localhost:5173", "http://127.0.0.1:5173"],
