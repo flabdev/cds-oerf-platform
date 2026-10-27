@@ -53,7 +53,7 @@ const SAMPLE = [
   },
 ];
 
-export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
+export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignOut }) {
   const session = sessionView(principal);
   const [selectedTenant, setSelectedTenant] = useState(session.tenantId || "t1");
   const [allowance, setAllowance] = useState(45);
@@ -101,6 +101,16 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "The action was not queued");
     }
+  }
+
+  function signOut() {
+    if (onSignOut) {
+      onSignOut();
+      return;
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.set("signedOut", "1");
+    window.location.assign(url);
   }
 
   function publishAllowance() {
@@ -167,6 +177,13 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
                 <option value="t2">t2</option>
               </select>
             </label>
+          ) : null}
+
+          {session.state === "ready" ? (
+            <button type="button" className="nav-item sign-out" onClick={signOut}>
+              <span className="dot rose" aria-hidden="true" />
+              {sidebarOpen ? <span>Sign out</span> : <span className="sr-only">Sign out</span>}
+            </button>
           ) : null}
 
           <div className="rail-foot">

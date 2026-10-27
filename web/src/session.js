@@ -12,7 +12,9 @@ export function liveConfig(env) {
   if (!apiUrl || !domain || !clientId) {
     return { mode: "demo" };
   }
-  return { mode: "live", apiUrl, domain, clientId, wsUrl };
+  // Vite proxies /api to RestApiUrl so localhost does not need API CORS.
+  const liveApiUrl = env?.DEV ? "/api" : apiUrl;
+  return { mode: "live", apiUrl: liveApiUrl, domain, clientId, wsUrl };
 }
 
 export function principalFromIdToken(token, now = Date.now()) {
@@ -46,11 +48,31 @@ export function authorizeUrl({ domain, clientId, redirectUri, challenge }) {
   return url.toString();
 }
 
+export function logoutUrl({ domain, clientId, logoutUri }) {
+  const url = new URL(`https://${domain}/logout`);
+  url.searchParams.set("client_id", clientId);
+  url.searchParams.set("logout_uri", logoutUri);
+  return url.toString();
+}
+
 export async function createVerifier() {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   const verifier = base64url(bytes);
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
   return { verifier, challenge: base64url(new Uint8Array(digest)) };
+}
+
+const exchangeFlight = { key: "", promise: null };
+
+export function stripAuthCode(location, replaceState) {
+  const params = new URLSearchParams(location.search);
+  if (!params.has("code")) {
+    return false;
+  }
+  params.delete("code");
+  const query = params.toString();
+  replaceState({}, "", `${location.pathname}${query ? `?${query}` : ""}${location.hash || ""}`);
+  return true;
 }
 
 export async function exchangeCode({ domain, clientId, redirectUri, code, verifier, fetchImpl = fetch }) {
@@ -67,7 +89,7 @@ export async function exchangeCode({ domain, clientId, redirectUri, code, verifi
     body,
   });
   if (!response.ok) {
-    throw new Error("Cognito did not return a session");
+    throw new Error("Cognito did not return a session. Sign in again.");
   }
   const payload = await response.json();
   if (!payload.access_token) {
@@ -77,6 +99,21 @@ export async function exchangeCode({ domain, clientId, redirectUri, code, verifi
     idToken: payload.id_token || payload.access_token,
     accessToken: payload.access_token,
   };
+}
+
+export function exchangeOnce(args) {
+  const key = [args.domain, args.clientId, args.redirectUri, args.code, args.verifier].join("\n");
+  if (exchangeFlight.promise && exchangeFlight.key === key) {
+    return exchangeFlight.promise;
+  }
+  exchangeFlight.key = key;
+  exchangeFlight.promise = exchangeCode(args).finally(() => {
+    if (exchangeFlight.key === key) {
+      exchangeFlight.key = "";
+      exchangeFlight.promise = null;
+    }
+  });
+  return exchangeFlight.promise;
 }
 
 export async function loadIncidents(apiUrl, token, fetchImpl = fetch) {
