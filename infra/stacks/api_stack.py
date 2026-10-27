@@ -184,6 +184,26 @@ class OerfApiStack(Stack):
                 allow_headers=["Content-Type", "Authorization", "Idempotency-Key"],
             ),
         )
+        # A Cognito authorizer rejection never reaches the Lambda. Those
+        # gateway responses omit the preflight headers, so the browser reports
+        # the 401 as a CORS failure.
+        cors_headers = {
+            "Access-Control-Allow-Origin": f"'{dashboard_origin}'",
+            "Access-Control-Allow-Headers": "'Content-Type,Authorization,Idempotency-Key'",
+            "Access-Control-Allow-Methods": "'GET,POST,PUT,OPTIONS'",
+        }
+        self.rest_api.add_gateway_response(
+            "UnauthorizedCors",
+            type=apigw.ResponseType.UNAUTHORIZED,
+            response_headers=cors_headers,
+        )
+        self.rest_api.add_gateway_response(
+            "AccessDeniedCors",
+            type=apigw.ResponseType.ACCESS_DENIED,
+            response_headers=cors_headers,
+        )
+        self.query_fn.add_environment("DASHBOARD_ORIGIN", dashboard_origin)
+        self.action_fn.add_environment("DASHBOARD_ORIGIN", dashboard_origin)
         query_integration = apigw.LambdaIntegration(self.query_fn, proxy=True)
         action_integration = apigw.LambdaIntegration(self.action_fn, proxy=True)
         incidents = self.rest_api.root.add_resource("incidents")
