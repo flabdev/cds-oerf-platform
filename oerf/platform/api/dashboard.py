@@ -8,6 +8,7 @@ task token.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -228,9 +229,22 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     )
     return {
         "statusCode": status,
-        "headers": {"Content-Type": "application/json"},
+        "headers": _response_headers(),
         "body": json.dumps(body),
     }
+
+
+def _response_headers() -> dict[str, str]:
+    """CORS for the dashboard origin. A missing origin leaves the header off."""
+
+    headers = {"Content-Type": "application/json"}
+    origin = os.environ.get("DASHBOARD_ORIGIN", "").strip()
+    if not origin or origin == "*":
+        return headers
+    headers["Access-Control-Allow-Origin"] = origin
+    headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization,Idempotency-Key"
+    headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,OPTIONS"
+    return headers
 
 
 def services_from_env() -> DashboardServices:

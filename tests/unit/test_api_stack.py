@@ -227,6 +227,21 @@ def test_dashboard_functions_trace_and_keep_logs_for_thirty_days(template: Templ
         assert group["Properties"]["RetentionInDays"] == 30
 
 
+def test_authorizer_errors_allow_the_cloudfront_origin(template: Template) -> None:
+    responses = template.find_resources("AWS::ApiGateway::GatewayResponse")
+    by_type = {
+        item["Properties"]["ResponseType"]: item["Properties"] for item in responses.values()
+    }
+
+    for name in ("UNAUTHORIZED", "ACCESS_DENIED"):
+        parameters = by_type[name]["ResponseParameters"]
+        origin = parameters["gatewayresponse.header.Access-Control-Allow-Origin"]
+        rendered = json.dumps(origin)
+        assert "DomainName" in rendered
+        assert "*" not in rendered
+        assert "Content-Type,Authorization,Idempotency-Key" in json.dumps(parameters)
+
+
 def test_websocket_is_the_compute_endpoint_and_cors_is_cloudfront(
     template: Template,
 ) -> None:
