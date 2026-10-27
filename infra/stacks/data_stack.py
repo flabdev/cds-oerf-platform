@@ -36,6 +36,27 @@ PITR_ENABLED = dynamodb.PointInTimeRecoverySpecification(
 _AUTH_ASSET = Path(__file__).resolve().parents[2] / "oerf" / "platform" / "auth"
 
 
+def _kms_managed(scope: Construct) -> bool:
+    """AWS managed table keys only when context ``dynamodb:kmsManaged`` is ``true``.
+
+    The default omits ``encryption``, which is the AWS owned key already on
+    the deployed tables. A table's encryption mode can change four times per
+    24 hours, then once per 6 hours (ADR-033).
+    """
+    return scope.node.try_get_context("dynamodb:kmsManaged") == "true"
+
+
+def _use_aws_managed_key(table: dynamodb.Table) -> None:
+    """Name ``SSEType`` ``KMS``. The L2 sets ``SSEEnabled`` and omits the type."""
+    cfn_table = table.node.default_child
+    if not isinstance(cfn_table, dynamodb.CfnTable):
+        raise TypeError("DynamoDB table default child is not CfnTable")
+    cfn_table.add_property_override(
+        "SSESpecification",
+        {"SSEEnabled": True, "SSEType": "KMS"},
+    )
+
+
 def _engage_invoke_resources(region: str, account: str, stub_arn: str) -> list[str]:
     """The stub, the cadence and interpret functions, and the channel router."""
 
@@ -94,6 +115,10 @@ class OerfDataStack(Stack):
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
+        kms_managed = _kms_managed(self)
+        table_encryption = (
+            {"encryption": dynamodb.TableEncryption.AWS_MANAGED} if kms_managed else {}
+        )
 
         # ---------------------------------------------------------
         # DynamoDB: Platform Table
@@ -110,7 +135,7 @@ class OerfDataStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
-            encryption=dynamodb.TableEncryption.AWS_MANAGED,
+            **table_encryption,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
         )
@@ -130,7 +155,7 @@ class OerfDataStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
-            encryption=dynamodb.TableEncryption.AWS_MANAGED,
+            **table_encryption,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
         )
@@ -152,7 +177,7 @@ class OerfDataStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
-            encryption=dynamodb.TableEncryption.AWS_MANAGED,
+            **table_encryption,
             stream=dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
@@ -186,11 +211,19 @@ class OerfDataStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
-            encryption=dynamodb.TableEncryption.AWS_MANAGED,
+            **table_encryption,
             point_in_time_recovery_specification=PITR_ENABLED,
             removal_policy=RemovalPolicy.RETAIN,
             time_to_live_attribute="expires_at",
         )
+        if kms_managed:
+            for table in (
+                self.platform_table,
+                self.tenant_table,
+                self.incident_table,
+                self.routing_table,
+            ):
+                _use_aws_managed_key(table)
 
         # ---------------------------------------------------------
         # S3: Evidence Bucket

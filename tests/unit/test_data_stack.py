@@ -531,15 +531,31 @@ def test_s3_buckets_use_aws_managed_kms_and_bucket_keys(template: Template) -> N
         assert rule["BucketKeyEnabled"] is True, logical_id
 
 
-def test_tables_use_the_aws_managed_key(template: Template) -> None:
-    """SSEEnabled true with no key id is aws/dynamodb. A key id would be a CMK."""
+def test_tables_omit_encryption_by_default(template: Template) -> None:
+    """The default leaves the AWS owned key. No SSESpecification is added."""
 
     tables = template.find_resources("AWS::DynamoDB::Table")
     assert len(tables) == 4
     for logical_id, table in tables.items():
+        assert "SSESpecification" not in table["Properties"], logical_id
+
+
+def test_tables_use_the_aws_managed_key_when_kms_managed() -> None:
+    """dynamodb:kmsManaged=true sets aws/dynamodb. A key id would be a CMK."""
+
+    app = cdk.App(context={"dynamodb:kmsManaged": "true"})
+    kms_stack = OerfDataStack(
+        app,
+        "OerfDataStack",
+        env=cdk.Environment(account=ACCOUNT, region=REGION),
+    )
+    kms_template = Template.from_stack(kms_stack)
+    tables = kms_template.find_resources("AWS::DynamoDB::Table")
+    assert len(tables) == 4
+    for logical_id, table in tables.items():
         spec = table["Properties"]["SSESpecification"]
         assert spec["SSEEnabled"] is True, logical_id
-        assert spec.get("SSEType", "KMS") == "KMS", logical_id
+        assert spec.get("SSEType") == "KMS", logical_id
         assert "KMSMasterKeyId" not in spec, logical_id
 
 

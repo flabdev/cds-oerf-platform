@@ -8,6 +8,8 @@
 
 The four DynamoDB tables use the AWS managed key `aws/dynamodb`. The evidence and report buckets use SSE-KMS with the AWS managed key `aws/s3` and S3 Bucket Keys. The dashboard bucket stays SSE-S3. SQS stays SQS-managed SSE. The inbound topic stays without a customer-managed key. There is no customer-managed key in the MVP.
 
+**Note (2026-10-27):** Table encryption is deferred behind context `dynamodb:kmsManaged` (default `false`). A DynamoDB table's encryption mode can change only 4 times per 24 hours, then once per 6 hours. Failed deploys and rollbacks used that quota. With the flag off, the four tables omit `encryption` and stay on the AWS owned key. Enable `dynamodb:kmsManaged=true` after the demo, in a single deploy, once the window has reset. The bucket SSE-KMS change is unchanged.
+
 ## Reasons
 
 A customer-managed key adds cost and a key policy. End User Messaging Social and CloudFront would both need a grant on that key. The dashboard bucket cannot use `aws/s3`: CloudFront origin access control cannot be granted `kms:Decrypt` on the AWS managed key, and the objects are public static assets. That key policy cannot be edited.
