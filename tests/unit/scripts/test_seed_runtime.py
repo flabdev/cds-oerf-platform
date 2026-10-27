@@ -1,18 +1,22 @@
 """Runtime seed writes the rows ingest and assess read, and a second run is a no-op."""
 
 import json
+import re
 from decimal import Decimal
 
 import pytest
 
 from oerf.platform.agent.context import DOMAIN
+from oerf.platform.channels.address import resolve_party_address
+from oerf.platform.channels.engagement_send import _request
+from oerf.platform.channels.registry import DynamoPhoneRegistry
 from oerf.platform.ingest.handler import DynamoShipmentReader
 from oerf.platform.storage.dynamo import key
 from oerf.platform.tenancy.config_resolver import get_config
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 from oerf.platform.tenancy.facilities import DynamoFacilityCatalog
-from scripts.seed_runtime import main, seed_runtime, tenants_for
-from sim.seed.load import load_seed
+from scripts.demo_reply import _address
+from scripts.seed_runtime import SYNTHETIC_E164, main, seed_runtime, tenants_for
 from tests.unit.support.fake_dynamo import FakeDynamoClient
 
 TABLE = "tenant"
@@ -28,7 +32,7 @@ def test_seed_round_trip_matches_the_workflow_readers() -> None:
 
     counts = seed_runtime(client, TABLE, "t1", apply=True)
 
-    assert counts == {"meta": 1, "shipments": 1, "facilities": 2, "config": 1}
+    assert counts == {"meta": 1, "shipments": 1, "facilities": 2, "contacts": 5, "config": 1}
     repository = DynamoConfigRepository(client, TABLE)
     assert repository.subscribed_domains("t1") == {"cold_chain_excursion"}
     config = get_config("t1", DOMAIN, repository=repository)
@@ -70,7 +74,7 @@ def test_second_seed_writes_nothing() -> None:
 
     again = seed_runtime(client, TABLE, "t1", apply=True)
 
-    assert again == {"meta": 0, "shipments": 0, "facilities": 0, "config": 0}
+    assert again == {"meta": 0, "shipments": 0, "facilities": 0, "contacts": 0, "config": 0}
     assert client.writes == writes
 
 
@@ -93,7 +97,7 @@ def test_equivalent_decimals_count_as_unchanged() -> None:
 
     again = seed_runtime(client, TABLE, "t1", apply=True)
 
-    assert again == {"meta": 0, "shipments": 0, "facilities": 0, "config": 0}
+    assert again == {"meta": 0, "shipments": 0, "facilities": 0, "contacts": 0, "config": 0}
     assert client.writes == writes
     assert Decimal("9.0") == Decimal(facility["drive_min"]["N"])
 
@@ -121,7 +125,7 @@ def test_dry_run_reads_and_does_not_write() -> None:
 
     counts = seed_runtime(client, TABLE, "t1", apply=False)
 
-    assert counts == {"meta": 1, "shipments": 1, "facilities": 2, "config": 1}
+    assert counts == {"meta": 1, "shipments": 1, "facilities": 2, "contacts": 5, "config": 1}
     assert client.reads > 0
 
 
@@ -137,27 +141,80 @@ def test_main_dry_run_prints_counts(
     assert "would change t1 meta 1" in out
     assert "would change t1 shipments 1" in out
     assert "would change t1 facilities 2" in out
+    assert "would change t1 contacts 5" in out
     assert "would change t1 config 1" in out
     assert client.reads > 0
 
 
-def test_written_rows_omit_contacts_phones_and_emails() -> None:
+def test_mocked_driver_address_matches_the_router() -> None:
     client = FakeDynamoClient()
     seed_runtime(client, TABLE, "t1", apply=True)
+    registry = DynamoPhoneRegistry(client, "routing", TABLE)
+
+    contact = registry.get_contact("t1", "C-T1-DRV")
+    assert contact is not None
+    assert contact.role == "driver"
+    assert contact.opt_in is True
+    assert contact.e164 == SYNTHETIC_E164["driver"]
+    mocked = resolve_party_address(
+        "t1",
+        "driver",
+        "C-T1-DRV",
+        registry=registry,
+        parameters=None,
+        live=False,
+    )
+    reply = _address(
+        tenant_id="t1",
+        role="driver",
+        contact_id="C-T1-DRV",
+        live=False,
+        registry=registry,
+        parameters=None,
+    )
+    routed, _rung, _deadline = _request(
+        {
+            "tenant_id": "t1",
+            "incident_id": "INC-000001",
+            "engagement_id": "ENG-1",
+            "role": "driver",
+            "facts": {"shipment": {"driver": "C-T1-DRV", "shipment_id": "PH-2841"}},
+            "cadence": {
+                "message": "driver_checkin",
+                "channel": "whatsapp",
+                "next_rung": 1,
+                "deadline": "2026-10-27T12:00:00+00:00",
+            },
+        },
+        _Ports(registry),
+    )
+    assert mocked == reply == routed.recipient == "+15550100001"
+
+
+def test_written_numbers_stay_in_the_fictional_range() -> None:
+    client = FakeDynamoClient()
+    for tenant_id in ("t1", "t2", "sbx"):
+        seed_runtime(client, TABLE, tenant_id, apply=True)
 
     items = client.scan(TableName=TABLE)["Items"]
-    assert items
     blob = json.dumps(items)
-    assert "CONTACT#" not in blob
-    assert "@" not in blob
     assert "PHONE_" not in blob
-    for contact in load_seed("t1")["contacts"]:
-        assert contact["label"] not in blob
-        email = contact.get("email")
-        if isinstance(email, str):
-            assert email not in blob
-    for item in items:
-        assert set(item) & {"email", "whatsapp", "sms", "phone", "e164"} == set()
+    assert "+91" not in blob
+    assert "qa-t2@example.com" not in blob
+    assert "qa-sbx@example.com" not in blob
+    numbers = re.findall(r"\+\d{8,}", blob)
+    assert numbers
+    assert all(re.fullmatch(r"\+15550100\d{3}", number) for number in numbers)
+    qa = client.get_item(TableName=TABLE, Key=key("TENANT#t1", "CONTACT#C-T1-QA"))["Item"]
+    assert qa["email"]["S"] == "qa@example.com"
+    assert qa["opt_in"]["S"] == "true"
+
+
+class _Ports:
+    def __init__(self, registry: DynamoPhoneRegistry) -> None:
+        self.registry = registry
+        self.parameters = None
+        self.mock_whatsapp = True
 
 
 class _RejectWrites:
