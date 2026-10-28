@@ -90,6 +90,10 @@ The page does not sign in to Cognito. The query string sets the local session:
 
 A blank `name` uses the role label. Guest is the signed-out label.
 
+## Not yet built
+
+- Message history in the desk feed. The incident API does not include the WhatsApp thread, the AI interpretation, or facility names. Record the demo as a split screen: the phone receives the WhatsApp check-in and taps Running, and the desk moves to ANSWERED and IN_TRANSIT. The phone shows the conversation the feed cannot.
+
 ## Files
 
 | File | Role |
