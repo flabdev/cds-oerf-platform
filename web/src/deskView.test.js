@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildDesk, temperaturePlot } from "./deskView.js";
+import { buildDesk, heroNote, temperaturePlot } from "./deskView.js";
 import { stageProgress, stateMeta, visibleActions } from "./states.js";
 
 const now = Date.parse("2026-10-28T14:12:00Z");
@@ -124,4 +124,32 @@ test("the allowance level warms at a third left and when it is used up", () => {
   assert.equal(buildDesk({ ...profile, allowance_remaining: 0 }, now).kpis.allowance.level, "spent");
   assert.equal(buildDesk({ ...profile, allowance_remaining: 0 }, now).kpis.allowance.ratio, 0);
   assert.equal(buildDesk({}, now).kpis.allowance.level, "unknown");
+});
+
+test("the allowance note follows the action on screen", () => {
+  const profile = {
+    product_profile_id: "PP-2-8-45",
+    config_snapshot: { product_profiles: [{ id: "PP-2-8-45", excursion_allowance_min: 45, range_c: [2, 8] }] },
+  };
+  const waiting = { engagement_id: "ENG-1", engagement_status: "WAITING" };
+  const transit = buildDesk({ ...profile, ...waiting, state: "IN_TRANSIT", allowance_remaining: 33 }, now);
+  assert.equal(transit.kpis.allowance.level, "steady");
+  assert.equal(heroNote(transit), "Inside the allowance. Confirm the transfer.");
+  const assessing = buildDesk({ ...profile, state: "ASSESSING", allowance_remaining: 33 }, now);
+  assert.equal(heroNote(assessing), "Inside the allowance. Choose where the shipment goes before it runs out.");
+  const open = buildDesk({ ...profile, state: "OPEN", allowance_remaining: 33 }, now);
+  assert.equal(heroNote(open), "Inside the allowance.");
+  const lowTransit = buildDesk({ ...profile, ...waiting, state: "IN_TRANSIT", allowance_remaining: 10 }, now);
+  assert.equal(lowTransit.kpis.allowance.level, "low");
+  assert.equal(heroNote(lowTransit), "Allowance is running low. Confirm the transfer.");
+  const spent = buildDesk({ ...profile, state: "ASSESSING", allowance_remaining: 0 }, now);
+  assert.equal(heroNote(spent), "Allowance is used up. The product is outside its excursion limit.");
+  const cancelled = buildDesk({
+    ...profile,
+    state: "CANCELLED",
+    allowance_remaining: 33,
+    opened_at: "2026-10-28T13:40:00Z",
+    timeline: [{ at: "2026-10-28T14:00:00Z", from_state: "IN_TRANSIT", to_state: "CANCELLED" }],
+  }, now);
+  assert.match(heroNote(cancelled), /^Cancelled at /);
 });

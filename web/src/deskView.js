@@ -360,6 +360,37 @@ function allowanceLevel(remaining, ratio) {
   return ratio <= 1 / 3 ? "low" : "steady";
 }
 
+export function heroNote(view) {
+  if (view?.terminalLabel) {
+    return view.terminalLabel;
+  }
+  const level = view?.kpis?.allowance?.level || "unknown";
+  const pick = Boolean(view?.actions?.pick);
+  const confirm = Boolean(view?.actions?.confirm);
+  if (level === "unknown") {
+    return "Allowance time appears once readings arrive for this shipment.";
+  }
+  if (level === "spent") {
+    return "Allowance is used up. The product is outside its excursion limit.";
+  }
+  if (level === "low") {
+    if (pick) {
+      return "Allowance is running low. Choose where the shipment goes.";
+    }
+    if (confirm) {
+      return "Allowance is running low. Confirm the transfer.";
+    }
+    return "Allowance is running low.";
+  }
+  if (pick) {
+    return "Inside the allowance. Choose where the shipment goes before it runs out.";
+  }
+  if (confirm) {
+    return "Inside the allowance. Confirm the transfer.";
+  }
+  return "Inside the allowance.";
+}
+
 function evidenceKpi(item) {
   const source = item?.evidence && typeof item.evidence === "object" ? item.evidence : {};
   const photos = Array.isArray(source.photos) ? source.photos.length : 0;
