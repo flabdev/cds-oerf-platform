@@ -9,6 +9,7 @@ import {
   displayName,
   incidentListView,
   incidentView,
+  matchesSearch,
   needsWaitingEngagement,
   oneDecimal,
   rankingNote,
@@ -158,6 +159,17 @@ test("the T2 editor publishes allowance 30", () => {
   assert.equal(draft.product_profiles[0].excursion_allowance_min, 30);
   assert.match(rankingNote(45), /inside/);
   assert.match(rankingNote(30), /outside/);
+});
+
+test("search matches states written with spaces and every typed word", () => {
+  const row = { shipment_id: "PH-2841", incident_id: "INC-000001", state: "IN_TRANSIT" };
+  assert.equal(matchesSearch(row, "in transit"), true);
+  assert.equal(matchesSearch(row, "IN TRANSIT"), true);
+  assert.equal(matchesSearch(row, "in_transit"), true);
+  assert.equal(matchesSearch(row, "transit ph-2841"), true);
+  assert.equal(matchesSearch(row, "ph 2841"), true);
+  assert.equal(matchesSearch(row, "transit cancelled"), false);
+  assert.equal(matchesSearch(row, "   "), true);
 });
 
 test("state and option ids read as plain words", () => {

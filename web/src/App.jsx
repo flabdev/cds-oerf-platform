@@ -7,6 +7,7 @@ import {
   allowanceMeter,
   incidentListView,
   incidentView,
+  matchesSearch,
   needsWaitingEngagement,
   oneDecimal,
   rankingNote,
@@ -176,14 +177,7 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
   }, [incidents, selectedTenant]);
   const list = incidentListView(session.state === "signed-out" ? { error: "Sign in required" } : visible);
   const rows = list.state === "ready"
-    ? list.incidents.filter((item) => {
-        const haystack = [
-          textField(item.shipment_id, ""),
-          textField(item.incident_id, ""),
-          textField(item.state, ""),
-        ].join(" ").toLowerCase();
-        return haystack.includes(query.trim().toLowerCase());
-      })
+    ? list.incidents.filter((item) => matchesSearch(item, query))
     : [];
   const selected = Array.isArray(visible)
     ? visible.find((item) => item.incident_id === selectedId) || null
