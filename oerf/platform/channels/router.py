@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from oerf.platform.channels.engagement import EngagementStore
 from oerf.platform.channels.phone_id import _whatsapp_phone_number_id as _resolve_phone_number_id
-from oerf.platform.channels.providers.base import MessageProvider
+from oerf.platform.channels.providers.base import MessageProvider, ProviderResult
 from oerf.platform.channels.registry import PhoneRegistry
 from oerf.platform.channels.templates import (
     MissingFacts,
@@ -192,16 +192,58 @@ def send_whatsapp(
             metaApiVersion="v20.0",
             message=json.dumps(payload).encode("utf-8"),
         )
-        actual_msg_id = resp.get("messageId") or msg_id
+        # SendWhatsAppMessage returns messageId. That is not the Meta wamid
+        # a quoted reply puts on context.id. messages[].id, when present, is
+        # that wamid. Store every id the response actually carries.
+        message_ids = _send_message_ids(resp) or [msg_id]
         return {
             "success": True,
-            "message_id": actual_msg_id,
+            "message_id": message_ids[0],
+            "message_ids": message_ids,
             "channel": "WHATSAPP",
             "status": "SENT",
         }
     except Exception as exc:
         log(logger, logging.ERROR, "send_failed", channel="WHATSAPP", outcome="error")
         return {"success": False, "error": str(exc), "channel": "WHATSAPP"}
+
+
+def _send_message_ids(response: Any) -> list[str]:
+    """Ids from a SendWhatsAppMessage response, without the recipient or body."""
+
+    if not isinstance(response, dict):
+        return []
+    found: list[str] = []
+
+    def add(value: object) -> None:
+        if not isinstance(value, str):
+            return
+        item = value.strip()
+        if item and item not in found:
+            found.append(item)
+
+    add(response.get("messageId"))
+    messages = response.get("messages")
+    if isinstance(messages, list):
+        for message in messages:
+            if isinstance(message, dict):
+                add(message.get("id"))
+    for key, value in response.items():
+        if key == "ResponseMetadata":
+            continue
+        if isinstance(value, str) and value.strip().startswith("wamid."):
+            add(value)
+    return found
+
+
+def _provider_ids(sent: ProviderResult) -> list[str]:
+    """The primary id plus any other id a reply or status event may quote."""
+
+    found: list[str] = []
+    for item in (*sent.provider_msg_ids, sent.provider_msg_id):
+        if item and item not in found:
+            found.append(item)
+    return found
 
 
 def _whatsapp_payload(
@@ -503,14 +545,16 @@ def route_outbound(
                 reason=sent.reason,
             )
         )
+        message_ids = _provider_ids(sent)
         if sent.simulated:
-            if sent.provider_msg_id:
+            if message_ids:
                 engagement = engagements.get(
                     request.tenant_id, request.incident_id, request.engagement_id
                 )
                 if engagement is None:
                     raise ValueError(f"engagement {request.engagement_id!r} is not open")
-                engagements.register_outbound(sent.provider_msg_id, engagement)
+                for message_id in message_ids:
+                    engagements.register_outbound(message_id, engagement)
                 engagements.register_address(channel, recipient, engagement)
             return _result(
                 request,
@@ -521,14 +565,15 @@ def route_outbound(
                 reason="simulated",
                 simulated=True,
             )
-        if not sent.delivered or not sent.provider_msg_id:
+        if not sent.delivered or not message_ids:
             continue
         engagement = engagements.get(
             request.tenant_id, request.incident_id, request.engagement_id
         )
         if engagement is None:
             raise ValueError(f"engagement {request.engagement_id!r} is not open")
-        engagements.register_outbound(sent.provider_msg_id, engagement)
+        for message_id in message_ids:
+            engagements.register_outbound(message_id, engagement)
         engagements.register_address(channel, recipient, engagement)
         return _result(
             request,

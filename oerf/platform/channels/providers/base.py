@@ -12,6 +12,8 @@ class ProviderResult(BaseModel):
 
     delivered: bool
     provider_msg_id: str | None = None
+    # Every id a later quote may carry. ``provider_msg_id`` stays the primary.
+    provider_msg_ids: tuple[str, ...] = ()
     reason: str | None = None
     simulated: bool = False
 
