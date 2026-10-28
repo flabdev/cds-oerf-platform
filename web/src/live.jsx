@@ -286,7 +286,8 @@ export function LiveDesk({ config }) {
 
   async function submit(request) {
     try {
-      await sendDashboard(config.apiUrl, idToken, request);
+      // Await the body so validation results reach the caller instead of being dropped.
+      return await sendDashboard(config.apiUrl, idToken, request);
     } catch (error) {
       if (authFailure(error)) {
         expireSession();

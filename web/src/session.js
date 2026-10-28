@@ -185,6 +185,34 @@ export async function sendDashboard(apiUrl, token, request, fetchImpl = fetch) {
   }, fetchImpl);
 }
 
+/**
+ * An allowance change is three calls: save the draft, validate it, then publish.
+ * Publishing moves the ACTIVE pointer, so a draft-only save leaves the tenant unchanged.
+ */
+export async function publishAllowance(submit, tenantId, draft) {
+  const configPath = `/admin/tenants/${encodeURIComponent(tenantId)}/domains/cold_chain_excursion/config`;
+  await submit({ method: "PUT", path: configPath, body: draft });
+
+  const validation = await submit({
+    method: "POST",
+    path: `${configPath}/validate`,
+    body: {},
+  });
+  const issues = Array.isArray(validation?.issues) ? validation.issues : [];
+  if (issues.length) {
+    const details = issues
+      .map((issue) => [issue.path, issue.message].filter(Boolean).join(": "))
+      .filter(Boolean);
+    throw new Error(details.length ? `Configuration is invalid: ${details.join("; ")}` : "Configuration is invalid");
+  }
+
+  return submit({
+    method: "POST",
+    path: `${configPath}/publish`,
+    body: {},
+  });
+}
+
 export function localTime(value, timeZone) {
   if (typeof value !== "string" || !value.trim()) {
     return "";
