@@ -1,7 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { App } from "./App.jsx";
-import { acceptDeskEvent, mergeDeskRows, subscribeBody } from "./deskEvents.js";
+import {
+  absorbDeskEvent,
+  acceptDeskEvent,
+  insertFetchedRow,
+  mergeDeskRows,
+  subscribeBody,
+} from "./deskEvents.js";
 import {
   authorizeUrl,
   createVerifier,
@@ -9,7 +15,6 @@ import {
   loadIncident,
   loadIncidents,
   logoutUrl,
-  presentIncident,
   principalFromIdToken,
   sendDashboard,
   stripAuthCode,
@@ -20,11 +25,13 @@ const ACCESS_KEY = "oerf.accessToken";
 const VERIFIER_KEY = "oerf.codeVerifier";
 
 export function LiveDesk({ config }) {
-  const [idToken, setIdToken] = useState(() => sessionStorage.getItem(TOKEN_KEY) || "");
+  const [idToken, setIdToken] = useState(() => tokenFromStorage());
   const [accessToken, setAccessToken] = useState(() => sessionStorage.getItem(ACCESS_KEY) || "");
-  const [principal, setPrincipal] = useState(() => principalFromIdToken(sessionStorage.getItem(TOKEN_KEY) || ""));
+  const [principal, setPrincipal] = useState(() => principalFromIdToken(tokenFromStorage()));
   const [incidents, setIncidents] = useState(null);
   const [watchId, setWatchId] = useState("");
+  const incidentsRef = useRef(incidents);
+  incidentsRef.current = incidents;
   const redirectUri = window.location.origin;
 
   useEffect(() => {
@@ -94,6 +101,8 @@ export function LiveDesk({ config }) {
       return undefined;
     }
     const scope = watchId ? "incident" : "tenant";
+    const pending = new Set();
+    let cancel = false;
     const socket = new WebSocket(`${config.wsUrl}?token=${encodeURIComponent(accessToken)}`);
     socket.addEventListener("open", () => {
       socket.send(JSON.stringify(subscribeBody(scope, watchId)));
@@ -107,17 +116,45 @@ export function LiveDesk({ config }) {
       if (!accepted) {
         return;
       }
-      setIncidents((current) =>
-        mergeDeskRows(current, {
-          ...accepted,
-          incident: presentIncident(accepted.incident),
-        }),
-      );
+      const snapshot = incidentsRef.current;
+      if (!Array.isArray(snapshot)) {
+        return;
+      }
+      const incidentId = accepted.incident.incident_id;
+      if (snapshot.some((item) => item.incident_id === incidentId)) {
+        setIncidents((current) => mergeDeskRows(current, accepted));
+        return;
+      }
+      if (pending.has(incidentId)) {
+        return;
+      }
+      pending.add(incidentId);
+      absorbDeskEvent(snapshot, accepted, (id) => loadIncident(config.apiUrl, idToken, id))
+        .then((next) => {
+          if (cancel) {
+            return;
+          }
+          const fetched = Array.isArray(next)
+            ? next.find((item) => item.incident_id === incidentId)
+            : null;
+          setIncidents((current) => insertFetchedRow(current, fetched));
+        })
+        .catch(() => {})
+        .finally(() => pending.delete(incidentId));
     });
     return () => {
+      cancel = true;
       socket.close();
     };
-  }, [config.wsUrl, principal.authenticated, principal.tenantId, accessToken, watchId]);
+  }, [
+    accessToken,
+    config.apiUrl,
+    config.wsUrl,
+    idToken,
+    principal.authenticated,
+    principal.tenantId,
+    watchId,
+  ]);
 
   async function signIn() {
     const { verifier, challenge } = await createVerifier();
@@ -175,4 +212,8 @@ export function LiveDesk({ config }) {
       onSignOut={signOut}
     />
   );
+}
+
+function tokenFromStorage() {
+  return sessionStorage.getItem(TOKEN_KEY) || "";
 }

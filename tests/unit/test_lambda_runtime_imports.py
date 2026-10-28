@@ -1,10 +1,11 @@
 """Each Python Lambda imports from the asset it is deployed with.
 
 The Lambda runtime provides the standard library and boto3. The subprocess
-loads those first, then drops site-packages and the repository from ``sys.path``
-so pydantic and jsonschema resolve only from the staged asset. A Linux wheel
-cannot be executed on macOS; that failure is accepted when the binary file is
-present. A missing pure-Python package still fails the import.
+starts with ``-S`` so an editable install cannot satisfy ``import oerf``,
+sets ``PYTHONPATH`` to that asset alone, loads boto3, then drops every path
+that is not the asset or the standard library. A Linux wheel cannot be
+executed on macOS; that failure is accepted when the binary file is present.
+A missing pure-Python package still fails the import.
 """
 
 from __future__ import annotations
@@ -16,11 +17,13 @@ import sys
 from pathlib import Path
 
 import aws_cdk as cdk
+import boto3
 
 from infra.runtime_asset import LAMBDA_PLATFORM, VENDORED_REQUIREMENTS, WHEELS
 from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
+from infra.stacks.observability import OerfObservabilityStack, lambda_functions
 
 _ACCOUNT = "123456789012"
 _REGION = "us-east-1"
@@ -35,19 +38,32 @@ _PURE_PACKAGES = (
     "attrs",
     "attr",
 )
+_REQUIRED_HANDLERS = (
+    "workflow_stub.handler",
+    "pre_token.handler",
+    "tenant_attribute.handler",
+    "oerf.platform.channels.devices.seed_handler",
+    "waba_destination.on_event",
+)
 _IMPORT = """
 import sys
-repo, asset, module = sys.argv[1:]
+from pathlib import Path
+repo, asset, module, vendor = sys.argv[1:]
+sys.path.insert(0, vendor)
 import boto3
 import boto3.dynamodb.types
 import botocore
 import botocore.exceptions
-sys.path = [
-    entry
-    for entry in sys.path
-    if entry and "site-packages" not in entry and not entry.startswith(repo)
-]
-sys.path.insert(0, asset)
+base = str(Path(sys.base_prefix).resolve())
+kept = []
+for entry in sys.path:
+    if not entry or entry == asset:
+        continue
+    resolved = str(Path(entry).resolve())
+    in_stdlib = resolved.startswith(base) and "site-packages" not in resolved
+    if in_stdlib and not resolved.startswith(repo):
+        kept.append(entry)
+sys.path = [asset, *kept]
 import importlib
 importlib.import_module(module)
 """
@@ -91,7 +107,7 @@ def test_each_python_lambda_imports_from_its_asset(tmp_path: Path) -> None:
     env = cdk.Environment(account=_ACCOUNT, region=_REGION)
     data = OerfDataStack(app, "OerfDataStack", env=env)
     compute = OerfComputeStack(app, "OerfComputeStack", data_stack=data, env=env)
-    OerfApiStack(
+    api = OerfApiStack(
         app,
         "OerfApiStack",
         data_stack=data,
@@ -99,10 +115,22 @@ def test_each_python_lambda_imports_from_its_asset(tmp_path: Path) -> None:
         websocket_url="https://example.execute-api.us-east-1.amazonaws.com/prod",
         env=env,
     )
+    OerfObservabilityStack(
+        app,
+        "OerfObservabilityStack",
+        functions=lambda_functions(data, compute, api),
+        dead_letter_queues=[compute.inbound_dlq, compute.ingest_dlq, compute.stream_dlq],
+        state_machines=[data.cold_chain_state_machine, data.engage_party_state_machine],
+        channel_router_log_group=compute.channel_router_fn.log_group,
+        env=env,
+    )
     app.synth()
 
     functions = _python_functions(tmp_path)
     assert functions, "synth produced no Python Lambda functions"
+    handlers = {handler for handler, _asset in functions}
+    missing = [name for name in _REQUIRED_HANDLERS if name not in handlers]
+    assert not missing, missing
     shared = [
         asset
         for _handler, asset in functions
@@ -128,7 +156,7 @@ def _version(text: str) -> tuple[int, ...]:
 
 def _python_functions(outdir: Path) -> list[tuple[str, Path]]:
     found: list[tuple[str, Path]] = []
-    for template in outdir.glob("*.template.json"):
+    for template in outdir.rglob("*.template.json"):
         resources = json.loads(template.read_text(encoding="utf-8"))["Resources"]
         for resource in resources.values():
             if resource.get("Type") != "AWS::Lambda::Function":
@@ -165,8 +193,9 @@ def _import_module(module: str, asset: Path, work: Path) -> None:
     env["PYTHONPATH"] = str(asset)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONNOUSERSITE"] = "1"
+    vendor = Path(boto3.__file__).resolve().parent.parent
     result = subprocess.run(
-        [sys.executable, "-c", _IMPORT, str(_ROOT), str(asset), module],
+        [sys.executable, "-S", "-c", _IMPORT, str(_ROOT), str(asset), module, str(vendor)],
         cwd=work,
         env=env,
         capture_output=True,

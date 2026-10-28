@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "./App.jsx";
+import { DeskBoundary } from "./DeskBoundary.jsx";
 import { LiveDesk } from "./live.jsx";
 import { liveConfig } from "./session.js";
 import "./styles.css";
@@ -17,6 +18,8 @@ const principal = {
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
-    {config.mode === "live" ? <LiveDesk config={config} /> : <App principal={principal} />}
+    <DeskBoundary>
+      {config.mode === "live" ? <LiveDesk config={config} /> : <App principal={principal} />}
+    </DeskBoundary>
   </StrictMode>,
 );

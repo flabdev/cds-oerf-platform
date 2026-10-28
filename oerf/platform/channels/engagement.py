@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from oerf.platform.storage.dynamo import (
     addr_pk,
+    canonical_e164,
     incident_pk,
     is_conditional_failure,
     iso_z,
@@ -680,6 +681,8 @@ def _address_key(channel: str, address: str) -> tuple[str, str]:
     value = required_text(address, "address").strip()
     if normalized == "email":
         value = value.lower()
+    else:
+        value = canonical_e164(value)
     return normalized, value
 
 
