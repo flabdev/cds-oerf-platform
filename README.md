@@ -1,5 +1,15 @@
 # CDS OERF Platform
 
+![OERF](docs/images/oerf-logo.png)
+
+OERF is a serverless, multi-tenant platform for an operational exception. The first playbook is a cold-chain temperature excursion: a sensor reading opens one incident, rules rank the response, the driver replies on WhatsApp, and an operator follows it on a desk. A model may advise. Rules decide. A person approves.
+
+## Architecture
+
+![OERF on AWS](docs/images/architecture.png)
+
+The deployed shape is in [Architecture](docs/architecture.md). Decisions are indexed in [ADRs](docs/adr/README.md).
+
 Operational Exception Resolution Framework for a cold-chain shipment. A medicine truck must stay inside a temperature band. When it does not, the platform opens one incident for that shipment, ranks recovery options, and accepts inbound replies without handling the same message twice.
 
 The pieces below are libraries and the CDK stacks. The cold-chain workflow is orchestrated by a Step Functions state machine, but every task in it is still served by one temporary stub Lambda, so no real business service is called yet. Persistence that will live in DynamoDB also has an in-memory implementation so tests can run without AWS. The running service will use the DynamoDB adapters; the in-memory classes stay as test doubles.
