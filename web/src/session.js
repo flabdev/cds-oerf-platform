@@ -1,11 +1,20 @@
 /** Cognito sign-in and dashboard API calls. A missing config keeps the sample desk. */
 
+import { readTransitions } from "./states.js";
+
 const GROUPS = "cognito:groups";
 const TENANT = "custom:tenant_id";
+
+export const ID_TOKEN_KEY = "oerf.idToken";
+export const ACCESS_TOKEN_KEY = "oerf.accessToken";
+export const VERIFIER_KEY = "oerf.codeVerifier";
+
+const STORED_KEYS = [ID_TOKEN_KEY, ACCESS_TOKEN_KEY, VERIFIER_KEY];
 
 export function liveConfig(env) {
   const apiUrl = trimSlash(env?.VITE_API_URL);
   const domain = trimSlash(env?.VITE_COGNITO_DOMAIN).replace(/^https:\/\//, "");
+  // Dashboard hosted-UI client (OerfApiStack UserPoolClientId), not the HTTP API client.
   const clientId = String(env?.VITE_USER_POOL_CLIENT_ID || "").trim();
   // OerfComputeStack output WebSocketApiUrl. One WebSocket for the dashboard.
   const wsUrl = trimSlash(env?.VITE_WS_URL);
@@ -53,6 +62,42 @@ export function logoutUrl({ domain, clientId, logoutUri }) {
   url.searchParams.set("client_id", clientId);
   url.searchParams.set("logout_uri", logoutUri);
   return url.toString();
+}
+
+/** Cognito logout URL, or "" when the hosted-UI client, domain, or origin is missing. */
+export function signOutTarget({ domain, clientId, logoutUri } = {}) {
+  const host = String(domain || "").trim();
+  const id = String(clientId || "").trim();
+  const uri = String(logoutUri || "").trim();
+  if (!host || !id || !uri) {
+    return "";
+  }
+  return logoutUrl({ domain: host, clientId: id, logoutUri: uri });
+}
+
+export function clearStoredSession(primary = globalThis.sessionStorage, extra = globalThis.localStorage) {
+  for (const key of STORED_KEYS) {
+    primary?.removeItem?.(key);
+    if (extra && extra !== primary) {
+      extra.removeItem?.(key);
+    }
+  }
+}
+
+export function authFailure(error) {
+  return error?.status === 401 || error?.message === "Sign in required";
+}
+
+export function shouldOpenSocket({ signingOut, authenticated, accessToken, wsUrl }) {
+  return !signingOut && Boolean(authenticated) && Boolean(accessToken) && Boolean(wsUrl);
+}
+
+/** A handshake that never opened is an authorizer rejection. A later close is not. */
+export function socketAuthFailed({ opened, code, signingOut }) {
+  if (signingOut || opened) {
+    return false;
+  }
+  return code === 1006 || code === 1008 || code === 4001 || code === 4401 || code === 4403;
 }
 
 export async function createVerifier() {
@@ -140,6 +185,34 @@ export async function sendDashboard(apiUrl, token, request, fetchImpl = fetch) {
   }, fetchImpl);
 }
 
+/**
+ * An allowance change is three calls: save the draft, validate it, then publish.
+ * Publishing moves the ACTIVE pointer, so a draft-only save leaves the tenant unchanged.
+ */
+export async function publishAllowance(submit, tenantId, draft) {
+  const configPath = `/admin/tenants/${encodeURIComponent(tenantId)}/domains/cold_chain_excursion/config`;
+  await submit({ method: "PUT", path: configPath, body: draft });
+
+  const validation = await submit({
+    method: "POST",
+    path: `${configPath}/validate`,
+    body: {},
+  });
+  const issues = Array.isArray(validation?.issues) ? validation.issues : [];
+  if (issues.length) {
+    const details = issues
+      .map((issue) => [issue.path, issue.message].filter(Boolean).join(": "))
+      .filter(Boolean);
+    throw new Error(details.length ? `Configuration is invalid: ${details.join("; ")}` : "Configuration is invalid");
+  }
+
+  return submit({
+    method: "POST",
+    path: `${configPath}/publish`,
+    body: {},
+  });
+}
+
 export function localTime(value, timeZone) {
   if (typeof value !== "string" || !value.trim()) {
     return "";
@@ -158,14 +231,26 @@ export function localTime(value, timeZone) {
 }
 
 export function presentIncident(item, timeZone) {
+  const transitions = readTransitions({ timeline: item.timeline });
   const timeline = (item.timeline || []).map((entry) => presentTimelineEntry(entry, timeZone)).filter(Boolean);
   const clock = localTime(item.time, timeZone) || localTime(item.opened_at, timeZone);
   return {
     ...item,
     timeline,
+    transitions,
     readings: Array.isArray(item.readings) ? item.readings : [],
     time: clock || (typeof item.time === "string" ? item.time : ""),
   };
+}
+
+export function dashboardError(status) {
+  if (status === 403) {
+    return "You don't have permission for this action";
+  }
+  if (status === 409) {
+    return "Incident already changed state; refreshed";
+  }
+  return `Action failed (HTTP ${status})`;
 }
 
 function presentTimelineEntry(entry, timeZone) {
@@ -198,10 +283,14 @@ async function apiResult(apiUrl, token, path, options, fetchImpl) {
     },
   });
   if (response.status === 401) {
-    throw new Error("Sign in required");
+    const error = new Error("Sign in required");
+    error.status = 401;
+    throw error;
   }
   if (!response.ok) {
-    throw new Error("The dashboard API rejected the request");
+    const error = new Error(dashboardError(response.status));
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }

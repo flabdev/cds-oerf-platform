@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { absorbDeskEvent, acceptDeskEvent, mergeDeskRows, subscribeBody } from "./deskEvents.js";
+import { absorbDeskEvent, acceptDeskEvent, mergeDeskRows, replaceIncidentRow, subscribeBody } from "./deskEvents.js";
 import { shipmentMark } from "./model.js";
 
 const summary = {
@@ -168,4 +168,31 @@ test("an older version does not overwrite a newer row", () => {
   assert.equal(next, rows);
   assert.equal(next[0].state, "RESOLVED");
   assert.equal(next[0].version, 8);
+});
+
+test("a newer update appends the latest reading", () => {
+  const rows = [{
+    incident_id: "INC-1",
+    state: "OPEN",
+    version: 1,
+    readings: [{ ts: "2026-10-28T13:00:00Z", temperature_c: 7.4 }],
+  }];
+  const next = mergeDeskRows(rows, {
+    kind: "update",
+    incident: {
+      incident_id: "INC-1",
+      state: "DIAGNOSING",
+      version: 2,
+      latest_reading: { ts: "2026-10-28T13:10:00Z", temperature_c: 9.1 },
+    },
+  });
+  assert.equal(next[0].state, "DIAGNOSING");
+  assert.equal(next[0].readings.length, 2);
+  assert.equal(next[0].readings[1].temperature_c, 9.1);
+});
+
+test("an older detail does not replace a newer row", () => {
+  const rows = [{ incident_id: "INC-1", state: "CANCELLED", version: 5, shipment_id: "PH-2841" }];
+  const next = replaceIncidentRow(rows, { incident_id: "INC-1", state: "IN_TRANSIT", version: 4 });
+  assert.equal(next[0].state, "CANCELLED");
 });

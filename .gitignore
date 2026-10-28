@@ -24,6 +24,9 @@ htmlcov/
 # Local notes and screenshots
 DELETE-ME/
 
+.agents/
+skills-lock.json
+
 # Build
 build/
 dist/
