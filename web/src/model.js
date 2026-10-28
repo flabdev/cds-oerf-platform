@@ -283,6 +283,22 @@ export function actionRequest(incidentId, action, optionId, actionId, engagement
   };
 }
 
+function searchWords(value) {
+  return String(value || "").toLowerCase().replace(/[_-]+/g, " ").split(/\s+/).filter(Boolean);
+}
+
+export function matchesSearch(item, query) {
+  const words = searchWords(query);
+  if (words.length === 0) {
+    return true;
+  }
+  const haystack = [item?.shipment_id, item?.incident_id, item?.state]
+    .map((value) => textField(value, ""))
+    .flatMap((value) => [value.toLowerCase(), searchWords(value).join(" ")])
+    .join(" ");
+  return words.every((word) => haystack.includes(word));
+}
+
 export function readableLabel(value) {
   const text = textField(value, "");
   if (!text) {
