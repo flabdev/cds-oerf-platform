@@ -18,6 +18,7 @@ from oerf.platform.incidents.repository import (
     StaleIncidentUpdate,
     TimelineEvent,
     TransitionResult,
+    _profile_id,
     ensure_transition,
     reading_item,
 )
@@ -135,6 +136,7 @@ class DynamoIncidentStore:
         reason: str,
         config_version: int | None = None,
         config_snapshot: dict[str, Any] | None = None,
+        product_profile_id: str | None = None,
     ) -> Incident:
         """Put the meta row, the opening event, and the lock in one transaction.
 
@@ -158,6 +160,7 @@ class DynamoIncidentStore:
             event_seq=1,
             config_version=config_version,
             config_snapshot=config_snapshot,
+            product_profile_id=_profile_id(product_profile_id),
         )
         try:
             self._client.transact_write_items(
@@ -436,6 +439,7 @@ def _meta_item(
     event_seq: int,
     config_version: int | None = None,
     config_snapshot: dict[str, Any] | None = None,
+    product_profile_id: str | None = None,
 ) -> Item:
     item = {
         **key(pk, "META"),
@@ -453,6 +457,8 @@ def _meta_item(
         item["config_version"] = n(config_version)
     if config_snapshot is not None:
         item["config_snapshot"] = s(json.dumps(config_snapshot, sort_keys=True))
+    if product_profile_id:
+        item["product_profile_id"] = s(product_profile_id)
     return item
 
 
@@ -488,7 +494,15 @@ def _incident(item: Item) -> Incident:
         sk=text(item["sk"]),
         config_version=_optional_number(item, "config_version"),
         config_snapshot=_optional_json(item, "config_snapshot"),
+        product_profile_id=_optional_text(item, "product_profile_id"),
     )
+
+
+def _optional_text(item: Item, name: str) -> str | None:
+    if name not in item:
+        return None
+    value = text(item[name]).strip()
+    return value or None
 
 
 def _optional_number(item: Item, name: str) -> int | None:

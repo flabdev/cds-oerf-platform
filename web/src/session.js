@@ -40,7 +40,7 @@ export function authorizeUrl({ domain, clientId, redirectUri, challenge }) {
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", clientId);
   url.searchParams.set("redirect_uri", redirectUri);
-  url.searchParams.set("scope", "openid email profile");
+  url.searchParams.set("scope", "openid email profile aws.cognito.signin.user.admin");
   url.searchParams.set("code_challenge", challenge);
   url.searchParams.set("code_challenge_method", "S256");
   return url.toString();
@@ -103,14 +103,52 @@ export async function sendDashboard(apiUrl, token, request, fetchImpl = fetch) {
   }, fetchImpl);
 }
 
-export function presentIncident(item) {
-  const timeline = (item.timeline || []).map((entry) => {
-    if (typeof entry === "string") {
-      return entry;
-    }
-    return [entry.state, entry.reason].filter(Boolean).join(" ");
-  });
-  return { ...item, timeline, time: item.time || "" };
+export function localTime(value, timeZone) {
+  if (typeof value !== "string" || !value.trim()) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    const match = value.match(/^(\d{2}:\d{2})/);
+    return match ? match[1] : "";
+  }
+  return new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone,
+  }).format(date);
+}
+
+export function presentIncident(item, timeZone) {
+  const timeline = (item.timeline || []).map((entry) => presentTimelineEntry(entry, timeZone)).filter(Boolean);
+  const clock = localTime(item.time, timeZone) || localTime(item.opened_at, timeZone);
+  return {
+    ...item,
+    timeline,
+    readings: Array.isArray(item.readings) ? item.readings : [],
+    time: clock || (typeof item.time === "string" ? item.time : ""),
+  };
+}
+
+function presentTimelineEntry(entry, timeZone) {
+  if (typeof entry === "string") {
+    return entry;
+  }
+  if (!entry || typeof entry !== "object") {
+    return "";
+  }
+  if ("from_state" in entry || "to_state" in entry || entry.at) {
+    const from = typeof entry.from_state === "string" && entry.from_state.trim()
+      ? entry.from_state.trim()
+      : "—";
+    const to = typeof entry.to_state === "string" && entry.to_state.trim()
+      ? entry.to_state.trim()
+      : (typeof entry.state === "string" ? entry.state : "—");
+    const at = localTime(entry.at, timeZone);
+    return [at, `${from} → ${to}`].filter(Boolean).join(" ");
+  }
+  return [entry.state, entry.reason].filter(Boolean).join(" ");
 }
 
 async function apiResult(apiUrl, token, path, options, fetchImpl) {

@@ -8,6 +8,7 @@ task token.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -228,9 +229,22 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     )
     return {
         "statusCode": status,
-        "headers": {"Content-Type": "application/json"},
+        "headers": _response_headers(),
         "body": json.dumps(body),
     }
+
+
+def _response_headers() -> dict[str, str]:
+    """CORS for the dashboard origin. A missing origin leaves the header off."""
+
+    headers = {"Content-Type": "application/json"}
+    origin = os.environ.get("DASHBOARD_ORIGIN", "").strip()
+    if not origin or origin == "*":
+        return headers
+    headers["Access-Control-Allow-Origin"] = origin
+    headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization,Idempotency-Key"
+    headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,OPTIONS"
+    return headers
 
 
 def services_from_env() -> DashboardServices:
@@ -243,12 +257,17 @@ def services_from_env() -> DashboardServices:
     from oerf.platform.api.queries import DynamoIncidentQuery, SqsActionQueue
 
     table = os.environ.get("INCIDENT_TABLE_NAME", "").strip()
+    tenant_table = os.environ.get("TENANT_TABLE_NAME", "").strip()
     queue_url = (
         os.environ.get("INBOUND_QUEUE_URL", "").strip()
         or os.environ.get("ACTION_QUEUE_URL", "").strip()
     )
     if table:
-        queries: IncidentQuery = DynamoIncidentQuery(boto3.client("dynamodb"), table)
+        queries: IncidentQuery = DynamoIncidentQuery(
+            boto3.client("dynamodb"),
+            table,
+            tenant_table=tenant_table,
+        )
     else:
         queries = MemoryIncidentQuery([])
     queue = SqsActionQueue(boto3.client("sqs"), queue_url) if queue_url else None
@@ -279,16 +298,7 @@ def _detail(
     item = services.queries.get_incident(principal.tenant_id or "", incident_id)
     if item is None:
         return 404, {"error": "not_found"}
-    return 200, {
-        "incident_id": item.get("incident_id"),
-        "tenant_id": item.get("tenant_id"),
-        "shipment_id": item.get("shipment_id"),
-        "state": item.get("state"),
-        "reason": item.get("reason") or "",
-        "opened_at": item.get("opened_at") or "",
-        "config_version": item.get("config_version"),
-        "config_snapshot": item.get("config_snapshot"),
-    }
+    return 200, _detail_body(item)
 
 
 def _action(
@@ -499,6 +509,43 @@ def _audit(
             "at": services.clock().strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
     )
+
+
+def _detail_body(item: dict[str, Any]) -> dict[str, Any]:
+    """The desk detail. Private step output and engagement documents stay off."""
+
+    recommendation = item.get("recommendation")
+    if not isinstance(recommendation, dict):
+        recommendation = None
+    options = item.get("options")
+    if not isinstance(options, list):
+        options = recommendation["options"] if recommendation else []
+    status = item.get("engagement_status")
+    engagement = item.get("engagement_id")
+    return {
+        "incident_id": item.get("incident_id"),
+        "tenant_id": item.get("tenant_id"),
+        "shipment_id": item.get("shipment_id"),
+        "state": item.get("state"),
+        "stage": item.get("stage") or item.get("state"),
+        "version": item.get("version") if isinstance(item.get("version"), int) else 1,
+        "reason": item.get("reason") or "",
+        "opened_at": item.get("opened_at") or "",
+        "config_version": item.get("config_version"),
+        "config_snapshot": item.get("config_snapshot"),
+        "product_profile_id": item.get("product_profile_id") or None,
+        "allowance_remaining": item.get("allowance_remaining"),
+        "range_c": item.get("range_c"),
+        "evidence": item.get("evidence")
+        if isinstance(item.get("evidence"), dict)
+        else {"fault_codes": []},
+        "recommendation": recommendation,
+        "options": options,
+        "engagement_id": engagement if isinstance(engagement, str) and engagement.strip() else None,
+        "engagement_status": status if isinstance(status, str) and status.strip() else None,
+        "timeline": item.get("timeline") if isinstance(item.get("timeline"), list) else [],
+        "readings": item.get("readings") if isinstance(item.get("readings"), list) else [],
+    }
 
 
 def _summary_row(item: dict[str, Any]) -> dict[str, Any]:
