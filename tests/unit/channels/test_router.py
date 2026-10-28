@@ -189,6 +189,34 @@ def test_a_simulated_channel_does_not_fall_through_or_count_as_delivered() -> No
     assert [item.engagement_id for item in waiting] == ["eng-1"]
 
 
+def test_a_live_send_stores_the_api_id_and_the_wamid() -> None:
+    from oerf.platform.channels.providers.base import ProviderResult
+
+    class _Both:
+        def send(self, recipient, body, template_id, parameters=()):
+            del recipient, body, template_id, parameters
+            return ProviderResult(
+                delivered=True,
+                provider_msg_id="aws-mid-1",
+                provider_msg_ids=("aws-mid-1", "wamid.HBgLstored"),
+            )
+
+    registry, engagements = _open()
+    result = route_outbound(
+        _request(),
+        registry=registry,
+        engagements=engagements,
+        providers={"whatsapp": _Both()},
+        messages=MESSAGES,
+    )
+
+    assert result.delivered is True
+    assert result.provider_msg_id == "aws-mid-1"
+    assert engagements.correlate("aws-mid-1") is not None
+    quoted = engagements.correlate("wamid.HBgLstored")
+    assert quoted is not None and quoted.engagement_id == "eng-1"
+
+
 def test_live_whatsapp_template_keeps_parameter_order() -> None:
     from oerf.platform.channels.router import _whatsapp_payload
 

@@ -28,6 +28,7 @@ export function buildDesk(item, now = Date.now()) {
     actions: visibleActions(item),
     terminalLabel: closedLabel(item, transitions, now),
     recommendationId,
+    recommendationLabel: recommendationText(item, recommendationId, options),
     kpis: {
       temperature: temperatureKpi(readings, band),
       above: aboveKpi(above, band),
@@ -534,6 +535,13 @@ function profileOf(item) {
 
 function allowanceTotal(item, profile) {
   return finite(profile?.excursion_allowance_min) ?? finite(item?.allowance_minutes);
+}
+
+function recommendationText(item, recommendationId, options) {
+  if (incidentState(item?.state) === "DIAGNOSING" && !recommendationId && !options.length) {
+    return "Waiting for the driver's answer";
+  }
+  return "";
 }
 
 function recommendedId(item) {

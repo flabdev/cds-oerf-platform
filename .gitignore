@@ -23,6 +23,7 @@ htmlcov/
 
 # Local notes and screenshots
 DELETE-ME/
+Temp/
 
 .agents/
 skills-lock.json

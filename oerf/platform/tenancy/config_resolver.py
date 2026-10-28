@@ -70,6 +70,7 @@ class AssessmentConfig(BaseModel):
     max_candidates: int
     unload_min: float
     rise_rate_c_per_min: float
+    stopped_rise_rate_c_per_min: float | None = None
     cooldown_rate_c_per_min: float
     min_spare_allowance_min: float
     include_continue_option: bool

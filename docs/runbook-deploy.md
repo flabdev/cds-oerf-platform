@@ -69,7 +69,7 @@ Simulator readings must be published with `aws events put-events` (a new EventBr
 
 `python -m scripts.reset` clears one demo tenant so the cold-chain walk can be run again. It is an operator tool. It is not a Lambda and it is not part of CI. `--profile` is required. `--tenant` is `t1`, `t2`, or `sbx`. `--tenant all` is refused, including on a dry run, unless `--yes-all` is also set, and that refusal happens before any AWS call. The default is a dry run. `--yes` deletes. `--reseed` rewrites that tenant's demo devices and, when `PP-2-8-45` is not 45 minutes, publishes the seed cold-chain config for that tenant only.
 
-The command stops that tenant's `RUNNING` executions of `oerf-engage-party` and then `oerf-cold-chain`. An execution is selected by `tenant_id` in its input. It deletes that tenant's incident items, shipment locks (including `ESCALATED`), debounce rows, and the routing rows tied to its engagements. Evidence under `tenants/{tid}/` is deleted. `reports/{tid}/` is the audit record and is kept. The tenant-table counter `TENANT#{tid}` / `COUNTER#INCIDENT` is kept, so the next incident id continues. Tenant config, live websocket rows, `INGEST#` dedupe rows, and the platform table are kept.
+The command stops that tenant's `RUNNING` executions of `oerf-engage-party` and then `oerf-cold-chain`. An execution is selected by `tenant_id` in its input. It deletes that tenant's incident items, shipment locks (including `ESCALATED`), debounce rows, the routing rows tied to its engagements, and one-way dedupe rows `TENANT#{tid}#OUTBOX#`. Evidence under `tenants/{tid}/` is deleted. `reports/{tid}/` is the audit record and is kept. The tenant-table counter `TENANT#{tid}` / `COUNTER#INCIDENT` is kept, so the next incident id continues. Tenant config, live websocket rows, `INGEST#` dedupe rows, and the platform table are kept.
 
 ```text
 make reset-test TENANT=t1 PROFILE=Fission-OERF
@@ -80,38 +80,33 @@ make reset-demo TENANT=t1 PROFILE=Fission-OERF
 
 ## Run the PH-2841 demo
 
-Reset the tenant first. A reset does not clear `INGEST#` rows, so a replayed reading id is ignored for 7 days. Each `put-events` call gets its own EventBridge id. Direct Lambda invoke of the same JSON is deduped the same way.
+`python -m scripts.demo` is the operator rehearsal. It is not a Lambda and it is not part of CI. It calls `scripts.reset`, `scripts.seed_runtime`, and `scripts.demo_reply` in process. `--profile` and `--account` are required. Region is `us-east-1`. `--tenant` is `t1`, `t2`, or `sbx`. The shipment and device default to that tenant's seed (`t1` is `PH-2841` and `RF-7781`). A failure prints one error and exits non-zero. The commands do not print phone numbers, task tokens, ARNs, account ids, or raw payloads.
 
-`debounce_readings` is 2. Publish two readings above 8 °C within 10 minutes. One reading is accepted and opens no incident. The device `RF-7781` resolves to tenant `t1` and shipment `PH-2841`.
-
-1. `make reset-demo TENANT=t1 PROFILE=Fission-OERF`
-2. Publish the first reading, 8.1 °C, thirty seconds ago:
-
-```bash
-PREV=$(date -u -v-30S +%Y-%m-%dT%H:%M:%SZ)
-aws events put-events --profile Fission-OERF --region us-east-1 --entries "$(PREV="$PREV" python3 -c 'import json,os; ts=os.environ["PREV"]; detail={"tenant_id":"t1","shipment_id":"PH-2841","device_id":"RF-7781","ts":ts,"temperature_c":8.1,"lat":17.44,"lon":78.38,"seq":1}; print(json.dumps([{"Source":"sim.reefer","DetailType":"TemperatureReading","EventBusName":"oerf-events","Time":ts,"Detail":json.dumps(detail)}]))')"
+```text
+make demo-preflight TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
+make demo-prep TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
+make demo-sensor TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
+make demo-reply TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> BUTTON=running
+make demo-status TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
+make demo-cleanup TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
+make demo-run TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
 ```
 
-3. Publish the second reading, 8.6 °C, now. It must be within 10 minutes of step 2:
+`demo-run` is prep, the sensor, the mocked driver reply, then status. `BUTTON` defaults to `running`. `demo-reply` also accepts `stopped`.
 
-```bash
-NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-aws events put-events --profile Fission-OERF --region us-east-1 --entries "$(NOW="$NOW" python3 -c 'import json,os; ts=os.environ["NOW"]; detail={"tenant_id":"t1","shipment_id":"PH-2841","device_id":"RF-7781","ts":ts,"temperature_c":8.6,"lat":17.44,"lon":78.38,"seq":2}; print(json.dumps([{"Source":"sim.reefer","DetailType":"TemperatureReading","EventBusName":"oerf-events","Time":ts,"Detail":json.dumps(detail)}]))')"
-```
+Preflight prints one `PASS` or `FAIL` line per check. The caller must be the account passed as `--account`. Any other account stops the command before it reads another service. `OerfDataStack`, `OerfComputeStack`, `OerfApiStack`, and `OerfObservabilityStack` must be in a `*_COMPLETE` status. `oerf-cold-chain` and `oerf-engage-party` must exist. A runtime-seed dry run must report no changes. `--live` also requires the driver parameter `/oerf/demo-numbers/{tenant}/driver`. The value is not printed.
 
-4. Watch `oerf-cold-chain` until `EngageDriverDiagnosis` is waiting on the child, and the child is waiting on `SendViaRouter`. Function log groups have CDK-generated names, so they are not `/aws/lambda/<function-name>`. Find one with `aws logs describe-log-groups --profile Fission-OERF --region us-east-1` and grep the construct id, for example `IngestFunctionLogGroup`.
-5. Reply. Mocked channels resolve the party from the contact registry, so run `python -m scripts.seed_runtime --profile Fission-OERF --tenant t1 --yes` first if those `CONTACT#` rows are missing. The seeder writes fictional 555-01xx numbers (the driver is `+15550100001`) and does not read SSM. Then:
+Prep applies the tenant reset with reseed, writes the runtime seed, and requires the next reset dry run to report zero. It prints one summary line.
 
-```bash
-python -m scripts.demo_reply --profile Fission-OERF --tenant t1 --shipment PH-2841 --role driver --button running
-```
+The sensor is the on-camera command. It publishes two `sim.reefer` / `TemperatureReading` events on `oerf-events`, 8.1 °C then 8.6 °C, thirty seconds apart in event time and four seconds apart on the clock (`--temps`, `--pause`). The detail carries `tenant_id`, `shipment_id`, `device_id`, `ts`, `temperature_c`, `lat` 17.44, `lon` 78.38, and `seq`. It then polls `oerf-cold-chain` for up to 30 seconds for a new `{tenant}-INC-*` execution. `debounce_readings` is 2, so the second reading above 8 °C opens the incident. One reading opens nothing. A reset does not clear `INGEST#` rows, so each sensor run gets a new EventBridge id. Replaying the same reading id is ignored for 7 days. Direct Lambda invoke of the same JSON is deduped the same way.
 
-With `channels:live` true, the driver replies on WhatsApp to template `oerf_driver_checkin` and the script reads SSM `/oerf/demo-numbers/t1/driver` instead of the synthetic row. It prints the shipment and the message id, not the number.
-6. The child ends `answered` / `unit_running`. The parent takes the default of `NeedApproval?` into `SecureFacility` (still the stub), then real `Act`. The next state is `VerifyLoop`, which is unchanged and does not close this excursion by itself.
+`demo-reply` is for mocked channels only. It waits until the new `oerf-engage-party` execution is `RUNNING` in `SendViaRouter`, then posts the driver reply. It refuses `--live`. On a live router the driver replies on WhatsApp to template `oerf_driver_checkin`. `demo-run --live` skips the scripted reply. If the router is live and `--live` was not passed, the run stops instead of posting one. Mocked channels resolve the party from the contact registry. The runtime seed writes fictional 555-01xx numbers and does not read SSM.
 
-`demo_reply` only posts a WhatsApp provider message to the inbound queue. It does not send a dashboard action and it does not call `SendTaskSuccess`.
+`demo_reply` only posts a WhatsApp provider message to the inbound queue. It does not send a dashboard action and it does not call `SendTaskSuccess`. The check-in temperature parameter is one decimal place (`8.5`, not `8.4824`). The child sends one session message before it ends: `Thanks, noted: Running. We're checking the shipment now.` It then ends `answered` / `unit_running`. The parent then runs `Assess`. A running unit, or no answer after the engagement is exhausted, keeps continue. `Stopped` (`unit_stopped`) marks continue infeasible, so PH-2841 recommends FAC-A. The parent takes the default of `NeedApproval?` into `SecureFacility` (still the stub), then real `Act`. Continue sends template `oerf_status_update`. The parameters, in order, are the shipment id, `continue to your destination`, and `we're monitoring the temperature`. A facility decision sends `oerf_driver_reroute`: shipment id, facility name, minutes, and `https://maps.google.com/?q={lat},{lon}` (or `n/a` when a coordinate is missing). A failed or skipped notice does not stop the run. The next state is `VerifyLoop`, which does not close this excursion by itself. While the incident is still `DIAGNOSING` and Assess has not run, the desk options area says `Waiting for the driver's answer`.
 
-After each rehearsal, cancel the incident from the desk or run `make reset-demo TENANT=t1 PROFILE=Fission-OERF`.
+Status prints the parent execution name and state, the child state, the last eight states on the parent path, and the latest incident state.
+
+Cleanup resets the tenant and requires the dry run to report zero. `make reset-test` and `make reset-demo` remain the lower-level reset. Function log groups have CDK-generated names, so they are not `/aws/lambda/<function-name>`. Find one with `aws logs describe-log-groups --profile <aws-profile> --region us-east-1` and grep the construct id, for example `IngestFunctionLogGroup`.
 
 ## First deploy from main
 

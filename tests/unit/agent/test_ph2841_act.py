@@ -10,10 +10,11 @@ from oerf.platform.agent.context import StepDependencies
 from oerf.platform.agent.envelope import StepEnvelope, parse_envelope
 from oerf.platform.agent.handlers import HANDLERS, diagnose
 from oerf.platform.agent.idempotency import MemoryStepResultStore
-from oerf.platform.cadence.engage import compute_rung
+from oerf.platform.cadence.engage import advance_rung, compute_rung
 from oerf.platform.cadence.interpret import interpret_workflow
 from oerf.platform.channels.engagement import MemoryEngagementStore
 from oerf.platform.channels.engagement_send import send_engagement
+from oerf.platform.channels.one_way import MemoryOutbox, send_one_way
 from oerf.platform.channels.providers.base import ProviderResult
 from oerf.platform.channels.registry import MemoryPhoneRegistry
 from oerf.platform.inbound.dedupe import InboundDedupe
@@ -68,7 +69,7 @@ class _Callbacks:
 
 
 def test_ph2841_reaches_act_on_the_recommended_option() -> None:
-    """Rules rank continue. The driver reply does not change that ranking."""
+    """A running unit keeps today's ranking, then the continue notice is sent."""
 
     source = inspect.getsource(diagnose)
     step_source = (ROOT / "domains" / "cold_chain_excursion" / "steps" / "diagnose.py").read_text()
@@ -111,18 +112,6 @@ def test_ph2841_reaches_act_on_the_recommended_option() -> None:
     assert [row["facility_id"] for row in loaded] == [row["facility_id"] for row in facilities]
     assert all("name" not in row for row in loaded)
     assert diagnosed.workflow["ship_time"] == NOW.isoformat()
-
-    assessed = HANDLERS["Assess"](
-        diagnosed.model_copy(update={"step": "Assess"}),
-        dependencies,
-    )
-    assessment = assessed.workflow["assessment"]
-    assert assessment["elapsed_minutes"] == 0
-    assert assessment["needs_approval"] is False
-    assert assessment["recommended_option"] == "continue"
-    feasible = [item["id"] for item in assessment["options"] if item["feasible"]]
-    assert feasible[0] == "continue"
-    assert set(feasible) == {"continue", "FAC-A", "FAC-B"}
 
     child = {
         "tenant_id": TENANT,
@@ -192,6 +181,29 @@ def test_ph2841_reaches_act_on_the_recommended_option() -> None:
         {**planned, "reply": {"text": "Running"}},
         enabled=False,
     )
+    outbox = MemoryOutbox(clock=lambda: NOW)
+    one_way = _ports(engagements, registry, probe, messages)
+    one_way.outbox = outbox
+    ack = send_one_way(
+        {
+            "step_name": "EngagementSendOneWay",
+            "tenant_id": TENANT,
+            "incident_id": "INC-000001",
+            "role": "driver",
+            "message": "driver_ack",
+            "channel": "whatsapp",
+            "facts": {"answer": "Running", "shipment": shipment},
+            "dedupe_key": "INC-000001:driver_ack",
+        },
+        ports=one_way,
+    )
+    assert ack == {"status": "simulated", "provider_msg_id": "whatsapp-1"}
+    assert probe.calls[1][1] == "Thanks, noted: Running. We're checking the shipment now."
+    assert probe.calls[1][2] == ""
+    assert probe.calls[1][3] == ()
+    answered_row = engagements.get(TENANT, "INC-000001", diagnosis["engagement_id"])
+    assert answered_row is not None and answered_row.task_token == TOKEN
+    assert len(probe.calls) == 2
     answered = {
         "status": "answered",
         "intent": interpreted["response"]["intent"],
@@ -201,9 +213,15 @@ def test_ph2841_reaches_act_on_the_recommended_option() -> None:
     }
     assert answered["intent"] == "unit_running"
     assert answered["fields"] == {"unit": "running"}
-    workflow = dict(assessed.workflow)
-    workflow["diagnosis"] = {**workflow["diagnosis"], "engagement_result": answered}
-    parent = assessed.model_copy(update={"workflow": workflow})
+    assessed = _assess(diagnosed, dependencies, answered)
+    assessment = assessed.workflow["assessment"]
+    assert assessment["elapsed_minutes"] == 0
+    assert assessment["needs_approval"] is False
+    assert assessment["recommended_option"] == "continue"
+    feasible = [item["id"] for item in assessment["options"] if item["feasible"]]
+    assert feasible[0] == "continue"
+    assert set(feasible) == {"continue", "FAC-A", "FAC-B"}
+    parent = assessed
     secured = secure_facility({"step_name": "SecureFacility", "workflow": parent.to_event()}, None)
     assert secured["facility"]["accepted"] is True
     assert secured["incident_state"] == "ASSESSING"
@@ -215,11 +233,211 @@ def test_ph2841_reaches_act_on_the_recommended_option() -> None:
     assert action["kind"] == "continue"
     assert action["facility_id"] is None
     assert acted.workflow["diagnosis"]["engagement_result"]["status"] == "answered"
+    notice = send_one_way(
+        {
+            "step_name": "EngagementSendOneWay",
+            "tenant_id": acted.tenant_id,
+            "incident_id": acted.incident_id,
+            "role": "driver",
+            "message": "status_update",
+            "channel": "whatsapp",
+            "facts": {
+                "shipment_id": acted.shipment_id,
+                "shipment": shipment,
+                "action": action,
+            },
+            "dedupe_key": f"{acted.incident_id}:decision",
+        },
+        ports=one_way,
+    )
+    assert notice["status"] == "simulated"
+    recipient, body, template_id, parameters = probe.calls[2]
+    assert recipient == PLACEHOLDER
+    assert template_id == "status_update"
+    assert parameters == (
+        "PH-2841",
+        "continue to your destination",
+        "we're monitoring the temperature",
+    )
+    assert "PH-2841" in body and "continue to your destination" in body
+    assert answered_row.task_token == TOKEN
     machine = json.loads(
         (ROOT / "domains" / "cold_chain_excursion" / "statemachine.asl.json").read_text()
     )["States"]
     after_act = machine["Act"]["Next"]
-    assert machine[after_act]["Default"] == "VerifyLoop"
+    assert after_act == "CancelAfterAct?"
+    assert machine[after_act]["Default"] == "DecisionKind?"
+    assert machine["DecisionKind?"]["Choices"][0]["Next"] == "NotifyContinue"
+    assert machine["NotifyContinue"]["Next"] == "CancelAfterNotifyContinue?"
+    assert machine["CancelAfterNotifyContinue?"]["Default"] == "VerifyLoop"
+
+
+def test_stopped_unit_recommends_facility_a_and_sends_the_reroute() -> None:
+    diagnosed, shipment, messages, dependencies, facilities = _open()
+    answered = {
+        "status": "answered",
+        "intent": "unit_stopped",
+        "fields": {"unit": "stopped"},
+        "evidence_refs": [],
+        "engagement_id": diagnosed.workflow["diagnosis"]["engagement_id"],
+    }
+    assessed = _assess(diagnosed, dependencies, answered)
+    assessment = assessed.workflow["assessment"]
+    feasible = [item["id"] for item in assessment["options"] if item["feasible"]]
+    assert assessment["recommended_option"] == "FAC-A"
+    assert assessed.decision["recommended_option"] == "FAC-A"
+    assert feasible[0] == "FAC-A"
+    assert "continue" not in feasible
+    secured = secure_facility(
+        {"step_name": "SecureFacility", "workflow": assessed.to_event()}, None
+    )
+    acted = HANDLERS["Act"](parse_envelope({"step_name": "Act", "workflow": secured}), dependencies)
+    action = acted.workflow["action"]
+    assert action["kind"] == "facility"
+    assert action["option_id"] == "FAC-A"
+    assert action["facility_id"] == "FAC-A"
+    probe, ports = _sender(shipment, messages, facilities)
+    notice = send_one_way(
+        {
+            "step_name": "EngagementSendOneWay",
+            "tenant_id": TENANT,
+            "incident_id": "INC-000001",
+            "role": "driver",
+            "message": "driver_reroute",
+            "channel": "whatsapp",
+            "facts": {
+                "shipment_id": SHIPMENT,
+                "shipment": shipment,
+                "action": action,
+            },
+            "dedupe_key": "INC-000001:decision",
+        },
+        ports=ports,
+    )
+    assert notice["status"] == "simulated"
+    _recipient, body, template_id, parameters = probe.calls[0]
+    assert template_id == "driver_reroute"
+    assert parameters == (
+        "PH-2841",
+        "Facility A (sample cold store)",
+        "9",
+        "https://maps.google.com/?q=17.47,78.42",
+    )
+    assert "Facility A (sample cold store)" in body
+
+
+def test_silent_driver_keeps_todays_ranking_and_sends_status_update() -> None:
+    diagnosed, shipment, messages, dependencies, _facilities = _open()
+    diagnosis = diagnosed.workflow["diagnosis"]
+    planned = {
+        "tenant_id": TENANT,
+        "incident_id": "INC-000001",
+        "engagement_id": diagnosis["engagement_id"],
+        "role": "driver",
+        "ask": "diagnose",
+        "policy_id": diagnosis["policy_id"],
+        "facts": diagnosed.context,
+    }
+    for _ in range(8):
+        planned = compute_rung(planned, NOW)
+        if planned["cadence"]["exhausted"]:
+            break
+        planned = advance_rung(planned, NOW)
+    else:
+        raise AssertionError("silence did not exhaust the engagement")
+    assert planned["cadence"]["exhausted"] is True
+    assert "intent" not in planned
+    exhausted = {
+        "status": "exhausted",
+        "exhaust_action": planned["exhaust_action"],
+        "engagement_id": planned["engagement_id"],
+    }
+    assert "intent" not in exhausted
+    assessed = _assess(diagnosed, dependencies, exhausted)
+    assessment = assessed.workflow["assessment"]
+    feasible = [item["id"] for item in assessment["options"] if item["feasible"]]
+    assert assessment["recommended_option"] == "continue"
+    assert feasible[0] == "continue"
+    secured = secure_facility(
+        {"step_name": "SecureFacility", "workflow": assessed.to_event()}, None
+    )
+    acted = HANDLERS["Act"](parse_envelope({"step_name": "Act", "workflow": secured}), dependencies)
+    action = acted.workflow["action"]
+    assert action["kind"] == "continue"
+    probe, ports = _sender(shipment, messages, _facilities)
+    notice = send_one_way(
+        {
+            "step_name": "EngagementSendOneWay",
+            "tenant_id": TENANT,
+            "incident_id": "INC-000001",
+            "role": "driver",
+            "message": "status_update",
+            "channel": "whatsapp",
+            "facts": {"shipment_id": SHIPMENT, "shipment": shipment, "action": action},
+            "dedupe_key": "INC-000001:decision",
+        },
+        ports=ports,
+    )
+    assert notice["status"] == "simulated"
+    _recipient, _body, template_id, parameters = probe.calls[0]
+    assert template_id == "status_update"
+    assert parameters == (
+        "PH-2841",
+        "continue to your destination",
+        "we're monitoring the temperature",
+    )
+
+
+def _open():
+    facilities = json.loads((ROOT / "sim" / "seed" / "t1" / "facilities.json").read_text())
+    shipment = dict(json.loads((ROOT / "sim" / "seed" / "t1" / "shipments.json").read_text())[0])
+    shipment["product_profile_id"] = shipment["product_profile"]
+    messages = json.loads((ROOT / "domains" / "cold_chain_excursion" / "messages.json").read_text())
+    dependencies = _dependencies(facilities, get_config(TENANT, "cold_chain_excursion"))
+    gathered = HANDLERS["GatherContext"](
+        _envelope(
+            "GatherContext",
+            workflow={
+                "trigger": {"temperature_c": 8.1, "timestamp": NOW.isoformat()},
+                "shipment": shipment,
+            },
+        ),
+        dependencies,
+    )
+    diagnosed = HANDLERS["Diagnose"](
+        gathered.model_copy(update={"step": "Diagnose"}),
+        dependencies,
+    )
+    return diagnosed, shipment, messages, dependencies, facilities
+
+
+def _assess(diagnosed, dependencies, result):
+    workflow = dict(diagnosed.workflow)
+    workflow["diagnosis"] = {**workflow["diagnosis"], "engagement_result": result}
+    return HANDLERS["Assess"](
+        diagnosed.model_copy(update={"step": "Assess", "workflow": workflow}),
+        dependencies,
+    )
+
+
+class _FacilityRows:
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = {row["facility_id"]: row for row in rows}
+
+    def get(self, tenant_id: str, facility_id: str) -> dict:
+        assert tenant_id == TENANT
+        return self._rows[facility_id]
+
+
+def _sender(shipment, messages, facilities):
+    registry = MemoryPhoneRegistry()
+    registry.register_contact(TENANT, shipment["driver"], "driver", PLACEHOLDER)
+    engagements = MemoryEngagementStore(clock=lambda: NOW)
+    probe = _Probe(engagements)
+    ports = _ports(engagements, registry, probe, messages)
+    ports.facilities = _FacilityRows(facilities)
+    ports.outbox = MemoryOutbox(clock=lambda: NOW)
+    return probe, ports
 
 
 def _dependencies(facilities: list[dict], config) -> StepDependencies:
