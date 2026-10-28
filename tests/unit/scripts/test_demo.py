@@ -11,7 +11,6 @@ from botocore.stub import Stubber
 
 from oerf.platform.storage.dynamo import incident_pk, key
 from scripts.demo import (
-    DEMO_ACCOUNT,
     DemoError,
     _list_executions as list_executions,
     child_line,
@@ -37,9 +36,11 @@ NOW = datetime(2026, 10, 28, 15, 13, 5, tzinfo=UTC)
 TENANT_TABLE = "tenant"
 ROUTING_TABLE = "routing"
 INCIDENT_TABLE = "incident"
-COLD_ARN = "arn:aws:states:us-east-1:906048429638:stateMachine:oerf-cold-chain"
-ENGAGE_ARN = "arn:aws:states:us-east-1:906048429638:stateMachine:oerf-engage-party"
-ROLE_ARN = "arn:aws:iam::906048429638:role/hidden"
+ACCOUNT = "000000000000"
+OTHER_ACCOUNT = "111111111111"
+COLD_ARN = "arn:aws:states:us-east-1:000000000000:stateMachine:oerf-cold-chain"
+ENGAGE_ARN = "arn:aws:states:us-east-1:000000000000:stateMachine:oerf-engage-party"
+ROLE_ARN = "arn:aws:iam::000000000000:role/hidden"
 PHONE = "+15550100001"
 SENTINEL = "PAYLOAD-SENTINEL"
 EVENT_ID = "event-should-not-print"
@@ -96,16 +97,19 @@ def test_all_tenants_are_refused_before_aws() -> None:
         raise AssertionError("aws")
 
     with pytest.raises(SystemExit, match="refused"):
-        main(["preflight", "--tenant", "all"], session_factory=factory)
+        main(
+            ["preflight", "--profile", "demo", "--account", ACCOUNT, "--tenant", "all"],
+            session_factory=factory,
+        )
 
 
 def test_a_wrong_account_stops_before_any_other_call(capsys: pytest.CaptureFixture[str]) -> None:
     sts, stubber = _aws("sts")
-    stubber.add_response("get_caller_identity", _identity("000000000000"))
+    stubber.add_response("get_caller_identity", _identity(OTHER_ACCOUNT))
     session = Session(sts=sts)
 
     code = main(
-        ["sensor", "--profile", "demo", "--tenant", "t1"],
+        ["sensor", "--profile", "demo", "--account", ACCOUNT, "--tenant", "t1"],
         session_factory=lambda _p: session,
     )
 
@@ -113,7 +117,8 @@ def test_a_wrong_account_stops_before_any_other_call(capsys: pytest.CaptureFixtu
     assert session.asked == ["sts"]
     out, err = capsys.readouterr()
     assert "refusing account" in err
-    assert "000000000000" not in out + err
+    assert ACCOUNT not in out + err
+    assert OTHER_ACCOUNT not in out + err
     assert "arn:aws" not in out + err
     stubber.assert_no_pending_responses()
 
@@ -124,7 +129,7 @@ def test_preflight_passes_when_the_account_is_ready(
     session, stubbers = _ready_session(seeded=True)
 
     code = main(
-        ["preflight", "--profile", "demo", "--tenant", "t1"],
+        ["preflight", "--profile", "demo", "--account", ACCOUNT, "--tenant", "t1"],
         session_factory=lambda _p: session,
     )
 
@@ -139,7 +144,7 @@ def test_preflight_passes_when_the_account_is_ready(
     assert "PASS runtime rows" in out
     assert "arn:aws" not in out
     assert PHONE not in out
-    assert DEMO_ACCOUNT not in out
+    assert ACCOUNT not in out
     for stubber in stubbers:
         stubber.assert_no_pending_responses()
 
@@ -148,7 +153,7 @@ def test_preflight_fails_a_stack_that_is_still_updating(capsys: pytest.CaptureFi
     session, stubbers = _ready_session(seeded=True, data_status="UPDATE_IN_PROGRESS")
 
     code = main(
-        ["preflight", "--profile", "demo", "--tenant", "t1"],
+        ["preflight", "--profile", "demo", "--account", ACCOUNT, "--tenant", "t1"],
         session_factory=lambda _p: session,
     )
 
@@ -164,7 +169,7 @@ def test_preflight_fails_when_runtime_rows_would_change(capsys: pytest.CaptureFi
     session, stubbers = _ready_session(seeded=False)
 
     code = main(
-        ["preflight", "--profile", "demo", "--tenant", "t1"],
+        ["preflight", "--profile", "demo", "--account", ACCOUNT, "--tenant", "t1"],
         session_factory=lambda _p: session,
     )
 
@@ -196,7 +201,7 @@ def test_preflight_live_checks_the_driver_parameter_without_printing_it(
     session.clients["ssm"] = ssm
 
     code = main(
-        ["preflight", "--profile", "demo", "--tenant", "t1", "--live"],
+        ["preflight", "--profile", "demo", "--account", ACCOUNT, "--tenant", "t1", "--live"],
         session_factory=lambda _p: session,
     )
 
@@ -218,7 +223,7 @@ def test_preflight_live_fails_when_the_driver_parameter_is_missing(
     session.clients["ssm"] = ssm
 
     code = main(
-        ["preflight", "--profile", "demo", "--tenant", "t1", "--live"],
+        ["preflight", "--profile", "demo", "--account", ACCOUNT, "--tenant", "t1", "--live"],
         session_factory=lambda _p: session,
     )
 
@@ -482,11 +487,11 @@ def test_list_executions_follows_the_page_token() -> None:
 
 def test_reply_refuses_live_before_any_aws_call(capsys: pytest.CaptureFixture[str]) -> None:
     sts, stubber = _aws("sts")
-    stubber.add_response("get_caller_identity", _identity(DEMO_ACCOUNT))
+    stubber.add_response("get_caller_identity", _identity(ACCOUNT))
     session = Session(sts=sts)
 
     code = main(
-        ["reply", "--profile", "demo", "--tenant", "t1", "--live", "--button", "running"],
+        ["reply", "--profile", "demo", "--account", ACCOUNT, "--tenant", "t1", "--live", "--button", "running"],
         session_factory=lambda _p: session,
     )
 
@@ -696,6 +701,7 @@ def test_demo_is_not_a_ci_step() -> None:
         assert target in makefile
     assert "--tenant $(TENANT)" in makefile
     assert "--profile $(PROFILE)" in makefile
+    assert "--account $(ACCOUNT)" in makefile
     assert "--button $(BUTTON)" in makefile
 
 
@@ -719,7 +725,7 @@ def _ready_session(
     data_status: str = "CREATE_COMPLETE",
 ) -> tuple[Session, list[Stubber]]:
     sts, sts_stub = _aws("sts")
-    sts_stub.add_response("get_caller_identity", _identity(DEMO_ACCOUNT))
+    sts_stub.add_response("get_caller_identity", _identity(ACCOUNT))
     formed, formed_stub = _aws("cloudformation")
     outputs = {
         "TenantTableName": TENANT_TABLE,
@@ -831,7 +837,7 @@ def _machine(arn: str, name: str) -> dict:
 
 def _execution_item(name: str, machine_arn: str) -> dict:
     return {
-        "executionArn": f"arn:aws:states:us-east-1:906048429638:execution:machine:{name}",
+        "executionArn": f"arn:aws:states:us-east-1:000000000000:execution:machine:{name}",
         "stateMachineArn": machine_arn,
         "name": name,
         "status": "RUNNING",
@@ -841,7 +847,7 @@ def _execution_item(name: str, machine_arn: str) -> dict:
 
 def _described(name: str, machine_arn: str, body: dict) -> dict:
     return {
-        "executionArn": f"arn:aws:states:us-east-1:906048429638:execution:machine:{name}",
+        "executionArn": f"arn:aws:states:us-east-1:000000000000:execution:machine:{name}",
         "stateMachineArn": machine_arn,
         "name": name,
         "status": "RUNNING",
