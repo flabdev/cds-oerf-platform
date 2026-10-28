@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test src/model.test.js src/session.test.js src/deskEvents.test.js vite.config.test.js",
+    "test": "node --test src/model.test.js src/session.test.js src/deskEvents.test.js src/format.test.js src/deskView.test.js vite.config.test.js",
     "dev": "vite",
     "build": "vite build"
   },
