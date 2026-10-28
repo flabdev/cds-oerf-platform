@@ -215,7 +215,7 @@ def diagnose(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnve
 
     The policy id is the pinned cadence entry for this role and ask. Facility
     ids and drive times are the tenant table's. This step does not move the
-    incident: ``Assess`` is the next transition.
+    incident. The driver engagement runs next, and ``Assess`` ranks after it.
     """
 
     replay = _replay(envelope, dependencies)
@@ -344,6 +344,30 @@ def _within_pre_approved_limits(resolved: Any) -> bool:
     return limits.max_spend > 0 and limits.currency != ""
 
 
+def _engagement_intent(workflow: Mapping[str, Any]) -> str | None:
+    """The driver's intent, when the engagement has already finished.
+
+    The child stores its output at ``workflow.diagnosis.engagement_result``.
+    An answered child puts ``intent`` on that object. Exhaustion has none.
+    """
+
+    diagnosis = mapping(workflow, "diagnosis") or {}
+    result = mapping(diagnosis, "engagement_result") or {}
+    found = text(result, "intent")
+    if found:
+        return found
+    return text(mapping(result, "response"), "intent")
+
+
+def _stopped_rise(assessment: Any) -> float | None:
+    """The pinned faster rise for a stopped unit, when the config has one."""
+
+    rate = getattr(assessment, "stopped_rise_rate_c_per_min", None)
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)):
+        return None
+    return float(rate)
+
+
 @handles("Assess")
 def assess(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
     """Rank deterministic recovery options and decide whether a human is needed.
@@ -370,6 +394,9 @@ def assess(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
         raise MissingStepInput("the gathered context has no trigger temperature")
     lower, upper = _range_c(context, envelope.step)
     elapsed = _minutes_between(_ship_time(workflow, context), dependencies.now())
+    intent = _engagement_intent(workflow)
+    stopped = intent == "unit_stopped"
+    rise_rate = _stopped_rise(assessment) if stopped else None
     try:
         projection = AssessmentContext(
             upper_c=float(upper),
@@ -377,7 +404,7 @@ def assess(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
             used_minutes=elapsed,
             temperature_c=float(temperature),
             unload_min=float(assessment.unload_min),
-            rise_rate_c_per_min=float(assessment.rise_rate_c_per_min),
+            rise_rate_c_per_min=float(rise_rate or assessment.rise_rate_c_per_min),
             cooldown_rate_c_per_min=float(assessment.cooldown_rate_c_per_min),
             min_spare_allowance_min=float(assessment.min_spare_allowance_min),
         )
@@ -385,7 +412,7 @@ def assess(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
     except (TypeError, ValueError, ValidationError) as exc:
         raise MissingStepInput(f"the gathered context cannot be assessed: {exc}") from exc
 
-    ranked = rank_options(projection, options)
+    ranked = rank_options(projection, options, continue_feasible=not stopped)
     feasible = [option for option in ranked.options if option.feasible]
     needs_approval = bool(feasible) and not _within_pre_approved_limits(resolved)
     if not feasible:
@@ -403,6 +430,8 @@ def assess(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
             "range_c": [float(lower), float(upper)],
             "elapsed_minutes": elapsed,
             "allowance_minutes": float(field(context, "allowance_minutes")),
+            **({"intent": intent} if intent else {}),
+            **({"rise_rate_c_per_min": float(rise_rate)} if rise_rate is not None else {}),
         },
         has_feasible_options=bool(feasible),
         needs_approval=needs_approval,

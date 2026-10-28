@@ -60,16 +60,24 @@ class RankingResult(BaseModel):
     recommended_option: str | None
 
 
-def rank_options(context: AssessmentContext, options: list[RecoveryOption]) -> RankingResult:
+def rank_options(
+    context: AssessmentContext,
+    options: list[RecoveryOption],
+    *,
+    continue_feasible: bool = True,
+) -> RankingResult:
     """Project, judge, and rank recovery options.
 
     A facility is feasible when it has capacity and its spare allowance is at
     least the configured minimum. Feasible options are ordered by spare
     descending, then shorter drive time, then id. Continue options do not
-    receive cooldown credit.
+    receive cooldown credit. ``continue_feasible`` false marks every continue
+    option infeasible after that projection.
     """
 
-    projected = [_project(context, option) for option in options]
+    projected = [
+        _project(context, option, continue_feasible=continue_feasible) for option in options
+    ]
     feasible = [item for item in projected if item.feasible]
     infeasible = [item for item in projected if not item.feasible]
     ordered = sorted(feasible, key=lambda item: (-item.spare_minutes, item.drive_min, item.id))
@@ -81,7 +89,12 @@ def rank_options(context: AssessmentContext, options: list[RecoveryOption]) -> R
     return RankingResult(options=[*ranked, *infeasible], recommended_option=recommended)
 
 
-def _project(context: AssessmentContext, option: RecoveryOption) -> RankedOption:
+def _project(
+    context: AssessmentContext,
+    option: RecoveryOption,
+    *,
+    continue_feasible: bool = True,
+) -> RankedOption:
     if option.kind == "continue":
         projected = context.used_minutes + option.drive_min + context.unload_min
     else:
@@ -92,6 +105,8 @@ def _project(context: AssessmentContext, option: RecoveryOption) -> RankedOption
         projected = context.used_minutes + travel_min + cooldown
     spare = context.allowance_minutes - projected
     feasible = option.capacity_available and spare >= context.min_spare_allowance_min
+    if option.kind == "continue" and not continue_feasible:
+        feasible = False
     return RankedOption(
         id=option.id,
         drive_min=option.drive_min,

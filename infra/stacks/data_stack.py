@@ -376,6 +376,8 @@ class OerfDataStack(Stack):
         invoke_resources = [workflow_stub.function_arn, f"{workflow_stub.function_arn}:*"]
         for arn in step_arns:
             invoke_resources.extend([arn, f"{arn}:*"])
+        router_arn = function_arn(self.region, self.account, CHANNEL_ROUTER_NAME)
+        invoke_resources.extend([router_arn, f"{router_arn}:*"])
         workflow_role.add_to_policy(
             iam.PolicyStatement(
                 actions=["lambda:InvokeFunction"],
@@ -395,6 +397,7 @@ class OerfDataStack(Stack):
                 function_arn(self.region, self.account, STEP_FUNCTION_NAMES[phase]),
             )
         definition = definition.replace("__STUB_ARN__", workflow_stub.function_arn)
+        definition = definition.replace("__CHANNEL_ROUTER_ARN__", router_arn)
         engagement_asl_path = (
             Path(__file__).resolve().parents[2]
             / "domains"
@@ -411,7 +414,7 @@ class OerfDataStack(Stack):
             )
         engagement_definition = engagement_definition.replace(
             "__CHANNEL_ROUTER_ARN__",
-            function_arn(self.region, self.account, CHANNEL_ROUTER_NAME),
+            router_arn,
         )
         engagement_role = iam.Role(
             self,

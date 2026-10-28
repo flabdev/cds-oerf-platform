@@ -85,6 +85,31 @@ def test_live_send_reads_ssm_once_and_ignores_the_env_var(monkeypatch, capsys) -
     stubber.assert_no_pending_responses()
 
 
+def test_send_keeps_the_api_id_and_the_meta_wamid(monkeypatch) -> None:
+    _isolate(monkeypatch)
+    monkeypatch.setattr(router, "WHATSAPP_PHONE_NUMBER_ID", _ENV_ID)
+
+    class _Social:
+        def send_whatsapp_message(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            return {
+                "messageId": "aws-mid-1",
+                "messages": [{"id": "wamid.HBgLfrom-meta"}],
+            }
+
+    def client(service: str, *_args: object, **_kwargs: object) -> _Social:
+        if service == "socialmessaging":
+            return _Social()
+        raise AssertionError(service)
+
+    monkeypatch.setattr(router.boto3, "client", client)
+
+    result = router.send_whatsapp(_RECIPIENT, "hello")
+
+    assert result["message_id"] == "aws-mid-1"
+    assert result["message_ids"] == ["aws-mid-1", "wamid.HBgLfrom-meta"]
+
+
 def test_unset_parameter_name_uses_the_env_var_and_skips_ssm(monkeypatch) -> None:
     _isolate(monkeypatch)
     monkeypatch.setattr(router, "WHATSAPP_PHONE_NUMBER_ID", _ENV_ID)

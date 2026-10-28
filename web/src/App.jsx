@@ -833,7 +833,10 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
                       ))}
                     </div>
                   ) : (
-                    <p className="quiet">Facility options appear once the incident is assessed.</p>
+                    <p className="quiet">
+                      {view.recommendationLabel
+                        || "Facility options appear once the incident is assessed."}
+                    </p>
                   )}
                   {view.why.length ? (
                     <details className="why">

@@ -74,6 +74,15 @@ test("the chart draws the band, the upper limit, and red points above it", () =>
   assert.equal(plot.line.split(" ").length, 2);
 });
 
+test("diagnosing with no assessment waits for the driver's answer", () => {
+  const now = Date.parse("2026-10-28T14:00:00Z");
+  const waiting = buildDesk({ state: "DIAGNOSING", shipment_id: "PH-2841" }, now);
+  assert.equal(waiting.options.length, 0);
+  assert.equal(waiting.recommendationLabel, "Waiting for the driver's answer");
+  const later = buildDesk({ state: "ASSESSING", shipment_id: "PH-2841" }, now);
+  assert.equal(later.recommendationLabel, "");
+});
+
 test("options keep the rules order and name continue without inventing a facility", () => {
   const desk = buildDesk({
     state: "ASSESSING",

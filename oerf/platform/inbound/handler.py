@@ -2,8 +2,9 @@
 
 Ordering for a provider message follows ``docs/interfaces.md`` section 5:
 normalize, dedupe on ``INMSG#{provider_msg_id}``, opt-out keywords, correlate on
-``OUTMSG#{context_msg_id}`` when quoted, otherwise match exactly one waiting
-engagement on ``ADDR#{channel}#{sender}``, validate sender ownership, store inbound
+``OUTMSG#{context_msg_id}`` when quoted, and when that row is missing match
+exactly one waiting engagement on ``ADDR#{channel}#{sender}``, validate sender
+ownership, store inbound
 media as evidence, and then resume the persisted task token. A dashboard action
 skips opt-out and correlation: the API already wrote
 ``tenant_id``, ``incident_id`` and ``engagement_id`` from a verified token, so the
@@ -77,6 +78,7 @@ from oerf.platform.inbound.normalize import (
     NormalizedMessage,
     normalize_inbound,
     whatsapp_event_body,
+    whatsapp_status_ids,
 )
 from oerf.platform.incidents.dynamo import DynamoIncidentStore
 from oerf.platform.incidents.repository import (
@@ -374,11 +376,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str
                 raise ValueError("SQS body must be a JSON object")
             accepted = _dedupe_id(body)
             process_message(body, dependencies)
-        except Exception:
+        except Exception as exc:
+            # Class name only. The message and the payload can carry a reply or a token.
             log(
                 logger,
                 logging.ERROR,
-                "Inbound record processing failed; requesting SQS retry",
+                "Inbound record processing failed; requesting SQS retry "
+                f"error={type(exc).__name__}",
                 outcome="error",
                 count=1,
             )
@@ -405,6 +409,7 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
         return _process_dashboard(body, dependencies)
     prepared = whatsapp_event_body(body)
     if prepared is None:
+        _record_whatsapp_status(body, dependencies)
         log(
             logger,
             logging.INFO,
@@ -447,27 +452,20 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
         )
         return "opt_out"
     engagement = reply.engagement
-    if context_id is None:
+    if engagement is None:
         candidates = dependencies.engagements.for_address(message.channel, message.sender)
         if len(candidates) != 1:
             log(
                 logger,
                 logging.INFO,
-                "Ignoring unquoted reply without one waiting engagement",
+                "Ignoring unquoted reply without one waiting engagement"
+                if context_id is None
+                else "Ignoring unknown or late provider reply",
                 outcome="ignored",
                 count=len(candidates),
             )
             return "ignored"
         engagement = candidates[0]
-    if engagement is None:
-        log(
-            logger,
-            logging.INFO,
-            "Ignoring unknown or late provider reply",
-            outcome="ignored",
-            count=1,
-        )
-        return "ignored"
     resolution = dependencies.registry.resolve_sender(message.sender)
     if not _sender_owns_engagement(engagement, resolution):
         log(
@@ -482,8 +480,7 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
         )
         return "ignored"
     media = _persist_media(message, engagement.tenant_id, dependencies.media_evidence)
-    _resume(engagement, _provider_payload(message, media), dependencies)
-    return "resumed"
+    return _resume(engagement, _provider_payload(message, media), dependencies)
 
 
 def _sender_owns_engagement(engagement: Engagement, resolution: SenderResolution) -> bool:
@@ -601,8 +598,7 @@ def _process_dashboard(body: dict[str, Any], dependencies: InboundDependencies) 
     }
     if action == "pick_option":
         payload["option_id"] = option_id
-    _resume(engagement, payload, dependencies)
-    return "resumed"
+    return _resume(engagement, payload, dependencies)
 
 
 def _cancel(
@@ -756,7 +752,7 @@ def _is_finished_execution(exc: BaseException) -> bool:
 
 def _resume(
     engagement: Engagement, payload: dict[str, Any], dependencies: InboundDependencies
-) -> None:
+) -> str:
     """Send a bounded allowlisted response, then consume the waiting engagement."""
     if engagement.status != "WAITING":
         log(
@@ -768,7 +764,7 @@ def _resume(
             engagement_id=engagement.engagement_id,
             outcome="ignored",
         )
-        return
+        return "ignored"
     resumed = {**payload, "engagement": _engagement_block(engagement)}
     output = json.dumps(resumed, separators=(",", ":"), ensure_ascii=False)
     if len(output.encode("utf-8")) > MAX_CALLBACK_BYTES:
@@ -776,22 +772,39 @@ def _resume(
     try:
         dependencies.callbacks.send_task_success(taskToken=engagement.task_token, output=output)
     except Exception as exc:
-        if not _is_expired_token(exc):
+        code = _error_code(exc)
+        if code in _LATE_TOKEN:
+            # The wait already ended. Close the row and acknowledge the record.
+            log(
+                logger,
+                logging.INFO,
+                f"late reply, token expired {code}",
+                tenant_id=engagement.tenant_id,
+                incident_id=engagement.incident_id,
+                engagement_id=engagement.engagement_id,
+                outcome="ignored",
+            )
+            dependencies.engagements.answer(
+                engagement.tenant_id, engagement.incident_id, engagement.engagement_id
+            )
+            return "late"
+        if _transient_callback(exc):
             raise
-        # The wait state timed out or was already resumed, so the rung closes
-        # without a second callback and a later reply correlates to nothing.
         log(
             logger,
-            logging.INFO,
-            f"Ignoring expired task token engagement={engagement.engagement_id}",
+            logging.ERROR,
+            f"Inbound callback rejected error={type(exc).__name__}",
             tenant_id=engagement.tenant_id,
             incident_id=engagement.incident_id,
             engagement_id=engagement.engagement_id,
-            outcome="ignored",
+            outcome="error",
+            count=1,
         )
+        return "rejected"
     dependencies.engagements.answer(
         engagement.tenant_id, engagement.incident_id, engagement.engagement_id
     )
+    return "resumed"
 
 
 def _engagement_block(engagement: Engagement) -> dict[str, Any]:
@@ -845,11 +858,38 @@ def _dedupe_id(body: dict[str, Any]) -> str | None:
         return _nonblank(body.get("action_id"))
     raw = body.get("payload")
     payload = raw if isinstance(raw, dict) else body
-    return (
+    direct = (
         _nonblank(payload.get("provider_msg_id"))
         or _nonblank(payload.get("message_id"))
         or _nonblank(body.get("action_id"))
     )
+    if direct:
+        return direct
+    try:
+        prepared = whatsapp_event_body(body)
+    except Exception:
+        return None
+    if not isinstance(prepared, dict):
+        return None
+    return _nonblank(prepared.get("provider_msg_id")) or _nonblank(prepared.get("message_id"))
+
+
+def _record_whatsapp_status(body: dict[str, Any], dependencies: InboundDependencies) -> None:
+    """Store the status wamid on OUTMSG# when one engagement is waiting.
+
+    A status event does not resume. ``statuses[].id`` is the Meta wamid the
+    reply's ``context.id`` will quote. ``SendWhatsAppMessage`` ``messageId``
+    is a different id, so the quote misses unless this row exists.
+    """
+
+    for wamid, recipient in whatsapp_status_ids(body):
+        matches = dependencies.engagements.for_address("whatsapp", recipient)
+        if len(matches) != 1:
+            continue
+        try:
+            dependencies.engagements.register_outbound(wamid, matches[0])
+        except ValueError:
+            continue
 
 
 def _release(dedupe: MessageDedupePort, message_id: str) -> None:
@@ -870,13 +910,32 @@ def _nonblank(value: Any) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def _is_expired_token(exc: BaseException) -> bool:
-    response = getattr(exc, "response", None)
+_LATE_TOKEN = frozenset({"TaskDoesNotExist", "InvalidToken", "TaskTimedOut"})
+
+
+def _error_code(exc: BaseException) -> str | None:
+    response = exc.response if isinstance(exc, ClientError) else getattr(exc, "response", None)
     error = response.get("Error", {}) if isinstance(response, Mapping) else {}
-    code = error.get("Code")
-    if isinstance(exc, ClientError):
-        code = exc.response.get("Error", {}).get("Code")
-    return code in {"TaskDoesNotExist", "InvalidToken", "TaskTimedOut"}
+    code = error.get("Code") if isinstance(error, Mapping) else None
+    return code if isinstance(code, str) and code.strip() else None
+
+
+def _transient_callback(exc: BaseException) -> bool:
+    """Throttling and other transient SendTaskSuccess errors are retried."""
+
+    code = _error_code(exc)
+    if code in _THROTTLE_CODES:
+        return True
+    response = exc.response if isinstance(exc, ClientError) else getattr(exc, "response", None)
+    meta = response.get("ResponseMetadata", {}) if isinstance(response, Mapping) else {}
+    status = meta.get("HTTPStatusCode") if isinstance(meta, Mapping) else None
+    if status == 429 or (isinstance(status, int) and status >= 500):
+        return True
+    if isinstance(status, int) and 400 <= status < 500:
+        return False
+    if code:
+        return False
+    return True
 
 
 def configure_dependencies(dependencies: InboundDependencies | None) -> None:

@@ -606,16 +606,19 @@ class DynamoEngagementStore:
         )
 
     def _sync_outbound_status(self, engagement: Engagement) -> None:
-        response = self._client.query(
-            TableName=self._routing,
-            KeyConditionExpression="#pk = :pk AND begins_with(#sk, :prefix)",
-            ExpressionAttributeNames={"#pk": "pk", "#sk": "sk"},
-            ExpressionAttributeValues={
-                ":pk": s(_routing_ref_pk(engagement)),
-                ":prefix": s(""),
-            },
-        )
-        for item in response.get("Items", []):
+        items: list[dict[str, Any]] = []
+        for prefix in ("OUTMSG#", "ADDR#"):
+            response = self._client.query(
+                TableName=self._routing,
+                KeyConditionExpression="#pk = :pk AND begins_with(#sk, :prefix)",
+                ExpressionAttributeNames={"#pk": "pk", "#sk": "sk"},
+                ExpressionAttributeValues={
+                    ":pk": s(_routing_ref_pk(engagement)),
+                    ":prefix": s(prefix),
+                },
+            )
+            items.extend(response.get("Items", []))
+        for item in items:
             target_pk = text(item["target_pk"])
             target_sk = text(item["target_sk"])
             if target_pk.startswith("ADDR#") and engagement.status != "WAITING":

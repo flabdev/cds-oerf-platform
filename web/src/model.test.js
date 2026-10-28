@@ -106,6 +106,11 @@ test("a live detail maps the response and the chart uses the readings", () => {
   assert.equal(oneDecimal(null), null);
   assert.equal(view.evidenceLabel, "AL02");
   assert.equal(view.recommendationLabel, "FACILITY_A");
+  assert.equal(
+    incidentView({ state: "DIAGNOSING", options: [], recommendation: null }).recommendationLabel,
+    "Waiting for the driver's answer",
+  );
+  assert.equal(incidentView({ state: "ASSESSING" }).recommendationLabel, "—");
   assert.equal(view.options[0].spareLabel, "12.4");
   assert.equal(view.engagementStatus, "");
   const local = presentIncident({

@@ -5,6 +5,9 @@
       "sms": "Temperature alert {shipment_id}. Pull over safely and check WhatsApp.",
       "whatsapp": "Shipment {shipment_id} is at {temperature_c} C, above its safe range. Please pull over safely before replying. Is the refrigeration unit running?"
     },
+    "driver_ack": {
+      "whatsapp": "Thanks, noted: {answer}. We're checking the shipment now."
+    },
     "driver_reminder": {},
     "driver_call": {},
     "supervisor_escalation": {},
@@ -12,7 +15,9 @@
     "approval_reminder": {},
     "facility_request": {},
     "facility_reminder": {},
-    "driver_reroute": {},
+    "driver_reroute": {
+      "whatsapp": "Please take shipment {shipment_id} to {facility_name}, about {minutes} minutes away. They are expecting you. Directions: {directions} Tap below when you are on your way."
+    },
     "transfer_confirm_request": {},
     "qa_report_ready": {},
     "qa_reminder": {},
@@ -21,7 +26,9 @@
     "evidence_unreadable": {},
     "concern_reply": {},
     "evidence_resubmitted": {},
-    "status_update": {},
+    "status_update": {
+      "whatsapp": "Update on shipment {shipment_id}: {status}. Next step: {next_step}. No action is needed from you."
+    },
     "disambiguation": {},
     "auto_proceed_notice": {},
     "voice_note_unsupported": {},
