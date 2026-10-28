@@ -105,10 +105,8 @@ const CHART_LEFT = 22;
 const CHART_RIGHT = 112;
 const CHART_MIN_GAP = 14;
 
-export function temperatureChart(readings, band = [2, 8]) {
-  const low = Number(band?.[0]);
-  const high = Number(band?.[1]);
-  const range = [Number.isFinite(low) ? low : 2, Number.isFinite(high) ? high : 8];
+export function temperatureChart(readings, band) {
+  const range = numericBand(band);
   const series = (Array.isArray(readings) ? readings : [])
     .map((row) => ({
       ts: typeof row?.ts === "string" ? row.ts : "",
@@ -116,7 +114,9 @@ export function temperatureChart(readings, band = [2, 8]) {
     }))
     .filter((row) => row.ts && Number.isFinite(row.temperature_c));
   const temps = series.map((row) => row.temperature_c);
-  const tickValues = yTicks(temps, range[0], range[1]);
+  const floor = range ? range[0] : (temps.length ? Math.min(...temps) : 0);
+  const ceiling = range ? range[1] : (temps.length ? Math.max(...temps) : 1);
+  const tickValues = yTicks(temps, floor, ceiling, Boolean(range));
   const min = Math.min(...tickValues);
   const max = Math.max(...tickValues);
   const span = max - min || 1;
@@ -137,21 +137,33 @@ export function temperatureChart(readings, band = [2, 8]) {
     band: range,
     points,
     polyline: points.map((point) => `${point.x},${point.y}`).join(" "),
-    bandY: round(plot(range[1])),
-    bandHeight: round(Math.max(plot(range[0]) - plot(range[1]), 0)),
+    bandY: range ? round(plot(range[1])) : 0,
+    bandHeight: range ? round(Math.max(plot(range[0]) - plot(range[1]), 0)) : 0,
     ticks,
     empty: points.length === 0,
   };
 }
 
-function yTicks(temps, low, high) {
-  const dataMin = Math.min(low, ...(temps.length ? temps : [low]));
-  const dataMax = Math.max(high, ...(temps.length ? temps : [high]));
+function numericBand(band) {
+  if (!Array.isArray(band) || band.length !== 2) {
+    return null;
+  }
+  const low = Number(band[0]);
+  const high = Number(band[1]);
+  if (!Number.isFinite(low) || !Number.isFinite(high) || low >= high) {
+    return null;
+  }
+  return [low, high];
+}
+
+function yTicks(temps, low, high, includeBand) {
+  const dataMin = temps.length ? Math.min(low, ...temps) : low;
+  const dataMax = temps.length ? Math.max(high, ...temps) : high;
   const span = Math.max(dataMax - dataMin, 1);
   const step = span <= 16 ? 2 : span <= 40 ? 5 : 10;
   const start = Math.floor(dataMin / step) * step;
   const end = Math.ceil(dataMax / step) * step;
-  const values = new Set([low, high]);
+  const values = new Set(includeBand ? [low, high] : []);
   for (let value = start; value <= end + step * 0.001; value += step) {
     values.add(Math.round(value * 10) / 10);
   }
@@ -219,7 +231,7 @@ export function incidentView(item) {
     }));
   const remaining = oneDecimal(item?.allowance_remaining);
   const readings = chartReadings(item);
-  const band = Array.isArray(item?.range_c) && item.range_c.length === 2 ? item.range_c : [2, 8];
+  const band = numericBand(item?.range_c);
   const recommendationLabel = typeof recommended === "string" && recommended.trim()
     ? recommended.trim()
     : "—";

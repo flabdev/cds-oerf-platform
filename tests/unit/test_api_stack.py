@@ -201,6 +201,29 @@ def test_dashboard_bucket_is_private_behind_cloudfront(template: Template) -> No
 
 
 @pytest.mark.security
+def test_dashboard_query_can_read_a_tenant_shipment(template: Template) -> None:
+    functions = template.find_resources("AWS::Lambda::Function")
+    query = next(
+        props["Properties"]
+        for props in functions.values()
+        if "TENANT_TABLE_NAME" in props["Properties"].get("Environment", {}).get("Variables", {})
+    )
+    role_id = query["Role"]["Fn::GetAtt"][0]
+    readable = []
+    for policy in template.find_resources("AWS::IAM::Policy").values():
+        roles = policy["Properties"].get("Roles", [])
+        if not any(isinstance(role, dict) and role.get("Ref") == role_id for role in roles):
+            continue
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            action = statement.get("Action", [])
+            names = [action] if isinstance(action, str) else list(action)
+            if "dynamodb:GetItem" not in names:
+                continue
+            readable.append(json.dumps(statement.get("Resource")))
+    assert any("TenantTable" in resource for resource in readable)
+
+
+@pytest.mark.security
 def test_dashboard_roles_are_not_granted_kms(template: Template) -> None:
     found = []
     for policy in template.find_resources("AWS::IAM::Policy").values():

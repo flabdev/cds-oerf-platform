@@ -56,6 +56,26 @@ def test_create_is_one_transaction_and_keeps_tenant() -> None:
     assert loaded["Item"]["tenant_id"]["S"] == "t1"
 
 
+def test_create_persists_the_selected_profile_on_meta() -> None:
+    client = FakeDynamoClient()
+    store = DynamoIncidentStore(client, "incident", clock=_clock)
+
+    created = store.create(
+        tenant_id="t1",
+        shipment_id="PH-2841",
+        reason="TEMPERATURE_ABOVE_MAX",
+        product_profile_id=" PP-15-25-120 ",
+    )
+
+    assert created.product_profile_id == "PP-15-25-120"
+    loaded = client.get_item(
+        TableName="incident",
+        Key={"pk": {"S": created.pk}, "sk": {"S": "META"}},
+    )
+    assert loaded["Item"]["product_profile_id"]["S"] == "PP-15-25-120"
+    assert store.get("t1", created.incident_id).product_profile_id == "PP-15-25-120"
+
+
 def test_second_create_appends_without_overwriting() -> None:
     client = FakeDynamoClient()
     store = DynamoIncidentStore(client, "incident", clock=_clock)
