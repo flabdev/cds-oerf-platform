@@ -39,6 +39,18 @@ The account must already be bootstrapped (`CDKToolkit` in `us-east-1`). This rol
 
 An empty `waba_id`, `phone_number_id`, or `alarm_email` uses repository variables `WABA_ID`, `WA_PHONE_NUMBER_ID`, and `ALARM_EMAIL`. If that variable is also empty, the context key is omitted. AgentCore's default builds the ARM64 image.
 
+## X-Ray Transaction Search
+
+`agentcore:enabled=true` adds one account-wide `AWS::XRay::TransactionSearchConfig` to `OerfDataStack`, and the CloudWatch Logs resource policy `TransactionSearchXRayAccess`. AgentCore can deliver traces to X-Ray only after CloudWatch Logs is the trace segment destination. That config turns it on. Indexing stays at the service default (`IndexingPercentage` is not set).
+
+The account has a single Transaction Search configuration. Deleting the resource turns Transaction Search off for the whole account. A stack delete does that. A later deploy with `agentcore:enabled` unset or `false` does too, because the resource leaves the template and CloudFormation deletes it. `OerfComputeStack` is deployed after `OerfDataStack`, so the runtime's trace delivery is created only once that config exists.
+
+## DynamoDB encryption
+
+Context `dynamodb:kmsManaged` defaults to `false`. The four tables then omit `encryption` and stay on the AWS owned key. Pass `dynamodb:kmsManaged=true` only to move them to the AWS managed key `aws/dynamodb` (ADR-033). The evidence and report buckets still use SSE-KMS `aws/s3` either way.
+
+A table's encryption mode can change 4 times per 24 hours, then once per 6 hours. Never toggle the flag in a deploy that might roll back. A failed deploy and its rollback each count as a change. Enable it after the demo, in a single deploy, once that window has reset.
+
 ## Demo device seed
 
 `seed_demo_devices` writes `DEVICE#{device_id}` / `META` on the routing table from `sim/seed/*/shipments.json`. The row carries `tenant_id`, `shipment_id`, and `asset_id` (`truck`). Ingest only reads that row and still drops an unknown device. The files are the demo tenants `t1`, `t2`, and `sbx`. A second run replaces the same ids.
@@ -60,25 +72,46 @@ Simulator readings must be published with `aws events put-events` (a new EventBr
 The command stops that tenant's `RUNNING` executions of `oerf-engage-party` and then `oerf-cold-chain`. An execution is selected by `tenant_id` in its input. It deletes that tenant's incident items, shipment locks (including `ESCALATED`), debounce rows, and the routing rows tied to its engagements. Evidence under `tenants/{tid}/` is deleted. `reports/{tid}/` is the audit record and is kept. The tenant-table counter `TENANT#{tid}` / `COUNTER#INCIDENT` is kept, so the next incident id continues. Tenant config, live websocket rows, `INGEST#` dedupe rows, and the platform table are kept.
 
 ```text
-make reset-test TENANT=t1 PROFILE=cds-oerf-poc
-make reset-demo TENANT=t1 PROFILE=cds-oerf-poc
+make reset-test TENANT=t1 PROFILE=Fission-OERF
+make reset-demo TENANT=t1 PROFILE=Fission-OERF
 ```
 
 `reset-test` is the dry run. `reset-demo` applies and reseeds. A second apply reports zero for every kind.
 
 ## Run the PH-2841 demo
 
-Reset the tenant first. A reset does not clear `INGEST#` rows, so a replayed reading id is ignored for 7 days. Publish a new EventBridge id each time. Direct Lambda invoke of the same JSON is deduped the same way.
+Reset the tenant first. A reset does not clear `INGEST#` rows, so a replayed reading id is ignored for 7 days. Each `put-events` call gets its own EventBridge id. Direct Lambda invoke of the same JSON is deduped the same way.
 
-1. `make reset-demo TENANT=t1 PROFILE=cds-oerf-poc`
-2. Publish one `sim.reefer` / `TemperatureReading` with `aws events put-events`. Use a new `id`. The device `RF-7781` resolves to tenant `t1` and shipment `PH-2841`.
-3. Watch `oerf-cold-chain` until `EngageDriverDiagnosis` is waiting on the child, and the child is waiting on `SendViaRouter`.
-4. Reply. With channels mocked, `python -m scripts.demo_reply --profile cds-oerf-poc --tenant t1 --shipment PH-2841 --role driver --button running`. With `channels:live` true, the driver replies on WhatsApp to template `oerf_driver_checkin`. The script reads the address from SSM `/oerf/demo-numbers/t1/driver` and prints the shipment and the message id, not the number.
-5. The child ends `answered` / `unit_running`. The parent takes the default of `NeedApproval?` into `SecureFacility` (still the stub), then real `Act`. The next state is `VerifyLoop`, which is unchanged and does not close this excursion by itself.
+`debounce_readings` is 2. Publish two readings above 8 °C within 10 minutes. One reading is accepted and opens no incident. The device `RF-7781` resolves to tenant `t1` and shipment `PH-2841`.
+
+1. `make reset-demo TENANT=t1 PROFILE=Fission-OERF`
+2. Publish the first reading, 8.1 °C, thirty seconds ago:
+
+```bash
+PREV=$(date -u -v-30S +%Y-%m-%dT%H:%M:%SZ)
+aws events put-events --profile Fission-OERF --region us-east-1 --entries "$(PREV="$PREV" python3 -c 'import json,os; ts=os.environ["PREV"]; detail={"tenant_id":"t1","shipment_id":"PH-2841","device_id":"RF-7781","ts":ts,"temperature_c":8.1,"lat":17.44,"lon":78.38,"seq":1}; print(json.dumps([{"Source":"sim.reefer","DetailType":"TemperatureReading","EventBusName":"oerf-events","Time":ts,"Detail":json.dumps(detail)}]))')"
+```
+
+3. Publish the second reading, 8.6 °C, now. It must be within 10 minutes of step 2:
+
+```bash
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+aws events put-events --profile Fission-OERF --region us-east-1 --entries "$(NOW="$NOW" python3 -c 'import json,os; ts=os.environ["NOW"]; detail={"tenant_id":"t1","shipment_id":"PH-2841","device_id":"RF-7781","ts":ts,"temperature_c":8.6,"lat":17.44,"lon":78.38,"seq":2}; print(json.dumps([{"Source":"sim.reefer","DetailType":"TemperatureReading","EventBusName":"oerf-events","Time":ts,"Detail":json.dumps(detail)}]))')"
+```
+
+4. Watch `oerf-cold-chain` until `EngageDriverDiagnosis` is waiting on the child, and the child is waiting on `SendViaRouter`. Function log groups have CDK-generated names, so they are not `/aws/lambda/<function-name>`. Find one with `aws logs describe-log-groups --profile Fission-OERF --region us-east-1` and grep the construct id, for example `IngestFunctionLogGroup`.
+5. Reply. Mocked channels resolve the party from the contact registry, so run `python -m scripts.seed_runtime --profile Fission-OERF --tenant t1 --yes` first if those `CONTACT#` rows are missing. The seeder writes fictional 555-01xx numbers (the driver is `+15550100001`) and does not read SSM. Then:
+
+```bash
+python -m scripts.demo_reply --profile Fission-OERF --tenant t1 --shipment PH-2841 --role driver --button running
+```
+
+With `channels:live` true, the driver replies on WhatsApp to template `oerf_driver_checkin` and the script reads SSM `/oerf/demo-numbers/t1/driver` instead of the synthetic row. It prints the shipment and the message id, not the number.
+6. The child ends `answered` / `unit_running`. The parent takes the default of `NeedApproval?` into `SecureFacility` (still the stub), then real `Act`. The next state is `VerifyLoop`, which is unchanged and does not close this excursion by itself.
 
 `demo_reply` only posts a WhatsApp provider message to the inbound queue. It does not send a dashboard action and it does not call `SendTaskSuccess`.
 
-After each rehearsal, cancel the incident from the desk or run `make reset-demo TENANT=t1 PROFILE=cds-oerf-poc`.
+After each rehearsal, cancel the incident from the desk or run `make reset-demo TENANT=t1 PROFILE=Fission-OERF`.
 
 ## First deploy from main
 

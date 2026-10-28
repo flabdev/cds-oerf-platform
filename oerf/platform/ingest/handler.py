@@ -305,6 +305,7 @@ def handler(
             reason=decision.reason or "TEMPERATURE_EXCURSION",
             config_version=config.version,
             config_snapshot=config.model_dump(mode="json"),
+            product_profile_id=profile_id,
         )
         _record_reading(ports, tenant_id, shipment_id, reading, event_id)
         execution_name = _execution_name(tenant_id, incident.incident_id)
@@ -345,8 +346,10 @@ def handler(
             logger,
             logging.INFO,
             (
-                "Started cold-chain execution "
-                f"tenant={tenant_id} shipment={shipment_id} incident={incident.incident_id}"
+                "Started cold-chain execution"
+                f" tenant={tenant_id}"
+                f" shipment={shipment_id}"
+                f" incident={incident.incident_id}"
             ),
             tenant_id=tenant_id,
             incident_id=incident.incident_id,

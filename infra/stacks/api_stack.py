@@ -22,12 +22,14 @@ from aws_cdk import (
     aws_logs as logs,
     aws_s3 as s3,
     aws_sqs as sqs,
+    aws_ssm as ssm,
 )
 from constructs import Construct
 
 from infra.iam_conditions import pin_source_account
 from infra.runtime_asset import runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
+from infra.ws_clients import DASHBOARD_CLIENT_PARAMETER
 
 _DEFAULT_THROTTLE_RATE = 20
 _DEFAULT_THROTTLE_BURST = 40
@@ -184,6 +186,26 @@ class OerfApiStack(Stack):
                 allow_headers=["Content-Type", "Authorization", "Idempotency-Key"],
             ),
         )
+        # A Cognito authorizer rejection never reaches the Lambda. Those
+        # gateway responses omit the preflight headers, so the browser reports
+        # the 401 as a CORS failure.
+        cors_headers = {
+            "Access-Control-Allow-Origin": f"'{dashboard_origin}'",
+            "Access-Control-Allow-Headers": "'Content-Type,Authorization,Idempotency-Key'",
+            "Access-Control-Allow-Methods": "'GET,POST,PUT,OPTIONS'",
+        }
+        self.rest_api.add_gateway_response(
+            "UnauthorizedCors",
+            type=apigw.ResponseType.UNAUTHORIZED,
+            response_headers=cors_headers,
+        )
+        self.rest_api.add_gateway_response(
+            "AccessDeniedCors",
+            type=apigw.ResponseType.ACCESS_DENIED,
+            response_headers=cors_headers,
+        )
+        self.query_fn.add_environment("DASHBOARD_ORIGIN", dashboard_origin)
+        self.action_fn.add_environment("DASHBOARD_ORIGIN", dashboard_origin)
         query_integration = apigw.LambdaIntegration(self.query_fn, proxy=True)
         action_integration = apigw.LambdaIntegration(self.action_fn, proxy=True)
         incidents = self.rest_api.root.add_resource("incidents")
@@ -227,12 +249,23 @@ class OerfApiStack(Stack):
                     cognito.OAuthScope.OPENID,
                     cognito.OAuthScope.EMAIL,
                     cognito.OAuthScope.PROFILE,
+                    # GetUser, which the WebSocket authorizer calls, requires this scope.
+                    cognito.OAuthScope.COGNITO_ADMIN,
                 ],
                 callback_urls=[dashboard_origin, "http://localhost:5173", "http://127.0.0.1:5173"],
                 logout_urls=[dashboard_origin, "http://localhost:5173", "http://127.0.0.1:5173"],
             ),
         )
         self.user_pool_client.node.add_dependency(self.hosted_domain)
+        # The WebSocket authorizer lives in OerfComputeStack, which this stack
+        # depends on. Publishing the client id lets that function allow the
+        # hosted-UI client without a reference back to this stack.
+        ssm.StringParameter(
+            self,
+            "DashboardClientIdParameter",
+            parameter_name=DASHBOARD_CLIENT_PARAMETER,
+            string_value=self.user_pool_client.user_pool_client_id,
+        )
         CfnOutput(
             self,
             "CognitoDomain",

@@ -57,17 +57,53 @@ export function acceptDeskEvent(raw, binding) {
 }
 
 export function mergeDeskRows(current, accepted) {
-  if (!Array.isArray(current) || !accepted) {
+  if (!Array.isArray(current) || !accepted?.incident) {
     return current;
   }
   const row = accepted.incident;
   const index = current.findIndex((item) => item.incident_id === row.incident_id);
-  if (index < 0) {
-    return [...current, { ...row, time: "" }];
+  if (index < 0 || !newerVersion(row.version, current[index].version)) {
+    return current;
+  }
+  const merged = { ...current[index], version: row.version };
+  if (typeof row.state === "string" && row.state.trim()) {
+    merged.state = row.state;
+  }
+  if (typeof row.stage === "string" && row.stage.trim()) {
+    merged.stage = row.stage;
+  }
+  if (typeof row.updated_at === "string" || Number.isFinite(row.updated_at)) {
+    merged.updated_at = row.updated_at;
   }
   const next = current.slice();
-  next[index] = { ...current[index], ...row };
+  next[index] = merged;
   return next;
+}
+
+/** A summary has no shipment. Load the incident once, then insert that row. */
+export async function absorbDeskEvent(current, accepted, fetchIncident) {
+  if (!Array.isArray(current) || !accepted?.incident?.incident_id) {
+    return current;
+  }
+  const incidentId = accepted.incident.incident_id;
+  if (current.some((item) => item.incident_id === incidentId)) {
+    return mergeDeskRows(current, accepted);
+  }
+  const fetched = await fetchIncident(incidentId);
+  return insertFetchedRow(current, fetched);
+}
+
+export function insertFetchedRow(current, fetched) {
+  if (!Array.isArray(current) || !fetched || typeof fetched !== "object" || Array.isArray(fetched)) {
+    return current;
+  }
+  if (typeof fetched.incident_id !== "string" || !fetched.incident_id.trim()) {
+    return current;
+  }
+  if (current.some((item) => item.incident_id === fetched.incident_id)) {
+    return current;
+  }
+  return [...current, { ...fetched, time: fetched.time || "" }];
 }
 
 function parse(raw) {
@@ -144,6 +180,16 @@ function hasPrivate(value) {
     return value.some((item) => hasPrivate(item));
   }
   return Object.entries(value).some(([key, item]) => PRIVATE_KEYS.has(key) || hasPrivate(item));
+}
+
+function newerVersion(incoming, current) {
+  if (!Number.isInteger(incoming)) {
+    return false;
+  }
+  if (!Number.isInteger(current)) {
+    return true;
+  }
+  return incoming > current;
 }
 
 function text(value) {

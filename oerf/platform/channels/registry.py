@@ -6,7 +6,15 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
-from oerf.platform.storage.dynamo import contact_sk, key, phone_pk, required_text, s, text
+from oerf.platform.storage.dynamo import (
+    canonical_e164,
+    contact_sk,
+    key,
+    phone_pk,
+    required_text,
+    s,
+    text,
+)
 from oerf.platform.tenancy.context import TenantContext
 
 
@@ -82,7 +90,7 @@ class MemoryPhoneRegistry:
         return match
 
     def resolve_sender(self, e164: str) -> SenderResolution:
-        number = required_text(e164, "e164")
+        number = canonical_e164(required_text(e164, "e164"))
         matches = [
             self._contacts[ref] for ref in self._by_phone.get(number, []) if ref in self._contacts
         ]
@@ -142,7 +150,7 @@ class DynamoPhoneRegistry:
         return match
 
     def resolve_sender(self, e164: str) -> SenderResolution:
-        number = required_text(e164, "e164")
+        number = canonical_e164(required_text(e164, "e164"))
         response = self._client.query(
             TableName=self._routing,
             KeyConditionExpression="#pk = :pk AND begins_with(#sk, :prefix)",
@@ -205,7 +213,7 @@ def _match(
         tenant_id=TenantContext(tenant_id=tenant_id).tenant_id,
         contact_id=required_text(contact_id, "contact_id"),
         role=required_text(role, "role"),
-        e164=required_text(e164, "e164"),
+        e164=canonical_e164(required_text(e164, "e164")),
         opt_in=opt_in,
     )
 

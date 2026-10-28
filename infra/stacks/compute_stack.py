@@ -33,11 +33,13 @@ from constructs import Construct
 
 from infra.constructs.agentcore_runtime import AgentCoreRuntime
 from infra.constructs.bedrock_guardrail import BedrockGuardrail
+from infra.constructs.social_messaging_arns import phone_number_arn
 from infra.constructs.waba_event_destination import WabaEventDestination
 from infra.iam_conditions import pin_source_account
 from infra.runtime_asset import runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
 from infra.step_functions import STEP_FUNCTION_NAMES, STEP_HANDLERS
+from infra.ws_clients import DASHBOARD_CLIENT_PARAMETER
 
 # Task-token APIs have no resource type in the IAM Service Authorization
 # Reference. The resource stays "*"; see docs/security/iam-exceptions.md.
@@ -72,6 +74,23 @@ def _context_int(scope: Construct, key: str, default: int) -> int:
     if raw is None or raw == "":
         return default
     return int(raw)
+
+
+_TRACE_DELIVERY_IDS = ("TracesDeliverySource", "TracesDeliveryDest", "TracesDelivery")
+
+
+def _trace_delivery_waits_for(runtime: Construct, data_stack: OerfDataStack) -> None:
+    """X-Ray delivery fails until Transaction Search has made CloudWatch Logs the destination."""
+    config = data_stack.transaction_search_config
+    if config is None:
+        raise RuntimeError(
+            "agentcore:enabled is true but OerfDataStack has no TransactionSearchConfig"
+        )
+    for child_id in _TRACE_DELIVERY_IDS:
+        child = runtime.node.try_find_child(child_id)
+        if child is None:
+            raise RuntimeError(f"AgentCore runtime is missing {child_id}")
+        child.node.add_dependency(config)
 
 
 class OerfComputeStack(Stack):
@@ -182,18 +201,14 @@ class OerfComputeStack(Stack):
             )
         )
         # social-messaging:SendWhatsAppMessage requires resource type phone-number-id.
-        # arn:${Partition}:social-messaging:${Region}:${Account}:phone-number-id/${Id}
-        # Service Authorization Reference, list_socialmessaging.html.
+        # The ARN id drops a leading phone-number-id- prefix.
         if whatsapp_phone_number_id:
             whatsapp_resources = [
-                (
-                    f"arn:aws:social-messaging:{self.region}:{self.account}:"
-                    f"phone-number-id/{whatsapp_phone_number_id}"
-                )
+                phone_number_arn(self.region, self.account, whatsapp_phone_number_id)
             ]
         else:
-            # TODO: scope this to the phone-number-id ARN when context
-            # whatsapp:phoneNumberId is set. See docs/security/iam-exceptions.md.
+            # whatsapp:phoneNumberId is unset, so no phone-number-id ARN exists
+            # at synth. See docs/security/iam-exceptions.md.
             whatsapp_resources = ["*"]
         self.channel_router_fn.add_to_role_policy(
             iam.PolicyStatement(
@@ -321,7 +336,22 @@ class OerfComputeStack(Stack):
                 "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
                 "USER_POOL_ID": data_stack.user_pool.user_pool_id,
                 "USER_POOL_CLIENT_ID": user_pool_client.user_pool_client_id,
+                "ALLOWED_CLIENT_IDS": user_pool_client.user_pool_client_id,
+                "DASHBOARD_CLIENT_PARAMETER": DASHBOARD_CLIENT_PARAMETER,
             },
+        )
+        # The dashboard client id is published by OerfApiStack. Naming the
+        # parameter here does not reference that stack.
+        self.ws_authorizer_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["ssm:GetParameter"],
+                resources=[
+                    (
+                        f"arn:aws:ssm:{self.region}:{self.account}:parameter"
+                        f"{DASHBOARD_CLIENT_PARAMETER}"
+                    )
+                ],
+            )
         )
         data_stack.routing_table.grant_read_write_data(self.ws_authorizer_fn)
         ws_authorizer = authorizers.WebSocketLambdaAuthorizer(
@@ -689,6 +719,7 @@ class OerfComputeStack(Stack):
                 value=agent.agent_runtime_arn,
                 export_name="AGENT-RUNTIME-ARN",
             )
+            _trace_delivery_waits_for(agent.runtime, data_stack)
 
         # ---------------------------------------------------------
         # 10. Cold-chain step functions. Names are fixed so the data stack
@@ -706,6 +737,10 @@ class OerfComputeStack(Stack):
         CfnOutput(self, "InboundQueueUrl", value=self.inbound_queue.queue_url)
         CfnOutput(self, "EvidenceAnalyzerArn", value=self.evidence_analyzer_fn.function_arn)
         CfnOutput(self, "ReportGeneratorArn", value=self.report_generator_fn.function_arn)
+        # Trace delivery in this stack needs Transaction Search from the data
+        # stack. Table references usually create the same edge; add it if not.
+        if data_stack not in self.dependencies:
+            self.add_stack_dependency(data_stack)
         pin_source_account(self)
 
     def _step_functions(self, data_stack: OerfDataStack, code: lambda_.Code) -> None:

@@ -45,6 +45,17 @@ def test_unauthenticated_request_is_rejected() -> None:
     assert response["statusCode"] == 401
 
 
+def test_handler_allows_the_dashboard_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DASHBOARD_ORIGIN", "https://d111.cloudfront.net")
+
+    response = handler({"httpMethod": "GET", "path": "/incidents"}, None)
+
+    assert response["headers"]["Access-Control-Allow-Origin"] == "https://d111.cloudfront.net"
+    assert response["headers"]["Access-Control-Allow-Headers"] == (
+        "Content-Type,Authorization,Idempotency-Key"
+    )
+
+
 @pytest.mark.security
 def test_action_is_queued_once_and_carries_no_task_token() -> None:
     services = _services()

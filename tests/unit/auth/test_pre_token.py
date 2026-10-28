@@ -1,4 +1,4 @@
-"""Pre-token trigger copies custom:tenant_id onto both Cognito tokens."""
+"""Pre-token trigger copies custom:tenant_id and groups onto the ID token."""
 
 import pytest
 
@@ -51,3 +51,59 @@ def test_keeps_claims_already_present_on_the_response() -> None:
         "custom:other": "kept",
         TENANT_CLAIM: "t1",
     }
+
+
+def test_copies_groups_onto_the_id_token() -> None:
+    event = {
+        "request": {
+            "userAttributes": {TENANT_CLAIM: "t1"},
+            "groupConfiguration": {
+                "groupsToOverride": [" ops_user ", ""],
+                "iamRolesToOverride": ["ops-role"],
+                "preferredRole": " ops-role ",
+            },
+        },
+        "response": {},
+    }
+
+    result = handler(event, None)
+    details = result["response"]["claimsAndScopeOverrideDetails"]
+    identity = details["idTokenGeneration"]["claimsToAddOrOverride"]
+
+    assert identity[TENANT_CLAIM] == "t1"
+    assert "cognito:groups" not in identity
+    assert details["groupOverrideDetails"] == {
+        "groupsToOverride": ["ops_user"],
+        "iamRolesToOverride": ["ops-role"],
+        "preferredRole": "ops-role",
+    }
+
+
+def test_groups_are_copied_when_the_tenant_attribute_is_missing() -> None:
+    event = {
+        "request": {
+            "userAttributes": {},
+            "groupConfiguration": {"groupsToOverride": ["tenant_admin"]},
+        },
+        "response": {},
+    }
+
+    result = apply_tenant_claim(event)
+    details = result["response"]["claimsAndScopeOverrideDetails"]
+
+    assert "idTokenGeneration" not in details
+    assert details["groupOverrideDetails"]["groupsToOverride"] == ["tenant_admin"]
+
+
+def test_empty_groups_do_not_suppress_the_claim() -> None:
+    event = {
+        "request": {
+            "userAttributes": {TENANT_CLAIM: "t1"},
+            "groupConfiguration": {"groupsToOverride": [" ", ""]},
+        },
+        "response": {},
+    }
+
+    result = apply_tenant_claim(event)
+
+    assert "groupOverrideDetails" not in result["response"]["claimsAndScopeOverrideDetails"]
