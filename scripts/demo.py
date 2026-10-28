@@ -3,10 +3,10 @@
 Operator tool. It is not a Lambda and it is not part of CI. Reset, the runtime
 seed, and the driver reply are function calls, not shell commands.
 
-    python -m scripts.demo preflight --tenant t1
-    python -m scripts.demo run --profile Fission-OERF --tenant t1
+    python -m scripts.demo preflight --profile <profile> --account <account-id> --tenant t1
+    python -m scripts.demo run --profile <profile> --account <account-id> --tenant t1
 
-``--profile`` defaults to ``Fission-OERF``. The region is ``us-east-1``.
+``--profile`` and ``--account`` are required. The region is ``us-east-1``.
 ``--shipment`` and ``--device`` default to that tenant's seeded shipment.
 Every command refuses a caller that is not the demo account before it reads
 or writes anything else. Phone numbers, task tokens, ARNs, and raw payloads
@@ -39,8 +39,6 @@ from scripts.reset import REGION, STACK as DATA_STACK, clients_from_session, res
 from scripts.seed_runtime import seed_runtime, tenants_for
 from sim.seed.load import load_seed
 
-DEMO_ACCOUNT = "906048429638"
-DEFAULT_PROFILE = "Fission-OERF"
 EVENT_BUS = "oerf-events"
 EVENT_GAP = timedelta(seconds=30)
 SENSOR_TIMEOUT = 30.0
@@ -98,6 +96,7 @@ def main(
 
     args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
     try:
+        account = parse_account(args.account)
         tenant_id = tenants_for(args.tenant)[0]
         shipment_id, device_id = resolve_subject(tenant_id, args.shipment, args.device)
         session = (session_factory or _session)(args.profile)
@@ -105,8 +104,8 @@ def main(
         pause_for = sleep or time.sleep
         sender = send_reply or send_driver_reply
         if args.command == "preflight":
-            return preflight(session, tenant_id, live=args.live)
-        require_demo_account(session)
+            return preflight(session, tenant_id, account=account, live=args.live)
+        require_demo_account(session, account)
         if args.command == "reply" and args.live:
             raise DemoError("reply is for mocked runs")
         if args.command == "prep":
@@ -204,6 +203,14 @@ def parse_temps(raw: str) -> tuple[float, ...]:
     return tuple(values)
 
 
+def parse_account(value: str) -> str:
+    """A 12-digit account id. The value is never printed."""
+
+    if len(value) != 12 or not value.isdigit():
+        raise DemoError("--account must be a 12-digit account id")
+    return value
+
+
 def parse_pause(value: float) -> float:
     """Seconds of wall time between published readings."""
 
@@ -216,11 +223,11 @@ def parse_pause(value: float) -> float:
     return number
 
 
-def preflight(session: Any, tenant_id: str, *, live: bool) -> int:
+def preflight(session: Any, tenant_id: str, *, account: str, live: bool) -> int:
     """Print one PASS or FAIL line per check. A wrong account stops immediately."""
 
-    account = _caller_account(session)
-    if account != DEMO_ACCOUNT:
+    caller = _caller_account(session)
+    if caller != account:
         say("FAIL account")
         return 1
     say("PASS account")
@@ -546,10 +553,10 @@ def rehearse(
     show_status(clients, tenant_id)
 
 
-def require_demo_account(session: Any) -> None:
-    """Stop before any other call when the caller is not the demo account."""
+def require_demo_account(session: Any, account: str) -> None:
+    """Stop before any other call when the caller is not the given account."""
 
-    if _caller_account(session) != DEMO_ACCOUNT:
+    if _caller_account(session) != account:
         raise DemoError("refusing account; this demo only runs in the demo account")
 
 
@@ -1030,7 +1037,8 @@ def _now() -> datetime:
 
 def _parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--profile", default=DEFAULT_PROFILE)
+    common.add_argument("--profile", required=True)
+    common.add_argument("--account", required=True, help="12-digit account id the caller must match.")
     common.add_argument("--tenant", required=True)
     common.add_argument("--shipment", default=None)
     common.add_argument("--device", default=None)

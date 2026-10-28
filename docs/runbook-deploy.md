@@ -80,21 +80,21 @@ make reset-demo TENANT=t1 PROFILE=Fission-OERF
 
 ## Run the PH-2841 demo
 
-`python -m scripts.demo` is the operator rehearsal. It is not a Lambda and it is not part of CI. It calls `scripts.reset`, `scripts.seed_runtime`, and `scripts.demo_reply` in process. `--profile` defaults to `Fission-OERF`. Region is `us-east-1`. `--tenant` is `t1`, `t2`, or `sbx`. The shipment and device default to that tenant's seed (`t1` is `PH-2841` and `RF-7781`). A failure prints one error and exits non-zero. The commands do not print phone numbers, task tokens, ARNs, or raw payloads.
+`python -m scripts.demo` is the operator rehearsal. It is not a Lambda and it is not part of CI. It calls `scripts.reset`, `scripts.seed_runtime`, and `scripts.demo_reply` in process. `--profile` and `--account` are required. Region is `us-east-1`. `--tenant` is `t1`, `t2`, or `sbx`. The shipment and device default to that tenant's seed (`t1` is `PH-2841` and `RF-7781`). A failure prints one error and exits non-zero. The commands do not print phone numbers, task tokens, ARNs, account ids, or raw payloads.
 
 ```text
-make demo-preflight TENANT=t1 PROFILE=Fission-OERF
-make demo-prep TENANT=t1 PROFILE=Fission-OERF
-make demo-sensor TENANT=t1 PROFILE=Fission-OERF
-make demo-reply TENANT=t1 PROFILE=Fission-OERF BUTTON=running
-make demo-status TENANT=t1 PROFILE=Fission-OERF
-make demo-cleanup TENANT=t1 PROFILE=Fission-OERF
-make demo-run TENANT=t1 PROFILE=Fission-OERF
+make demo-preflight TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
+make demo-prep TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
+make demo-sensor TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
+make demo-reply TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> BUTTON=running
+make demo-status TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
+make demo-cleanup TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
+make demo-run TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
 ```
 
 `demo-run` is prep, the sensor, the mocked driver reply, then status. `BUTTON` defaults to `running`. `demo-reply` also accepts `stopped`.
 
-Preflight prints one `PASS` or `FAIL` line per check. The caller must be account `906048429638`. Any other account stops the command before it reads another service. `OerfDataStack`, `OerfComputeStack`, `OerfApiStack`, and `OerfObservabilityStack` must be in a `*_COMPLETE` status. `oerf-cold-chain` and `oerf-engage-party` must exist. A runtime-seed dry run must report no changes. `--live` also requires the driver parameter `/oerf/demo-numbers/{tenant}/driver`. The value is not printed.
+Preflight prints one `PASS` or `FAIL` line per check. The caller must be the account passed as `--account`. Any other account stops the command before it reads another service. `OerfDataStack`, `OerfComputeStack`, `OerfApiStack`, and `OerfObservabilityStack` must be in a `*_COMPLETE` status. `oerf-cold-chain` and `oerf-engage-party` must exist. A runtime-seed dry run must report no changes. `--live` also requires the driver parameter `/oerf/demo-numbers/{tenant}/driver`. The value is not printed.
 
 Prep applies the tenant reset with reseed, writes the runtime seed, and requires the next reset dry run to report zero. It prints one summary line.
 
@@ -106,7 +106,7 @@ The sensor is the on-camera command. It publishes two `sim.reefer` / `Temperatur
 
 Status prints the parent execution name and state, the child state, the last eight states on the parent path, and the latest incident state.
 
-Cleanup resets the tenant and requires the dry run to report zero. `make reset-test` and `make reset-demo` remain the lower-level reset. Function log groups have CDK-generated names, so they are not `/aws/lambda/<function-name>`. Find one with `aws logs describe-log-groups --profile Fission-OERF --region us-east-1` and grep the construct id, for example `IngestFunctionLogGroup`.
+Cleanup resets the tenant and requires the dry run to report zero. `make reset-test` and `make reset-demo` remain the lower-level reset. Function log groups have CDK-generated names, so they are not `/aws/lambda/<function-name>`. Find one with `aws logs describe-log-groups --profile <aws-profile> --region us-east-1` and grep the construct id, for example `IngestFunctionLogGroup`.
 
 ## First deploy from main
 
