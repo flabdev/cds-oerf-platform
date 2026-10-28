@@ -16,6 +16,7 @@ import {
   terminalNote,
   textField,
 } from "./model.js";
+import { publishAllowance as publishTenantAllowance } from "./session.js";
 
 const SAMPLE = [
   {
@@ -305,18 +306,26 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
     window.location.assign(url);
   }
 
-  function publishAllowance() {
+  async function publishAllowance() {
     const draft = allowanceDraft(
       { product_profiles: [{ id: "PP-2-8-45", excursion_allowance_min: 45 }] },
       allowance,
     );
     const minutes = draft.product_profiles[0].excursion_allowance_min;
-    say(`Allowance published at ${minutes} min. ${rankingNote(minutes)}`);
-    onSubmit?.({
-      method: "PUT",
-      path: `/admin/tenants/${selectedTenant}/domains/cold_chain_excursion/config`,
-      body: draft,
-    });
+    if (!onSubmit) {
+      say(`Sample allowance set to ${minutes} min. ${rankingNote(minutes)}`);
+      return;
+    }
+
+    setBusy("allowance");
+    try {
+      await publishTenantAllowance(onSubmit, selectedTenant, draft);
+      say(`Allowance published at ${minutes} min. ${rankingNote(minutes)}`);
+    } catch (error) {
+      say(error instanceof Error ? error.message : "Allowance could not be published", "warn");
+    } finally {
+      setBusy("");
+    }
   }
 
   const actionButtons = (
@@ -566,7 +575,9 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
                     </label>
                   </div>
                   <p className="preview">{rankingNote(allowance)}</p>
-                  <button type="button" className="btn primary" onClick={publishAllowance}>Publish allowance</button>
+                  <button type="button" className="btn primary" disabled={Boolean(busy)} onClick={publishAllowance}>
+                    {busy === "allowance" ? "Publishing…" : "Publish allowance"}
+                  </button>
                 </>
               ) : (
                 <p>Only a tenant admin on t2 can change the allowance.</p>

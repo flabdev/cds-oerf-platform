@@ -174,7 +174,7 @@ export function LiveDesk({ config }) {
   }
 
   async function submit(request) {
-    await sendDashboard(config.apiUrl, idToken, request);
+    return sendDashboard(config.apiUrl, idToken, request);
   }
 
   async function select(incidentId) {
