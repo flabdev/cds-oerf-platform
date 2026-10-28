@@ -193,9 +193,15 @@ export function LiveDesk({ config }) {
     return (
       <main className="gate">
         <section className="gate-card">
-          <p className="kicker">OERF</p>
-          <h1>Sign in</h1>
-          <p>The desk loads incidents for the tenant on your Cognito session.</p>
+          <div className="brand">
+            <span className="brand-mark" aria-hidden="true">O</span>
+            <span className="brand-name">
+              OERF
+              <small>Excursion desk</small>
+            </span>
+          </div>
+          <h1>Sign in to the excursion desk</h1>
+          <p>You will see the open temperature incidents for your tenant.</p>
           {incidents?.error ? <p className="note" role="alert">{incidents.error}</p> : null}
           <button type="button" className="send" onClick={signIn}>Sign in</button>
         </section>

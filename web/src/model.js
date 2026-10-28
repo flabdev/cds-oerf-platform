@@ -283,6 +283,46 @@ export function actionRequest(incidentId, action, optionId, actionId, engagement
   };
 }
 
+export function readableLabel(value) {
+  const text = textField(value, "");
+  if (!text) {
+    return "";
+  }
+  const words = text.replace(/[_-]+/g, " ").trim().toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1).replace(/\b([a-z])\b/g, (letter) => letter.toUpperCase());
+}
+
+function allowanceTotal(item) {
+  if (typeof item?.allowance_minutes === "number" && Number.isFinite(item.allowance_minutes)) {
+    return item.allowance_minutes;
+  }
+  const profiles = item?.config_snapshot?.product_profiles;
+  if (!Array.isArray(profiles) || !item?.product_profile_id) {
+    return null;
+  }
+  const profile = profiles.find((entry) => entry?.id === item.product_profile_id);
+  const total = profile?.excursion_allowance_min;
+  return typeof total === "number" && Number.isFinite(total) && total > 0 ? total : null;
+}
+
+export function allowanceMeter(item) {
+  const remaining = typeof item?.allowance_remaining === "number" && Number.isFinite(item.allowance_remaining)
+    ? item.allowance_remaining
+    : null;
+  const total = allowanceTotal(item);
+  if (remaining == null) {
+    return { remaining: null, total, share: null, level: "unknown" };
+  }
+  const share = total ? Math.min(Math.max(remaining / total, 0), 1) : null;
+  let level = "steady";
+  if (remaining <= 0) {
+    level = "spent";
+  } else if (share != null && share <= 1 / 3) {
+    level = "low";
+  }
+  return { remaining, total, share, level };
+}
+
 export function allowanceDraft(published, allowance) {
   const next = structuredClone(published);
   next.product_profiles[0].excursion_allowance_min = Number(allowance);

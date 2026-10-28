@@ -5,12 +5,14 @@ import {
   actionNotice,
   actionRequest,
   allowanceDraft,
+  allowanceMeter,
   displayName,
   incidentListView,
   incidentView,
   needsWaitingEngagement,
   oneDecimal,
   rankingNote,
+  readableLabel,
   sessionView,
   temperatureChart,
   terminalNote,
@@ -156,4 +158,32 @@ test("the T2 editor publishes allowance 30", () => {
   assert.equal(draft.product_profiles[0].excursion_allowance_min, 30);
   assert.match(rankingNote(45), /inside/);
   assert.match(rankingNote(30), /outside/);
+});
+
+test("state and option ids read as plain words", () => {
+  assert.equal(readableLabel("ASSESSING"), "Assessing");
+  assert.equal(readableLabel("FACILITY_A"), "Facility A");
+  assert.equal(readableLabel(""), "");
+  assert.equal(readableLabel(null), "");
+});
+
+test("the allowance meter takes the total from the incident's own profile", () => {
+  const meter = allowanceMeter({
+    allowance_remaining: 15,
+    product_profile_id: "PP-2",
+    config_snapshot: {
+      product_profiles: [
+        { id: "PP-1", excursion_allowance_min: 90 },
+        { id: "PP-2", excursion_allowance_min: 45 },
+      ],
+    },
+  });
+  assert.equal(meter.total, 45);
+  assert.equal(meter.share, 15 / 45);
+  assert.equal(meter.level, "low");
+  assert.equal(allowanceMeter({ allowance_remaining: 40 }).share, null);
+  assert.equal(allowanceMeter({ allowance_remaining: 40 }).level, "steady");
+  assert.equal(allowanceMeter({ allowance_remaining: -2, allowance_minutes: 45 }).share, 0);
+  assert.equal(allowanceMeter({ allowance_remaining: -2, allowance_minutes: 45 }).level, "spent");
+  assert.equal(allowanceMeter({}).level, "unknown");
 });
