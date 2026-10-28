@@ -14,12 +14,56 @@ import {
   logoutUrl,
   presentIncident,
   principalFromIdToken,
+  publishAllowance,
   sendDashboard,
   shouldOpenSocket,
   signOutTarget,
   socketAuthFailed,
   stripAuthCode,
 } from "./session.js";
+
+test("allowance publication saves, validates, then publishes", async () => {
+  const calls = [];
+  const draft = { product_profiles: [{ id: "PP-1", excursion_allowance_min: 30 }] };
+  const result = await publishAllowance(async (request) => {
+    calls.push(request);
+    return request.path.endsWith("/validate") ? { issues: [] } : { published: true };
+  }, "tenant/1", draft);
+
+  assert.deepEqual(calls, [
+    {
+      method: "PUT",
+      path: "/admin/tenants/tenant%2F1/domains/cold_chain_excursion/config",
+      body: draft,
+    },
+    {
+      method: "POST",
+      path: "/admin/tenants/tenant%2F1/domains/cold_chain_excursion/config/validate",
+      body: {},
+    },
+    {
+      method: "POST",
+      path: "/admin/tenants/tenant%2F1/domains/cold_chain_excursion/config/publish",
+      body: {},
+    },
+  ]);
+  assert.deepEqual(result, { published: true });
+});
+
+test("allowance publication stops when draft validation reports issues", async () => {
+  const paths = [];
+  await assert.rejects(
+    () => publishAllowance(async (request) => {
+      paths.push(request.path);
+      return request.path.endsWith("/validate")
+        ? { issues: [{ path: "product_profiles.0", message: "invalid profile" }] }
+        : {};
+    }, "t2", {}),
+    /Configuration is invalid: product_profiles\.0: invalid profile/,
+  );
+  assert.equal(paths.length, 2);
+  assert.equal(paths[1].endsWith("/validate"), true);
+});
 
 test("missing Cognito settings keep the sample desk", () => {
   assert.equal(liveConfig({}).mode, "demo");
