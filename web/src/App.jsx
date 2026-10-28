@@ -18,6 +18,7 @@ import {
   textField,
 } from "./model.js";
 import { stageProgress } from "./states.js";
+import { publishAllowance as publishTenantAllowance } from "./session.js";
 import { formatMinutes } from "./utils/format.js";
 
 function minutesAgo(minutes) {
@@ -185,6 +186,7 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
   const [notice, setNotice] = useState(null);
   const [actionError, setActionError] = useState("");
   const [pendingAction, setPendingAction] = useState("");
+  const [busy, setBusy] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -376,18 +378,26 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
     window.location.replace(url);
   }
 
-  function publishAllowance() {
+  async function publishAllowance() {
     const draft = allowanceDraft(
       { product_profiles: [{ id: "PP-2-8-45", excursion_allowance_min: 45 }] },
       allowance,
     );
     const minutes = draft.product_profiles[0].excursion_allowance_min;
-    say(`Allowance published at ${minutes} min. ${rankingNote(minutes)}`);
-    onSubmit?.({
-      method: "PUT",
-      path: `/admin/tenants/${selectedTenant}/domains/cold_chain_excursion/config`,
-      body: draft,
-    });
+    if (!onSubmit) {
+      say(`Sample allowance set to ${minutes} min. ${rankingNote(minutes)}`);
+      return;
+    }
+    setBusy("allowance");
+    try {
+      // A PUT only saves a draft. Validation and publish follow before the note claims success.
+      await publishTenantAllowance(onSubmit, selectedTenant, draft);
+      say(`Allowance published at ${minutes} min. ${rankingNote(minutes)}`);
+    } catch (error) {
+      say(error instanceof Error ? error.message : "Allowance could not be published", "warn");
+    } finally {
+      setBusy("");
+    }
   }
 
   const shipment = textField(view?.shipmentId, textField(current?.incident_id, "this incident"));
@@ -668,7 +678,14 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
                     </label>
                   </div>
                   <p className="preview">{rankingNote(allowance)}</p>
-                  <button type="button" className="btn primary" onClick={publishAllowance}>Publish allowance</button>
+                  <button
+                    type="button"
+                    className="btn primary"
+                    disabled={Boolean(busy)}
+                    onClick={publishAllowance}
+                  >
+                    {busy === "allowance" ? "Publishing…" : "Publish allowance"}
+                  </button>
                 </section>
               ) : (
                 <p className="quiet">No allowance draft is open for {selectedTenant}.</p>
