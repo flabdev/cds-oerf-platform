@@ -109,5 +109,19 @@ test("options keep the rules order and name continue without inventing a facilit
   }, now).kpis.evidence.value, "1 photo");
   assert.match(desk.kpis.allowance.value, /33 \/ 45 min left/);
   assert.equal(desk.kpis.allowance.estimated, false);
+  assert.equal(desk.kpis.allowance.remaining, 33);
+  assert.equal(desk.kpis.allowance.total, 45);
+  assert.equal(desk.kpis.allowance.level, "steady");
   assert.equal(desk.feed.some((entry) => entry.text.startsWith("Rules recommended FAC-A")), true);
+});
+
+test("the allowance level warms at a third left and when it is used up", () => {
+  const profile = {
+    product_profile_id: "PP-2-8-45",
+    config_snapshot: { product_profiles: [{ id: "PP-2-8-45", excursion_allowance_min: 45, range_c: [2, 8] }] },
+  };
+  assert.equal(buildDesk({ ...profile, allowance_remaining: 15 }, now).kpis.allowance.level, "low");
+  assert.equal(buildDesk({ ...profile, allowance_remaining: 0 }, now).kpis.allowance.level, "spent");
+  assert.equal(buildDesk({ ...profile, allowance_remaining: 0 }, now).kpis.allowance.ratio, 0);
+  assert.equal(buildDesk({}, now).kpis.allowance.level, "unknown");
 });
