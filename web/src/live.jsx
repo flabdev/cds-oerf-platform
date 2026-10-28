@@ -11,11 +11,13 @@ import {
 import {
   authorizeUrl,
   createVerifier,
-  exchangeCode,
+  exchangeOnce,
   loadIncident,
   loadIncidents,
+  logoutUrl,
   principalFromIdToken,
   sendDashboard,
+  stripAuthCode,
 } from "./session.js";
 
 const TOKEN_KEY = "oerf.idToken";
@@ -23,8 +25,8 @@ const ACCESS_KEY = "oerf.accessToken";
 const VERIFIER_KEY = "oerf.codeVerifier";
 
 export function LiveDesk({ config }) {
+  const [idToken, setIdToken] = useState(() => tokenFromStorage());
   const [accessToken, setAccessToken] = useState(() => sessionStorage.getItem(ACCESS_KEY) || "");
-  const [idToken, setIdToken] = useState(() => sessionStorage.getItem(TOKEN_KEY) || "");
   const [principal, setPrincipal] = useState(() => principalFromIdToken(tokenFromStorage()));
   const [incidents, setIncidents] = useState(null);
   const [watchId, setWatchId] = useState("");
@@ -39,20 +41,22 @@ export function LiveDesk({ config }) {
       return undefined;
     }
     let cancel = false;
-    exchangeCode({ ...config, redirectUri, code, verifier })
+    exchangeOnce({ ...config, redirectUri, code, verifier })
       .then((session) => {
-        if (cancel) {
-          return;
-        }
         sessionStorage.setItem(TOKEN_KEY, session.idToken);
         sessionStorage.setItem(ACCESS_KEY, session.accessToken);
         sessionStorage.removeItem(VERIFIER_KEY);
-        window.history.replaceState({}, "", window.location.pathname);
+        stripAuthCode(window.location, window.history.replaceState.bind(window.history));
+        if (cancel) {
+          return;
+        }
         setIdToken(session.idToken);
         setAccessToken(session.accessToken);
         setPrincipal(principalFromIdToken(session.idToken));
       })
       .catch((error) => {
+        sessionStorage.removeItem(VERIFIER_KEY);
+        stripAuthCode(window.location, window.history.replaceState.bind(window.history));
         if (!cancel) {
           setIncidents({ error: error.message });
         }
@@ -158,6 +162,17 @@ export function LiveDesk({ config }) {
     window.location.assign(authorizeUrl({ ...config, redirectUri, challenge }));
   }
 
+  function signOut() {
+    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(ACCESS_KEY);
+    sessionStorage.removeItem(VERIFIER_KEY);
+    window.location.assign(logoutUrl({
+      domain: config.domain,
+      clientId: config.clientId,
+      logoutUri: redirectUri,
+    }));
+  }
+
   async function submit(request) {
     await sendDashboard(config.apiUrl, idToken, request);
   }
@@ -194,6 +209,7 @@ export function LiveDesk({ config }) {
       incidents={incidents}
       onSubmit={submit}
       onSelect={select}
+      onSignOut={signOut}
     />
   );
 }
