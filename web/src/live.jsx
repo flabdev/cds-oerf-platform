@@ -341,7 +341,7 @@ export function LiveDesk({ config }) {
       <main className="gate">
         <section className="gate-card">
           <div className="brand">
-            <span className="brand-mark" aria-hidden="true">O</span>
+            <img className="brand-mark" src="/logo.png" alt="" />
             <span className="brand-name">
               OERF
               <small>Excursion desk</small>
