@@ -4,7 +4,7 @@ import { ActivityFeed } from "./components/ActivityFeed.jsx";
 import { StageStepper } from "./components/StageStepper.jsx";
 import { StatePill } from "./components/StatePill.jsx";
 import { TemperatureChart } from "./components/TemperatureChart.jsx";
-import { buildDesk } from "./deskView.js";
+import { buildDesk, heroNote } from "./deskView.js";
 import {
   actionNotice,
   actionRequest,
@@ -129,13 +129,6 @@ const PENDING = {
   cancel: "Cancel requested. Waiting for the workflow.",
   confirm_transfer: "Transfer confirmation requested. Waiting for the workflow.",
   pick_option: "Option requested. Waiting for the workflow.",
-};
-
-const HERO_NOTES = {
-  steady: "Inside the allowance. Choose where the shipment goes before it runs out.",
-  low: "Allowance is running low. Act on this shipment first.",
-  spent: "Allowance is used up. The product is outside its excursion limit.",
-  unknown: "Allowance time appears once readings arrive for this shipment.",
 };
 
 const ICONS = {
@@ -744,7 +737,7 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
                   >
                     <Meter allowance={kpiAllowance} size="big" />
                   </div>
-                  <p className="hero-note">{view.terminalLabel || HERO_NOTES[kpiAllowance.level]}</p>
+                  <p className="hero-note">{heroNote(view)}</p>
                 </section>
 
                 <dl className="kpis">
