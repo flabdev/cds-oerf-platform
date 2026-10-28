@@ -1,6 +1,6 @@
 # CDS OERF Platform
 
-![OERF](docs/images/oerf-logo.png)
+<img src="docs/images/oerf-logo.png" alt="OERF" width="128">
 
 OERF is a serverless, multi-tenant platform for an operational exception. The first playbook is a cold-chain temperature excursion: a sensor reading opens one incident, rules rank the response, the driver replies on WhatsApp, and an operator follows it on a desk. A model may advise. Rules decide. A person approves.
 
