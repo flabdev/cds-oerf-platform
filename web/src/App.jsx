@@ -400,7 +400,7 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
     <div className={sidebarOpen ? "desk" : "desk rail-closed"}>
       <aside className="rail" id="sidebar">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true">O</span>
+          <img className="brand-mark" src="/logo.png" alt={sidebarOpen ? "" : "OERF"} />
           {sidebarOpen ? (
             <span className="brand-name">
               OERF

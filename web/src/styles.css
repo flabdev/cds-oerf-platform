@@ -127,15 +127,10 @@ p {
 .brand-mark {
   width: 2.25rem;
   height: 2.25rem;
-  display: grid;
-  place-items: center;
   flex: none;
-  border-radius: 9px;
-  color: var(--paper);
-  background: var(--ink);
-  font-size: 1.25rem;
-  font-stretch: 70%;
-  font-weight: 800;
+  display: block;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 .brand-name {
