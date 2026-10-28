@@ -387,6 +387,115 @@
       ],
       "Next": "CancelAfterAct?"
     },
+    "DecisionKind?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.workflow.action.kind", "IsPresent": true},
+            {"Variable": "$.workflow.action.kind", "StringEquals": "continue"}
+          ],
+          "Next": "NotifyContinue"
+        },
+        {
+          "And": [
+            {"Variable": "$.workflow.action.kind", "IsPresent": true},
+            {"Variable": "$.workflow.action.kind", "StringEquals": "facility"}
+          ],
+          "Next": "NotifyDivert"
+        }
+      ],
+      "Default": "VerifyLoop"
+    },
+    "NotifyContinue": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CHANNEL_ROUTER_ARN__",
+        "Payload": {
+          "step_name": "EngagementSendOneWay",
+          "tenant_id.$": "$.tenant_id",
+          "incident_id.$": "$.incident_id",
+          "role": "driver",
+          "message": "status_update",
+          "channel": "whatsapp",
+          "facts": {
+            "shipment_id.$": "$.shipment_id",
+            "shipment.$": "$.workflow.context.shipment",
+            "action.$": "$.workflow.action"
+          },
+          "dedupe_key.$": "States.Format('{}:decision', $.incident_id)"
+        }
+      },
+      "ResultPath": "$.driver_notice",
+      "TimeoutSeconds": 30,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.driver_notice_error",
+          "Next": "CancelAfterNotifyContinue?"
+        }
+      ],
+      "Next": "CancelAfterNotifyContinue?"
+    },
+    "NotifyDivert": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CHANNEL_ROUTER_ARN__",
+        "Payload": {
+          "step_name": "EngagementSendOneWay",
+          "tenant_id.$": "$.tenant_id",
+          "incident_id.$": "$.incident_id",
+          "role": "driver",
+          "message": "driver_reroute",
+          "channel": "whatsapp",
+          "facts": {
+            "shipment_id.$": "$.shipment_id",
+            "shipment.$": "$.workflow.context.shipment",
+            "action.$": "$.workflow.action",
+            "facilities.$": "$.workflow.context.facilities"
+          },
+          "dedupe_key.$": "States.Format('{}:decision', $.incident_id)"
+        }
+      },
+      "ResultPath": "$.driver_notice",
+      "TimeoutSeconds": 30,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.driver_notice_error",
+          "Next": "CancelAfterNotifyDivert?"
+        }
+      ],
+      "Next": "CancelAfterNotifyDivert?"
+    },
     "VerifyLoop": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
@@ -974,7 +1083,7 @@
           "Next": "Cancel"
         }
       ],
-      "Default": "Assess"
+      "Default": "EngageDriverDiagnosis"
     },
     "CancelAfterAssess?": {
       "Type": "Choice",
@@ -993,7 +1102,7 @@
           "Next": "Cancel"
         }
       ],
-      "Default": "EngageDriverDiagnosis"
+      "Default": "NeedApproval?"
     },
     "CancelAfterApproval?": {
       "Type": "Choice",
@@ -1034,6 +1143,44 @@
       "Default": "FacilityAccepted?"
     },
     "CancelAfterAct?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "DecisionKind?"
+    },
+    "CancelAfterNotifyContinue?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "VerifyLoop"
+    },
+    "CancelAfterNotifyDivert?": {
       "Type": "Choice",
       "Choices": [
         {
@@ -1183,7 +1330,7 @@
           "Next": "Cancel"
         }
       ],
-      "Default": "NeedApproval?"
+      "Default": "Assess"
     }
   }
 }

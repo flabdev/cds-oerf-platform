@@ -233,6 +233,24 @@ def test_dry_run_writes_nothing_and_a_second_apply_is_zero() -> None:
 
 
 @pytest.mark.security
+def test_reset_deletes_one_tenants_outbox_rows() -> None:
+    dynamo, _steps, _objects, clients = _world()
+    _put(dynamo, ROUTING, "TENANT#t1#OUTBOX#INC-000001:driver_ack", "META", tenant_id="t1")
+    _put(dynamo, ROUTING, "TENANT#t2#OUTBOX#INC-000001:decision", "META", tenant_id="t2")
+
+    counted = reset_tenant(clients, "t1", apply=False, reseed=False)
+
+    assert counted["routing_rows"] >= 1
+    assert _exists(dynamo, ROUTING, "TENANT#t1#OUTBOX#INC-000001:driver_ack", "META")
+    assert _exists(dynamo, ROUTING, "TENANT#t2#OUTBOX#INC-000001:decision", "META")
+
+    reset_tenant(clients, "t1", apply=True, reseed=False)
+
+    assert not _exists(dynamo, ROUTING, "TENANT#t1#OUTBOX#INC-000001:driver_ack", "META")
+    assert _exists(dynamo, ROUTING, "TENANT#t2#OUTBOX#INC-000001:decision", "META")
+
+
+@pytest.mark.security
 def test_reseed_restores_only_the_target_allowance() -> None:
     dynamo, _steps, _objects, clients = _world()
     reset_tenant(clients, "t1", apply=True, reseed=False)

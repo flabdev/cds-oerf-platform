@@ -359,6 +359,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         from oerf.platform.channels.engagement_send import send_engagement
 
         return send_engagement(event)
+    if event.get("step_name") == "EngagementSendOneWay":
+        from oerf.platform.channels.one_way import send_one_way
+
+        return send_one_way(event)
     tenant_id = _required_text(event.get("tenant_id"))
     incident_id = event.get("incident_id", "unknown")
     if tenant_id is None:
@@ -455,6 +459,7 @@ class OutboundRequest(BaseModel):
     channels: tuple[str, ...] = DEFAULT_CHANNELS
     rcs_roles: tuple[str, ...] = ()
     inbound_rcs: bool = False
+    session_text: bool = False
 
 
 class DeliveryAttempt(BaseModel):
@@ -491,6 +496,7 @@ def route_outbound(
     providers: dict[str, MessageProvider],
     messages: dict[str, Any],
     sandbox: SandboxGate | None = None,
+    correlate: bool = True,
 ) -> DeliveryResult:
     """Validate opt-in, render a template, fall back across channels, then correlate."""
 
@@ -532,10 +538,11 @@ def route_outbound(
             continue
         parameters = (
             tuple(parameter_values(messages, request.template_id, channel, request.facts))
-            if channel == "whatsapp"
+            if channel == "whatsapp" and not request.session_text
             else ()
         )
-        sent = provider.send(recipient, body, request.template_id, parameters=parameters)
+        sent_template = "" if request.session_text else request.template_id
+        sent = provider.send(recipient, body, sent_template, parameters=parameters)
         attempts.append(
             _attempt(
                 request,
@@ -547,7 +554,7 @@ def route_outbound(
         )
         message_ids = _provider_ids(sent)
         if sent.simulated:
-            if message_ids:
+            if correlate and message_ids:
                 engagement = engagements.get(
                     request.tenant_id, request.incident_id, request.engagement_id
                 )
@@ -567,14 +574,15 @@ def route_outbound(
             )
         if not sent.delivered or not message_ids:
             continue
-        engagement = engagements.get(
-            request.tenant_id, request.incident_id, request.engagement_id
-        )
-        if engagement is None:
-            raise ValueError(f"engagement {request.engagement_id!r} is not open")
-        for message_id in message_ids:
-            engagements.register_outbound(message_id, engagement)
-        engagements.register_address(channel, recipient, engagement)
+        if correlate:
+            engagement = engagements.get(
+                request.tenant_id, request.incident_id, request.engagement_id
+            )
+            if engagement is None:
+                raise ValueError(f"engagement {request.engagement_id!r} is not open")
+            for message_id in message_ids:
+                engagements.register_outbound(message_id, engagement)
+            engagements.register_address(channel, recipient, engagement)
         return _result(
             request,
             attempts,

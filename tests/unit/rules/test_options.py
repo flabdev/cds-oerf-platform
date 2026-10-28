@@ -63,6 +63,16 @@ def test_equal_spare_prefers_the_shorter_drive() -> None:
     assert result.recommended_option == "NEAR"
 
 
+def test_continue_can_be_marked_infeasible_without_changing_its_projection() -> None:
+    result = rank_options(_ph2841(), _ph2841_options(), continue_feasible=False)
+
+    by_id = {option.id: option for option in result.options}
+    assert by_id["DESTINATION"].feasible is False
+    assert by_id["DESTINATION"].rank is None
+    assert by_id["DESTINATION"].projected_minutes == pytest.approx(50.0, abs=0.1)
+    assert result.recommended_option == "FACILITY_A"
+
+
 def test_rules_module_has_no_facility_names() -> None:
     source = Path("oerf/platform/rules/options.py").read_text(encoding="utf-8")
 

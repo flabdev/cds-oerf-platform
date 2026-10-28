@@ -212,7 +212,7 @@ def test_cold_chain_role_invokes_only_the_wired_steps_and_the_stub(template: Tem
     """InvokeFunction stays on the fixed step names plus the stub. No Resource *."""
 
     expected = set()
-    for name in STEP_FUNCTION_NAMES.values():
+    for name in (*STEP_FUNCTION_NAMES.values(), CHANNEL_ROUTER_NAME):
         arn = function_arn(REGION, ACCOUNT, name)
         expected.add(arn)
         expected.add(f"{arn}:*")
@@ -223,7 +223,8 @@ def test_cold_chain_role_invokes_only_the_wired_steps_and_the_stub(template: Tem
     assert len(resources) == len(expected) + 2
     rendered = json.dumps(resources)
     assert "ColdChainWorkflowStub" in rendered
-    assert rendered.count(":*") == len(STEP_FUNCTION_NAMES) + 1
+    assert "oerf-channel-router" in rendered
+    assert rendered.count(":*") == len(STEP_FUNCTION_NAMES) + 2
 
     engagement = json.dumps(_invoke_resources(template, "EngagePartyStateMachineRole"))
     assert "oerf-step-" not in engagement

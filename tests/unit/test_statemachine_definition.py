@@ -61,13 +61,13 @@ STUB_COLD_CHAIN_TASKS = frozenset(
 )
 STUB_ENGAGEMENT_TASKS = frozenset(
     {
-        "SendOneWay",
         "HandleCallback",
         "ResetLadder",
         "SendFinalQuestion",
         "ApplyExhaustAction",
     }
 )
+NOTICE_TASKS = frozenset({"NotifyContinue", "NotifyDivert"})
 
 
 def load_definition() -> dict:
@@ -161,6 +161,15 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
             assert state["Resource"] == "arn:aws:states:::states:startExecution.sync:2"
             assert state["Parameters"]["StateMachineArn"] == "__ENGAGE_PARTY_ARN__"
             continue
+        if name in NOTICE_TASKS:
+            assert state["Resource"] == "arn:aws:states:::lambda:invoke"
+            assert state["Parameters"]["FunctionName"] == "__CHANNEL_ROUTER_ARN__"
+            assert state["Parameters"]["Payload"]["step_name"] == "EngagementSendOneWay"
+            assert state["ResultPath"] == "$.driver_notice"
+            assert "OutputPath" not in state
+            assert "task_token" not in json.dumps(state["Parameters"])
+            assert state["Catch"][0]["Next"].startswith("CancelAfterNotify")
+            continue
         expected_resource = (
             "arn:aws:states:::lambda:invoke.waitForTaskToken"
             if name == "Approval"
@@ -187,17 +196,22 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
             assert state["Catch"][-1]["Next"] == expected, name
 
 
-def test_nested_engagement_is_a_token_waiting_state_machine_and_is_wired_after_assess() -> None:
+def test_nested_engagement_is_a_token_waiting_state_machine_and_runs_before_assess() -> None:
     definition = json.loads(
         (ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8")
     )
     states = definition["States"]
     parent_states = load_definition()["States"]
     parent = parent_states["EngageDriverDiagnosis"]
+    assert parent_states["CancelAfterDiagnose?"]["Default"] == "EngageDriverDiagnosis"
     assert parent_states["Assess"]["Next"] == "CancelAfterAssess?"
-    assert parent_states["CancelAfterAssess?"]["Default"] == "EngageDriverDiagnosis"
+    assert parent_states["CancelAfterEngageDriverDiagnosis?"]["Default"] == "Assess"
     assert parent["Next"] == "CancelAfterEngageDriverDiagnosis?"
-    assert parent_states["CancelAfterEngageDriverDiagnosis?"]["Default"] == "NeedApproval?"
+    assert parent_states["CancelAfterAssess?"]["Default"] == "NeedApproval?"
+    entered = parent["Parameters"]["Input"]
+    assert entered["facts.$"] == "$.context"
+    assert "$.decision" not in json.dumps(entered)
+    assert "$.workflow.assessment" not in json.dumps(entered)
 
     assert definition["StartAt"] == "ComputeNextRung"
     assert parent["Resource"] == "arn:aws:states:::states:startExecution.sync:2"
@@ -225,6 +239,13 @@ def test_nested_engagement_is_a_token_waiting_state_machine_and_is_wired_after_a
     assert states["Answered"]["Parameters"]["status"] == "answered"
     assert states["Exhausted"]["Parameters"]["status"] == "exhausted"
     assert states["SendOneWay"]["Resource"] == "arn:aws:states:::lambda:invoke"
+    assert states["SendOneWay"]["Parameters"]["FunctionName"] == "__CHANNEL_ROUTER_ARN__"
+    assert states["SendOneWay"]["ResultPath"] == "$.one_way"
+    assert states["SendOneWay"]["Catch"][0]["Next"] == "AdvanceRung"
+    assert states["InterpretResult"]["Choices"][2]["Next"] == "AcknowledgeReply"
+    assert states["AcknowledgeReply"]["Next"] == "Answered"
+    assert states["AcknowledgeReply"]["Parameters"]["Payload"]["message"] == "driver_ack"
+    assert states["AcknowledgeReply"]["Catch"][0]["Next"] == "Answered"
     assert states["HandleCallback"]["Next"] == "CallbackPause"
 
 
@@ -328,6 +349,9 @@ def _definition_with_placeholder_arns(text: str, *, engagement: bool) -> str:
     for placeholder, phase in ASL_STEP_PLACEHOLDERS.items():
         text = text.replace(placeholder, _placeholder_lambda_arn(STEP_FUNCTION_NAMES[phase]))
     text = text.replace("__STUB_ARN__", _placeholder_lambda_arn("oerf-workflow-stub"))
+    text = text.replace(
+        "__CHANNEL_ROUTER_ARN__", _placeholder_lambda_arn(CHANNEL_ROUTER_NAME)
+    )
     text = text.replace(
         "__ENGAGE_PARTY_ARN__",
         (
@@ -571,6 +595,8 @@ def test_cancellation_is_checked_after_work_steps_and_infeasible_assessment_esca
         "Approval",
         "SecureFacility",
         "Act",
+        "NotifyContinue",
+        "NotifyDivert",
         "VerifyLoop",
         "HandleReopen",
         "RecordContainment",
@@ -585,7 +611,9 @@ def test_cancellation_is_checked_after_work_steps_and_infeasible_assessment_esca
         assert states[gate]["Choices"] == [
             _when_present("$.cancel_requested", "BooleanEquals", True, "Cancel")
         ]
-    assert states["CancelAfterAssess?"]["Default"] == "EngageDriverDiagnosis"
+    assert states["CancelAfterDiagnose?"]["Default"] == "EngageDriverDiagnosis"
+    assert states["CancelAfterEngageDriverDiagnosis?"]["Default"] == "Assess"
+    assert states["CancelAfterAssess?"]["Default"] == "NeedApproval?"
     assert states["NeedApproval?"]["Choices"][0] == _when_present(
         "$.decision.has_feasible_options", "BooleanEquals", False, "Escalate"
     )
@@ -735,6 +763,20 @@ def _path_present(data: dict, path: str) -> bool:
     return True
 
 
+def _assign(data: dict, path: str, value: object) -> None:
+    """Store a task result at a ``ResultPath`` without replacing the state."""
+
+    parts = [part for part in path.lstrip("$").split(".") if part]
+    node = data
+    for part in parts[:-1]:
+        child = node.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            node[part] = child
+        node = child
+    node[parts[-1]] = value
+
+
 def _path_value(data: dict, path: str) -> object:
     node: object = data
     for part in path.lstrip("$.").split("."):
@@ -798,7 +840,7 @@ def _when_present(variable: str, comparison: str, expected: object, nxt: str) ->
     }
 
 
-def simulate(event: dict, handler_fn=handler, max_steps: int = 40) -> tuple:
+def simulate(event: dict, handler_fn=handler, max_steps: int = 48) -> tuple:
     definition = load_definition()
     states = definition["States"]
     current = definition["StartAt"]
@@ -824,7 +866,7 @@ def simulate(event: dict, handler_fn=handler, max_steps: int = 40) -> tuple:
             }
             previous_incident_state = data.get("incident_state")
             try:
-                data = handler_fn(payload, None)
+                result = handler_fn(payload, None)
             except Exception as error:
                 error_name = "States.Timeout" if isinstance(error, TimeoutError) else "States.ALL"
                 catcher = next(
@@ -841,6 +883,10 @@ def simulate(event: dict, handler_fn=handler, max_steps: int = 40) -> tuple:
                 data["simulated_error"] = error_name
                 current = catcher["Next"]
                 continue
+            if state.get("ResultPath"):
+                _assign(data, state["ResultPath"], result)
+            else:
+                data = result
             next_incident_state = data.get("incident_state")
             if (
                 previous_incident_state is not None
@@ -956,6 +1002,10 @@ def test_ph2841_engagement_happy_path_reaches_answered() -> None:
             data = cadence_handler(payload, None)
         elif step_name == "EngagementInterpret":
             data = interpret_handler(payload, None)
+        elif step_name == "EngagementSendOneWay":
+            _assign(data, state.get("ResultPath") or "$.one_way", {"status": "simulated"})
+            current = state["Next"]
+            continue
         else:
             raise AssertionError(step_name)
         current = state["Next"]
@@ -970,6 +1020,7 @@ def test_ph2841_engagement_happy_path_reaches_answered() -> None:
         "SendViaRouter",
         "Interpret",
         "InterpretResult",
+        "AcknowledgeReply",
         "Answered",
     ]
     assert data["response"]["intent"] == "unit_running"
