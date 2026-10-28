@@ -327,11 +327,19 @@ function aboveKpi(minutes, band) {
 
 function allowanceKpi(remaining, total, estimated) {
   if (remaining == null) {
-    return { value: "—", detail: "", ratio: null, estimated: false };
+    return { value: "—", detail: "", ratio: null, estimated: false, remaining: null, total, level: "unknown" };
   }
   const left = `${formatMinutes(remaining)} min left`;
   if (total == null || total <= 0) {
-    return { value: left, detail: estimated ? "est." : "", ratio: null, estimated };
+    return {
+      value: left,
+      detail: estimated ? "est." : "",
+      ratio: null,
+      estimated,
+      remaining,
+      total: null,
+      level: remaining <= 0 ? "spent" : "steady",
+    };
   }
   const ratio = Math.max(0, Math.min(1, remaining / total));
   return {
@@ -339,7 +347,17 @@ function allowanceKpi(remaining, total, estimated) {
     detail: estimated ? "est." : "",
     ratio,
     estimated,
+    remaining,
+    total,
+    level: allowanceLevel(remaining, ratio),
   };
+}
+
+function allowanceLevel(remaining, ratio) {
+  if (remaining <= 0) {
+    return "spent";
+  }
+  return ratio <= 1 / 3 ? "low" : "steady";
 }
 
 function evidenceKpi(item) {
