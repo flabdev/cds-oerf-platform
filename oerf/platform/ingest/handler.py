@@ -305,6 +305,7 @@ def handler(
             reason=decision.reason or "TEMPERATURE_EXCURSION",
             config_version=config.version,
             config_snapshot=config.model_dump(mode="json"),
+            product_profile_id=profile_id,
         )
         _record_reading(ports, tenant_id, shipment_id, reading, event_id)
         execution_name = _execution_name(tenant_id, incident.incident_id)

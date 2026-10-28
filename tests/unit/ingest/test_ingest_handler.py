@@ -216,6 +216,8 @@ def test_ph2841_seed_profile_reaches_gather_context() -> None:
         ),
     )
     assert gathered.context["product_profile_id"] == "PP-2-8-45"
+    stored = deps.incidents.get("t1", started["incident_id"])
+    assert stored.product_profile_id == "PP-2-8-45"
 
 
 def _choice_roots(definition: dict[str, Any]) -> set[str]:

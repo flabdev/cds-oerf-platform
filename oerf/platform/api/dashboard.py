@@ -257,12 +257,17 @@ def services_from_env() -> DashboardServices:
     from oerf.platform.api.queries import DynamoIncidentQuery, SqsActionQueue
 
     table = os.environ.get("INCIDENT_TABLE_NAME", "").strip()
+    tenant_table = os.environ.get("TENANT_TABLE_NAME", "").strip()
     queue_url = (
         os.environ.get("INBOUND_QUEUE_URL", "").strip()
         or os.environ.get("ACTION_QUEUE_URL", "").strip()
     )
     if table:
-        queries: IncidentQuery = DynamoIncidentQuery(boto3.client("dynamodb"), table)
+        queries: IncidentQuery = DynamoIncidentQuery(
+            boto3.client("dynamodb"),
+            table,
+            tenant_table=tenant_table,
+        )
     else:
         queries = MemoryIncidentQuery([])
     queue = SqsActionQueue(boto3.client("sqs"), queue_url) if queue_url else None
@@ -528,6 +533,7 @@ def _detail_body(item: dict[str, Any]) -> dict[str, Any]:
         "opened_at": item.get("opened_at") or "",
         "config_version": item.get("config_version"),
         "config_snapshot": item.get("config_snapshot"),
+        "product_profile_id": item.get("product_profile_id") or None,
         "allowance_remaining": item.get("allowance_remaining"),
         "range_c": item.get("range_c"),
         "evidence": item.get("evidence")

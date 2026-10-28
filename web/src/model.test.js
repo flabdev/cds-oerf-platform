@@ -119,9 +119,19 @@ test("a live detail maps the response and the chart uses the readings", () => {
   const empty = temperatureChart([]);
   assert.equal(empty.polyline, "");
   assert.equal(empty.empty, true);
-  assert.deepEqual(empty.band, [2, 8]);
-  assert.ok(empty.ticks.some((tick) => tick.label === "2"));
-  assert.ok(empty.ticks.some((tick) => tick.label === "8"));
+  assert.equal(empty.band, null);
+  const ambient = incidentView({
+    allowance_remaining: 120,
+    range_c: [15, 25],
+    readings: [{ ts: "2026-10-20T10:00:00Z", temperature_c: 20 }],
+  });
+  assert.equal(ambient.allowanceLabel, "120.0 min");
+  assert.deepEqual(ambient.chart.band, [15, 25]);
+  assert.ok(ambient.chart.ticks.some((tick) => tick.label === "15"));
+  assert.ok(ambient.chart.ticks.some((tick) => tick.label === "25"));
+  const unknown = incidentView({ allowance_remaining: null });
+  assert.equal(unknown.allowanceLabel, "—");
+  assert.equal(unknown.chart.band, null);
 });
 
 test("cancel does not need a waiting engagement", () => {

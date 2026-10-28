@@ -27,9 +27,10 @@ _PAGE = 50
 class DynamoIncidentQuery:
     """List and detail from the incident table. The client is injected."""
 
-    def __init__(self, client: Any, table_name: str) -> None:
+    def __init__(self, client: Any, table_name: str, tenant_table: str = "") -> None:
         self._client = client
         self._table = table_name
+        self._tenant_table = tenant_table.strip()
 
     def list_incidents(
         self,
@@ -72,14 +73,16 @@ class DynamoIncidentQuery:
         readings = [_reading(row) for row in self._partition(pk, "READ#")]
         readings = [row for row in readings if row]
         snapshot = _json_field(item, "config_snapshot")
-        band = _range_c(snapshot)
+        shipment_id = text(item["shipment_id"])
+        profile_id = self._profile_id(item, context.tenant_id, shipment_id)
+        profile = _profile(snapshot, profile_id)
         recommendation = self._recommendation(pk)
         engagement_id, engagement_status = self._engagement(pk)
         state = text(item["state"])
         return {
             "incident_id": text(item["incident_id"]),
             "tenant_id": text(item["tenant_id"]),
-            "shipment_id": text(item["shipment_id"]),
+            "shipment_id": shipment_id,
             "state": state,
             "stage": _optional_text(item, "stage") or state,
             "version": _version(item),
@@ -87,8 +90,9 @@ class DynamoIncidentQuery:
             "opened_at": _optional_text(item, "opened_at") or "",
             "config_version": _optional_number(item, "config_version"),
             "config_snapshot": snapshot,
-            "allowance_remaining": _allowance_remaining(snapshot, readings),
-            "range_c": band,
+            "product_profile_id": profile_id,
+            "allowance_remaining": _allowance_remaining(profile, readings),
+            "range_c": _range_c(profile),
             "evidence": _evidence(item.get("evidence_analysis")),
             "recommendation": recommendation,
             "options": recommendation["options"] if recommendation else [],
@@ -156,6 +160,26 @@ class DynamoIncidentQuery:
             if status == "WAITING":
                 waiting = latest
         return waiting or latest or (None, None)
+
+    def _profile_id(self, item: dict[str, Any], tenant_id: str, shipment_id: str) -> str | None:
+        """META first. A legacy row uses the shipment's profile. Never the first snapshot entry."""
+
+        stored = _optional_text(item, "product_profile_id")
+        if stored and stored.strip():
+            return stored.strip()
+        return self._shipment_profile(tenant_id, shipment_id)
+
+    def _shipment_profile(self, tenant_id: str, shipment_id: str) -> str | None:
+        if not self._tenant_table or not shipment_id:
+            return None
+        loaded = self._client.get_item(
+            TableName=self._tenant_table,
+            Key=key(f"TENANT#{tenant_id}", f"SHIPMENT#{shipment_id}"),
+        )
+        row = loaded.get("Item")
+        if not row:
+            return None
+        return _optional_text(row, "product_profile") or _optional_text(row, "product_profile_id")
 
     def _metas(self, tenant_id: str) -> list[dict[str, Any]]:
         found: list[dict[str, Any]] = []
@@ -256,13 +280,15 @@ def _reading(item: dict[str, Any]) -> dict[str, Any] | None:
     return {"ts": ts, "temperature_c": temperature}
 
 
-def _allowance_remaining(snapshot: Any, readings: list[dict[str, Any]]) -> float | None:
-    """Minutes left from the pinned profile and the stored readings.
+def _allowance_remaining(
+    profile: dict[str, Any] | None,
+    readings: list[dict[str, Any]],
+) -> float | None:
+    """Minutes left from the selected profile and the stored readings.
 
     No profile, no band, or no reading means the desk has nothing to show.
     """
 
-    profile = _profile(snapshot)
     if profile is None or not readings:
         return None
     allowance = profile.get("excursion_allowance_min")
@@ -283,20 +309,19 @@ def _allowance_remaining(snapshot: Any, readings: list[dict[str, Any]]) -> float
     return round(remaining, 1)
 
 
-def _profile(snapshot: Any) -> dict[str, Any] | None:
-    if not isinstance(snapshot, dict):
+def _profile(snapshot: Any, profile_id: str | None) -> dict[str, Any] | None:
+    if not profile_id or not isinstance(snapshot, dict):
         return None
     profiles = snapshot.get("product_profiles")
     if not isinstance(profiles, list):
         return None
     for profile in profiles:
-        if isinstance(profile, dict):
+        if isinstance(profile, dict) and str(profile.get("id", "")).strip() == profile_id:
             return profile
     return None
 
 
-def _range_c(snapshot: Any) -> list[float] | None:
-    profile = _profile(snapshot)
+def _range_c(profile: dict[str, Any] | None) -> list[float] | None:
     if profile is None:
         return None
     band = profile.get("range_c")

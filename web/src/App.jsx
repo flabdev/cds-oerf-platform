@@ -32,6 +32,7 @@ const SAMPLE = [
     ],
     recommendation: "FACILITY_A",
     approval: "pending",
+    range_c: [2, 8],
     evidence: { fault_code: "E17" },
     engagement_status: "WAITING",
     engagement_id: "ENG-01",
@@ -46,6 +47,7 @@ const SAMPLE = [
     timeline: ["10:06 opened"],
     options: [],
     recommendation: null,
+    range_c: [2, 8],
     evidence: {},
     engagement_status: "WAITING",
     engagement_id: "ENG-02",
@@ -60,6 +62,7 @@ const SAMPLE = [
     timeline: ["09:48 opened"],
     options: [],
     recommendation: null,
+    range_c: [2, 8],
     evidence: { fault_code: "E05" },
     engagement_status: "WAITING",
     engagement_id: "ENG-03",
@@ -348,7 +351,9 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect }) {
                   </div>
                 </div>
                 <svg className="chart" viewBox="0 0 128 52" role="img" aria-label={`Temperature ${view.chart.unit}`}>
-                  <rect className="band" x="22" y={view.chart.bandY} width="100" height={view.chart.bandHeight} />
+                  {view.chart.band ? (
+                    <rect className="band" x="22" y={view.chart.bandY} width="100" height={view.chart.bandHeight} />
+                  ) : null}
                   {view.chart.ticks.map((tick) => (
                     <text key={`${tick.label}-${tick.y}`} x="0" y={tick.y}>{tick.label}</text>
                   ))}

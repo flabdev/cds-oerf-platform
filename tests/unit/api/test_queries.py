@@ -79,6 +79,7 @@ def test_detail_returns_timeline_readings_assessment_and_hides_the_token() -> No
     assert body["shipment_id"] == "PH-2841"
     assert body["version"] == 6
     assert body["allowance_remaining"] == 35.0
+    assert body["range_c"] == [2.0, 8.0]
     assert body["evidence"] == {"fault_codes": ["AL02"]}
     assert body["recommendation"]["recommended_option"] == "FACILITY_A"
     assert body["options"][0]["spare_minutes"] == 12.4
@@ -91,6 +92,30 @@ def test_detail_returns_timeline_readings_assessment_and_hides_the_token() -> No
     assert "secret-token" not in encoded
     assert "task_token" not in encoded
     assert "step_output" not in body
+
+
+def test_detail_selects_the_pinned_profile_by_id() -> None:
+    ambient, ambient_client = _profile_detail(profile_id="PP-15-25-120")
+    assert ambient["range_c"] == [15.0, 25.0]
+    assert ambient["allowance_remaining"] == 120.0
+    assert ambient_client.shipment_reads == 0
+
+    legacy, legacy_client = _profile_detail(shipment_profile="PP-15-25-120")
+    assert legacy["range_c"] == [15.0, 25.0]
+    assert legacy["allowance_remaining"] == 120.0
+    assert legacy_client.shipment_reads == 1
+
+    unknown, _unknown_client = _profile_detail()
+    assert unknown["range_c"] is None
+    assert unknown["allowance_remaining"] is None
+
+    mismatch, mismatch_client = _profile_detail(
+        profile_id="PP-missing",
+        shipment_profile="PP-15-25-120",
+    )
+    assert mismatch["range_c"] is None
+    assert mismatch["allowance_remaining"] is None
+    assert mismatch_client.shipment_reads == 0
 
 
 def test_cancel_does_not_need_an_engagement() -> None:
@@ -312,6 +337,95 @@ def _incident(
     client.put_item(TableName="incidents", Item=item)
 
 
+_TWO_PROFILES = {
+    "product_profiles": [
+        {"id": "PP-2-8-45", "range_c": [2, 8], "excursion_allowance_min": 45},
+        {"id": "PP-15-25-120", "range_c": [15, 25], "excursion_allowance_min": 120},
+    ]
+}
+
+
+class _ProfileClient:
+    """META plus an optional shipment row. The snapshot lists the cold profile first."""
+
+    def __init__(
+        self,
+        *,
+        profile_id: str | None = None,
+        shipment_profile: str | None = None,
+    ) -> None:
+        self.profile_id = profile_id
+        self.shipment_profile = shipment_profile
+        self.shipment_reads = 0
+
+    def get_item(self, *, TableName: str, Key: dict, **_: object) -> dict:
+        sk = Key["sk"]["S"]
+        pk = Key["pk"]["S"]
+        if TableName == "tenant":
+            self.shipment_reads += 1
+            if not self.shipment_profile:
+                return {}
+            return {"Item": {**key(pk, sk), "product_profile": s(self.shipment_profile)}}
+        if sk != "META":
+            return {}
+        item = {
+            **key(pk, "META"),
+            "incident_id": s("INC-1"),
+            "tenant_id": s("t1"),
+            "shipment_id": s("PH-1"),
+            "state": s("OPEN"),
+            "reason": s("excursion"),
+            "opened_at": s("2026-10-20T10:00:00Z"),
+            "event_seq": {"N": "1"},
+            "config_snapshot": s(json.dumps(_TWO_PROFILES)),
+        }
+        if self.profile_id:
+            item["product_profile_id"] = s(self.profile_id)
+        return {"Item": item}
+
+    def query(self, **kwargs: object) -> dict:
+        values = kwargs["ExpressionAttributeValues"]
+        prefix = values[":prefix"]["S"]
+        pk = values[":pk"]["S"]
+        if prefix != "READ#":
+            return {"Items": []}
+        return {
+            "Items": [
+                {
+                    **key(pk, "READ#2026-10-20T10:00:00Z#000000000001#aa"),
+                    "ts": s("2026-10-20T10:00:00Z"),
+                    "temperature_c": {"N": "20"},
+                },
+                {
+                    **key(pk, "READ#2026-10-20T10:10:00Z#000000000002#bb"),
+                    "ts": s("2026-10-20T10:10:00Z"),
+                    "temperature_c": {"N": "20"},
+                },
+            ]
+        }
+
+
+def _profile_detail(
+    *,
+    profile_id: str | None = None,
+    shipment_profile: str | None = None,
+) -> tuple[dict, _ProfileClient]:
+    client = _ProfileClient(profile_id=profile_id, shipment_profile=shipment_profile)
+    services = DashboardServices(
+        queries=DynamoIncidentQuery(client, "incidents", tenant_table="tenant"),
+        queue=MemoryActionQueue(),
+    )
+    status, body = dispatch(
+        "GET",
+        "/incidents/INC-1",
+        Principal("t1", "ops_user", "user-1", True),
+        None,
+        services,
+    )
+    assert status == 200
+    return body, client
+
+
 class _PagingClient:
     """One incident whose timeline comes back a page at a time, newest page first."""
 
@@ -333,15 +447,21 @@ class _PagingClient:
                     "reason": s("excursion"),
                     "opened_at": s("2026-10-20T10:00:00Z"),
                     "event_seq": {"N": "6"},
+                    "product_profile_id": s("PP-2-8-45"),
                     "config_snapshot": s(
                         json.dumps(
                             {
                                 "product_profiles": [
                                     {
+                                        "id": "PP-15-25-120",
+                                        "range_c": [15, 25],
+                                        "excursion_allowance_min": 120,
+                                    },
+                                    {
                                         "id": "PP-2-8-45",
                                         "range_c": [2, 8],
                                         "excursion_allowance_min": 45,
-                                    }
+                                    },
                                 ]
                             }
                         )

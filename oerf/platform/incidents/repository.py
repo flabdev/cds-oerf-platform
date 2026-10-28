@@ -71,6 +71,7 @@ class Incident(BaseModel):
     sk: str = "META"
     config_version: int | None = None
     config_snapshot: dict[str, Any] | None = None
+    product_profile_id: str | None = None
 
 
 class TimelineEvent(BaseModel):
@@ -102,6 +103,7 @@ class IncidentStore(Protocol):
         reason: str,
         config_version: int | None = None,
         config_snapshot: dict[str, Any] | None = None,
+        product_profile_id: str | None = None,
     ) -> Incident:
         """Open an incident, or return the one already open for the shipment."""
 
@@ -177,6 +179,7 @@ class IncidentRepository:
         reason: str,
         config_version: int | None = None,
         config_snapshot: dict[str, Any] | None = None,
+        product_profile_id: str | None = None,
     ) -> Incident:
         """Open an incident, or append to the one already locked for this shipment.
 
@@ -203,6 +206,7 @@ class IncidentRepository:
                 pk=pk,
                 config_version=config_version,
                 config_snapshot=config_snapshot,
+                product_profile_id=_profile_id(product_profile_id),
             )
             key = (pk, "META")
             self._incidents[key] = incident
@@ -385,3 +389,10 @@ def _reading_moment(timestamp: str) -> datetime:
 
 def _iso_z(moment: datetime) -> str:
     return iso_z(moment)
+
+
+def _profile_id(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    chosen = value.strip()
+    return chosen or None

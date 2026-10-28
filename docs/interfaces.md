@@ -1,9 +1,10 @@
 # OERF interface contract
 
-**FROZEN v1.33** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.34** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
+- v1.34 (2026-10-28) Incident create stores `product_profile_id` on META. That is the profile ingest resolved from the shipment row (`product_profile`, or `product_profile_id` when the row already has it). `GET /incidents/{id}` selects that id from the pinned `config_snapshot` for `range_c` and `allowance_remaining`. A META row without the field uses the shipment row `PK=TENANT#{tid}` / `SK=SHIPMENT#{sid}`. Both fields are null when the profile is still unknown. The first profile in the snapshot is not a default.
 - v1.33 (2026-10-28) `GET /incidents/{id}` adds the desk detail: `version` (`event_seq` when `version` is absent, same integer as the broadcaster), `allowance_remaining` from the pinned profile and `READ#` rows (null when it cannot be computed), `evidence.fault_codes`, the Assess `recommended_option` and ranked options (`id`, `spare_minutes`, `projected_minutes`, `feasible`), `engagement_id` and `engagement_status`, `timeline` (`at`, `from_state`, `to_state` from `EVT#`, oldest first), and `readings` (`ts`, `temperature_c` from `READ#`, oldest first). `pk`, `sk`, task tokens, and step output stay off the wire. The list `version` uses `event_seq` the same way.
 - v1.32 (2026-10-28) The WebSocket authorizer allows an access token whose `client_id` is `USER_POOL_CLIENT_ID` or listed in `ALLOWED_CLIENT_IDS`, plus the dashboard client id in SSM `/oerf/ws-allowed-clients/dashboard` when `OerfApiStack` has published it. An ID token and any other client id are denied. `GetUser`, expiry, and the tenant claim stay.
 - v1.31 (2026-10-27) `scripts.seed_runtime --live-contacts` skips a role whose `/oerf/demo-numbers/{tid}/{role}` parameter does not exist and prints `skipped {tid} live-contacts {role} (no parameter)`. A parameter that exists but is empty or not E.164 stops the command. `--roles` limits the roles. The value is not printed.
@@ -323,7 +324,7 @@ Correlation keys, agreed by the LLD and [oerf/platform/storage/dynamo.py](../oer
 
 Owner: OERF-112 for the repository (Mudita). Data-stack owner for indexes. Authoritative incident key, from the LLD and `incident_pk()`:
 
-`PK=TENANT#{tid}#INC#{iid}`, `SK=META`. Timeline rows: `SK=EVT#{iso-timestamp}#{seq}`. Temperature rows, written by `IncidentStore.record_reading` only while `OPEN_INCIDENT` is present and the incident is not terminal: `SK=READ#{ts}#{seq}#{sha256}`. `ts` is `YYYY-MM-DDTHH:MM:SSZ`. `seq` is twelve digits. `sha256` is the hex SHA-256 of `event_id`. Stored attributes are `pk`, `sk`, `tenant_id`, `ts`, `temperature_c`, and `expires_at` (epoch seconds of `ts` plus 90 days). `device_id`, coordinates, `shipment_id`, and `event_id` are not attributes. A second put of the same key does not replace the row.
+`PK=TENANT#{tid}#INC#{iid}`, `SK=META`. Create writes `product_profile_id`, the profile ingest resolved from the shipment row. Timeline rows: `SK=EVT#{iso-timestamp}#{seq}`. Temperature rows, written by `IncidentStore.record_reading` only while `OPEN_INCIDENT` is present and the incident is not terminal: `SK=READ#{ts}#{seq}#{sha256}`. `ts` is `YYYY-MM-DDTHH:MM:SSZ`. `seq` is twelve digits. `sha256` is the hex SHA-256 of `event_id`. Stored attributes are `pk`, `sk`, `tenant_id`, `ts`, `temperature_c`, and `expires_at` (epoch seconds of `ts` plus 90 days). `device_id`, coordinates, `shipment_id`, and `event_id` are not attributes. A second put of the same key does not replace the row.
 
 Ingest writes the authoritative key. The retired trigger route no longer writes a separate incident item.
 
@@ -393,7 +394,7 @@ API `oerf-http-api`. Cognito JWT authorizer, identity source `Authorization`. CO
 
 | Route | Contract |
 | --- | --- |
-| `GET /incidents/{id}` | Incident for the token tenant and path id. META fields: `incident_id`, `tenant_id`, `shipment_id`, `state`, `stage`, `version`, `reason`, `opened_at`, `config_version`, `config_snapshot`. `version` is `event_seq` when `version` is absent. Also `allowance_remaining` (null when the pinned profile or readings cannot compute it), `range_c`, `evidence` (`fault_codes` only), `recommendation`, `options`, `engagement_id`, `engagement_status`, `timeline`, and `readings`. Timeline and readings are the tenant's incident partition, `EVT#` and `READ#`, paged, oldest first. `pk`, `sk`, task tokens, and raw step output stay off the wire. |
+| `GET /incidents/{id}` | Incident for the token tenant and path id. META fields: `incident_id`, `tenant_id`, `shipment_id`, `state`, `stage`, `version`, `reason`, `opened_at`, `config_version`, `config_snapshot`, `product_profile_id`. `version` is `event_seq` when `version` is absent. `range_c` and `allowance_remaining` use the profile named by `product_profile_id` in the pinned snapshot. A META row without that id uses the shipment row (`PK=TENANT#{tid}`, `SK=SHIPMENT#{sid}`, `product_profile` or `product_profile_id`). Both are null when that profile is unknown. `allowance_remaining` is also null when the readings cannot compute it. The first snapshot profile is not used. Also `evidence` (`fault_codes` only), `recommendation`, `options`, `engagement_id`, `engagement_status`, `timeline`, and `readings`. Timeline and readings are the tenant's incident partition, `EVT#` and `READ#`, paged, oldest first. `pk`, `sk`, task tokens, and raw step output stay off the wire. |
 | `GET /incidents` | List for the token tenant. Blocked on GSI1 (pattern 12). Each row is the summary object in section 7.3. |
 
 Dashboard `POST /incidents/{id}/actions` is section 3.2 on the REST API. Ingest (`sim.reefer` / `TemperatureReading`) is the only way an incident and its execution start.
