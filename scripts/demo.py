@@ -1038,7 +1038,11 @@ def _now() -> datetime:
 def _parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--profile", required=True)
-    common.add_argument("--account", required=True, help="12-digit account id the caller must match.")
+    common.add_argument(
+        "--account",
+        required=True,
+        help="12-digit account id the caller must match.",
+    )
     common.add_argument("--tenant", required=True)
     common.add_argument("--shipment", default=None)
     common.add_argument("--device", default=None)

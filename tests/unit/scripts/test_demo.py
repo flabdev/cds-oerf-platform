@@ -491,7 +491,18 @@ def test_reply_refuses_live_before_any_aws_call(capsys: pytest.CaptureFixture[st
     session = Session(sts=sts)
 
     code = main(
-        ["reply", "--profile", "demo", "--account", ACCOUNT, "--tenant", "t1", "--live", "--button", "running"],
+        [
+            "reply",
+            "--profile",
+            "demo",
+            "--account",
+            ACCOUNT,
+            "--tenant",
+            "t1",
+            "--live",
+            "--button",
+            "running",
+        ],
         session_factory=lambda _p: session,
     )
 
