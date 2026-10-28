@@ -248,9 +248,11 @@ export function incidentView(item) {
   const remaining = oneDecimal(item?.allowance_remaining);
   const readings = chartReadings(item);
   const band = numericBand(item?.range_c);
+  const waiting = String(item?.state || "").trim().toUpperCase() === "DIAGNOSING" && !options.length
+    && !(typeof recommended === "string" && recommended.trim());
   const recommendationLabel = typeof recommended === "string" && recommended.trim()
     ? recommended.trim()
-    : "—";
+    : (waiting ? "Waiting for the driver's answer" : "—");
   return {
     allowanceLabel: remaining ? `${remaining} min` : "—",
     evidenceLabel: codes.length ? codes.join(", ") : (fault || "none"),

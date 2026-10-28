@@ -38,11 +38,23 @@
     "SendOneWay": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {"FunctionName": "__ENGAGEMENT_STUB_ARN__", "Payload": {"step_name": "EngagementSendOneWay", "workflow.$": "$"}},
-      "OutputPath": "$.Payload",
+      "Parameters": {
+        "FunctionName": "__CHANNEL_ROUTER_ARN__",
+        "Payload": {
+          "step_name": "EngagementSendOneWay",
+          "tenant_id.$": "$.tenant_id",
+          "incident_id.$": "$.incident_id",
+          "role.$": "$.role",
+          "message.$": "$.cadence.message",
+          "channel.$": "$.cadence.channel",
+          "facts.$": "$.facts",
+          "dedupe_key.$": "States.Format('{}:{}:{}', $.incident_id, $.cadence.message, $.cadence.next_rung)"
+        }
+      },
+      "ResultPath": "$.one_way",
       "TimeoutSeconds": 30,
       "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2}],
-      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "EngagementFailed"}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.one_way_error", "Next": "AdvanceRung"}],
       "Next": "AdvanceRung"
     },
     "SendViaRouter": {
@@ -83,7 +95,7 @@
       "Choices": [
         {"And": [{"Variable": "$.response.intent", "IsPresent": true}, {"Variable": "$.response.intent", "StringEquals": "call_me"}], "Next": "HandleCallback"},
         {"And": [{"Variable": "$.response.intent", "IsPresent": true}, {"Variable": "$.response.intent", "StringEquals": "clarify"}], "Next": "ResetLadder"},
-        {"And": [{"Variable": "$.response.valid", "IsPresent": true}, {"Variable": "$.response.valid", "BooleanEquals": true}], "Next": "Answered"}
+        {"And": [{"Variable": "$.response.valid", "IsPresent": true}, {"Variable": "$.response.valid", "BooleanEquals": true}], "Next": "AcknowledgeReply"}
       ],
       "Default": "Clarify"
     },
@@ -123,6 +135,31 @@
       "Next": "ComputeNextRung"
     },
     "Clarify": {"Type": "Pass", "Parameters": {"status": "clarify", "intent.$": "$.response.intent", "fields.$": "$.response.fields", "evidence_refs.$": "$.response.evidence_refs", "engagement_id.$": "$.engagement_id"}, "End": true},
+    "AcknowledgeReply": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CHANNEL_ROUTER_ARN__",
+        "Payload": {
+          "step_name": "EngagementSendOneWay",
+          "tenant_id.$": "$.tenant_id",
+          "incident_id.$": "$.incident_id",
+          "role.$": "$.role",
+          "message": "driver_ack",
+          "channel": "whatsapp",
+          "facts": {
+            "answer.$": "$.reply.text",
+            "shipment.$": "$.facts.shipment"
+          },
+          "dedupe_key.$": "States.Format('{}:driver_ack', $.incident_id)"
+        }
+      },
+      "ResultPath": "$.ack",
+      "TimeoutSeconds": 30,
+      "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.ack_error", "Next": "Answered"}],
+      "Next": "Answered"
+    },
     "Answered": {"Type": "Pass", "Parameters": {"status": "answered", "intent.$": "$.response.intent", "fields.$": "$.response.fields", "evidence_refs.$": "$.response.evidence_refs", "engagement_id.$": "$.engagement_id"}, "End": true},
     "HasFinalQuestion": {
       "Type": "Choice",

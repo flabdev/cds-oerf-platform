@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 _PLACEHOLDER = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
@@ -35,7 +36,7 @@ def render_message(
     if missing:
         joined = ", ".join(missing)
         raise MissingFacts(f"template {template_id!r} is missing facts: {joined}")
-    values = {name: facts[name] for name in names}
+    values = {name: _fact_text(name, facts[name]) for name in names}
     return body.format(**values)
 
 
@@ -53,4 +54,20 @@ def parameter_values(
     body = entry.get(channel) if isinstance(entry, dict) else None
     if not isinstance(body, str):
         return []
-    return [str(facts[name]) for name in _PLACEHOLDER.findall(body)]
+    return [_fact_text(name, facts[name]) for name in _PLACEHOLDER.findall(body)]
+
+
+def _fact_text(name: str, value: Any) -> str:
+    """One template parameter. Temperatures are one decimal, half up."""
+
+    if name == "temperature_c":
+        return _one_decimal(value)
+    return str(value)
+
+
+def _one_decimal(value: Any) -> str:
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return str(value)
+    return format(number.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP), "f")

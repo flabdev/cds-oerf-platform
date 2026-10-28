@@ -13,7 +13,8 @@ tenants, and it does not replace a device row owned by someone else.
 
 The incident-id counter (``TENANT#{tid}`` / ``COUNTER#INCIDENT`` on the tenant
 table) is left in place, as are tenant config rows, ``INGEST#`` dedupe rows,
-report objects, live websocket rows, and the platform table.
+report objects, live websocket rows, and the platform table. One-way send
+dedupe rows ``TENANT#{tid}#OUTBOX#`` on the routing table are deleted.
 """
 
 from __future__ import annotations
@@ -377,6 +378,8 @@ def _lock_item(tenant_id: str, item: dict[str, Any]) -> bool:
 def _routing_row(tenant_id: str, item: dict[str, Any]) -> bool:
     pk = _text(item, "pk")
     sk = _text(item, "sk")
+    if pk.startswith(f"TENANT#{tenant_id}#OUTBOX#"):
+        return True
     if pk.startswith(f"ENGREF#{tenant_id}#") or pk.startswith(f"CONTACTENG#{tenant_id}#"):
         return True
     return pk.startswith(f"TENANT#{tenant_id}#INCIDENT#") and (

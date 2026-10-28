@@ -284,6 +284,37 @@ def test_assess_decision_records_auditable_provenance() -> None:
     assert provenance["inputs"]["temperature_c"] == 9.2
 
 
+def test_stopped_unit_uses_a_pinned_faster_rise() -> None:
+    dependencies = _dependencies("DIAGNOSING")
+    incident = dependencies.incidents.get(TENANT, INCIDENT_ID)
+    incident.config_snapshot["assessment"]["stopped_rise_rate_c_per_min"] = 0.5
+    result = HANDLERS["Assess"](
+        _envelope(
+            "Assess",
+            workflow={
+                "ship_time": NOW.isoformat(),
+                "diagnosis": {
+                    "engagement_result": {"status": "answered", "intent": "unit_stopped"}
+                },
+                "context": {
+                    "range_c": [2, 8],
+                    "allowance_minutes": 45,
+                    "trigger": {"temperature_c": 8.1},
+                    "facilities": [
+                        {"id": "FAC-A", "drive_min": 9, "capacity_available": True}
+                    ],
+                },
+            },
+        ),
+        dependencies,
+    )
+
+    assert result.decision is not None
+    assert result.decision["provenance"]["inputs"]["rise_rate_c_per_min"] == 0.5
+    assert result.decision["route"] == "escalate"
+    assert result.decision["recommended_option"] is None
+
+
 def test_a_suggestion_is_never_authoritative_over_the_rule() -> None:
     """AI output is recorded beside the decision, not instead of it."""
     dependencies = _dependencies("DIAGNOSING")

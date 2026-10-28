@@ -66,6 +66,9 @@ def compute_rung(workflow: dict[str, Any], now: datetime) -> dict[str, Any]:
     updated = dict(workflow)
     updated["engagement_started_at"] = started.isoformat()
     updated["cadence"] = _cadence(decision)
+    action = decision.get("exhaust_action")
+    if decision.get("exhausted") and action is not None:
+        updated["exhaust_action"] = action
     return updated
 
 
