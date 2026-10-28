@@ -4,14 +4,20 @@ import test from "node:test";
 import {
   authorizeUrl,
   createVerifier,
+  dashboardError,
   exchangeCode,
   exchangeOnce,
   liveConfig,
   loadIncidents,
+  authFailure,
+  clearStoredSession,
   logoutUrl,
   presentIncident,
   principalFromIdToken,
   sendDashboard,
+  shouldOpenSocket,
+  signOutTarget,
+  socketAuthFailed,
   stripAuthCode,
 } from "./session.js";
 
@@ -77,6 +83,62 @@ test("the logout url is the hosted Cognito logout page", () => {
   assert.equal(url.pathname, "/logout");
   assert.equal(url.searchParams.get("client_id"), "client-1");
   assert.equal(url.searchParams.get("logout_uri"), "http://localhost:5173");
+});
+
+test("sign-out uses the dashboard client and the app origin", () => {
+  const target = signOutTarget({
+    domain: "oerf.auth.us-east-1.amazoncognito.com",
+    clientId: "dashboard-client",
+    logoutUri: "https://d111.cloudfront.net",
+  });
+  const url = new URL(target);
+  assert.equal(url.pathname, "/logout");
+  assert.equal(url.searchParams.get("client_id"), "dashboard-client");
+  assert.equal(url.searchParams.get("logout_uri"), "https://d111.cloudfront.net");
+});
+
+test("sign-out stays on the app when the hosted logout config is missing", () => {
+  assert.equal(signOutTarget({ domain: "", clientId: "dashboard-client", logoutUri: "http://localhost:5173" }), "");
+  assert.equal(signOutTarget({ domain: "oerf.auth.example.com", clientId: "", logoutUri: "http://localhost:5173" }), "");
+  assert.equal(signOutTarget({ domain: "oerf.auth.example.com", clientId: "dashboard-client", logoutUri: "" }), "");
+});
+
+test("stored tokens are removed from both stores", () => {
+  const primary = memoryStore();
+  const extra = memoryStore();
+  primary.setItem("oerf.idToken", "id");
+  primary.setItem("oerf.accessToken", "access");
+  primary.setItem("oerf.codeVerifier", "verifier");
+  extra.setItem("oerf.idToken", "id");
+  clearStoredSession(primary, extra);
+  assert.equal(primary.getItem("oerf.idToken"), null);
+  assert.equal(primary.getItem("oerf.accessToken"), null);
+  assert.equal(primary.getItem("oerf.codeVerifier"), null);
+  assert.equal(extra.getItem("oerf.idToken"), null);
+});
+
+test("the socket stays closed after sign-out and after an auth handshake failure", () => {
+  assert.equal(shouldOpenSocket({
+    signingOut: true,
+    authenticated: true,
+    accessToken: "access",
+    wsUrl: "wss://example.test/prod",
+  }), false);
+  assert.equal(shouldOpenSocket({
+    signingOut: false,
+    authenticated: false,
+    accessToken: "",
+    wsUrl: "wss://example.test/prod",
+  }), false);
+  assert.equal(shouldOpenSocket({
+    signingOut: false,
+    authenticated: true,
+    accessToken: "access",
+    wsUrl: "wss://example.test/prod",
+  }), true);
+  assert.equal(socketAuthFailed({ opened: false, code: 1006, signingOut: false }), true);
+  assert.equal(socketAuthFailed({ opened: false, code: 1006, signingOut: true }), false);
+  assert.equal(socketAuthFailed({ opened: true, code: 1006, signingOut: false }), false);
 });
 
 test("the authorize url is the hosted Cognito page", async () => {
@@ -206,6 +268,53 @@ test("the callback drops the authorization code from the URL", () => {
   assert.equal(stripped, true);
   assert.equal(replaced[0][2], "/?x=1");
 });
+
+test("a 401 is an auth failure", async () => {
+  const fetchImpl = async () => ({ ok: false, status: 401, json: async () => ({}) });
+  await assert.rejects(
+    () => loadIncidents("https://api.example.com", "token", fetchImpl),
+    (error) => {
+      assert.equal(error.status, 401);
+      assert.equal(error.message, "Sign in required");
+      assert.equal(authFailure(error), true);
+      return true;
+    },
+  );
+});
+
+test("a rejected action names the HTTP status", async () => {
+  assert.equal(dashboardError(403), "You don't have permission for this action");
+  assert.equal(dashboardError(409), "Incident already changed state; refreshed");
+  assert.equal(dashboardError(500), "Action failed (HTTP 500)");
+  const fetchImpl = async () => ({ ok: false, status: 403, json: async () => ({}) });
+  await assert.rejects(
+    () => sendDashboard("https://api.example.com", "token", {
+      method: "POST",
+      path: "/incidents/INC-1/actions",
+      body: { action: "cancel" },
+    }, fetchImpl),
+    (error) => {
+      assert.equal(error.status, 403);
+      assert.match(error.message, /permission/);
+      return true;
+    },
+  );
+});
+
+function memoryStore() {
+  const data = new Map();
+  return {
+    setItem(key, value) {
+      data.set(key, value);
+    },
+    getItem(key) {
+      return data.has(key) ? data.get(key) : null;
+    },
+    removeItem(key) {
+      data.delete(key);
+    },
+  };
+}
 
 function jwt(payload) {
   const body = btoa(JSON.stringify(payload)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
