@@ -36,6 +36,9 @@ logger.setLevel(logging.INFO)
 ROUTING_TABLE_NAME = os.environ.get("ROUTING_TABLE_NAME", "")
 USER_POOL_ID = os.environ.get("USER_POOL_ID", "")
 USER_POOL_CLIENT_ID = os.environ.get("USER_POOL_CLIENT_ID", "")
+ALLOWED_CLIENT_IDS = os.environ.get("ALLOWED_CLIENT_IDS", "")
+DASHBOARD_CLIENT_PARAMETER = os.environ.get("DASHBOARD_CLIENT_PARAMETER", "")
+_dashboard_clients_cache: set[str] | None = None
 
 CONNECTION_TTL_SECONDS = 86400  # 24-hour TTL, matches the connection handler
 
@@ -100,6 +103,60 @@ def get_cognito():
     return _cognito
 
 
+_ssm = None
+
+
+def get_ssm():
+    """Lazily create the SSM client used to read the dashboard client id."""
+    global _ssm
+    if _ssm is None:
+        _ssm = boto3.client("ssm")
+    return _ssm
+
+
+def allowed_client_ids() -> set[str]:
+    """App clients that may open the socket. Any other client id is denied."""
+
+    found = {part.strip() for part in ALLOWED_CLIENT_IDS.split(",") if part.strip()}
+    if USER_POOL_CLIENT_ID.strip():
+        found.add(USER_POOL_CLIENT_ID.strip())
+    found.update(_dashboard_clients())
+    return found
+
+
+def _dashboard_clients() -> set[str]:
+    """Read the dashboard client id once per cold start.
+
+    A missing parameter means the dashboard stack is not deployed. That is
+    not an error, and the value is not logged.
+    """
+
+    global _dashboard_clients_cache
+    if _dashboard_clients_cache is not None:
+        return _dashboard_clients_cache
+    name = DASHBOARD_CLIENT_PARAMETER.strip()
+    if not name:
+        return set()
+    try:
+        value = get_ssm().get_parameter(Name=name)["Parameter"]["Value"]
+    except (ClientError, BotoCoreError, KeyError, TypeError):
+        return set()
+    if not isinstance(value, str):
+        return set()
+    found = {part.strip() for part in value.split(",") if part.strip()}
+    _dashboard_clients_cache = found
+    return found
+
+
+def _expired(claims: dict[str, Any]) -> bool:
+    """True when the token carries an ``exp`` that is already past."""
+
+    exp = claims.get("exp")
+    if isinstance(exp, bool) or not isinstance(exp, (int, float)):
+        return False
+    return float(exp) <= time.time()
+
+
 def extract_token(event: dict[str, Any]) -> str:
     """Read the connection token from the request identity sources."""
     identity_source = event.get("identitySource")
@@ -148,17 +205,27 @@ def get_user_attributes(user: dict[str, Any]) -> dict[str, str]:
     return attributes
 
 
+def _cognito_error_code(exc: BaseException) -> str:
+    """Return the Cognito error code, never the message, which can echo the token."""
+    if isinstance(exc, ClientError):
+        error = (exc.response or {}).get("Error") or {}
+        code = error.get("Code")
+        if isinstance(code, str) and code.strip():
+            return code.strip()
+    return type(exc).__name__
+
+
 def verify_token(token: str) -> dict[str, Any]:
     """Return the Cognito user for ``token``, or an empty mapping when it is invalid."""
     if not token or not USER_POOL_ID:
         return {}
     try:
         return get_cognito().get_user(AccessToken=token)
-    except (ClientError, BotoCoreError):
+    except (ClientError, BotoCoreError) as exc:
         log(
             logger,
             logging.WARNING,
-            "WebSocket token rejected by Cognito",
+            f"WebSocket token rejected by Cognito: {_cognito_error_code(exc)}",
             outcome="denied",
             count=1,
         )
@@ -212,24 +279,29 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     connection_id = str(request_context.get("connectionId") or "")
 
     token = extract_token(event)
+    claims = decode_claims(token)
+    client_id = str(claims.get("client_id") or "").strip()
+    rejected = (
+        claims.get("token_use") != "access"
+        or _expired(claims)
+        or client_id not in allowed_client_ids()
+    )
+    if rejected:
+        log(
+            logger,
+            logging.WARNING,
+            f"Denying connection {connection_id} for a token that cannot open the socket",
+            outcome="denied",
+            count=1,
+        )
+        return deny_connection(event)
+
     user = verify_token(token)
     if not user:
         log(
             logger,
             logging.WARNING,
             f"Denying connection {connection_id} without a verified Cognito token",
-            outcome="denied",
-            count=1,
-        )
-        return deny_connection(event)
-
-    claims = decode_claims(token)
-    client_id = claims.get("client_id")
-    if USER_POOL_CLIENT_ID and client_id != USER_POOL_CLIENT_ID:
-        log(
-            logger,
-            logging.WARNING,
-            f"Denying token issued for unexpected client {client_id}",
             outcome="denied",
             count=1,
         )

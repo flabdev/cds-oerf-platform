@@ -6,8 +6,11 @@ and incident repository integrations as those components become available.
 
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 STAGE_BY_STEP = {
     "OPEN": "OPEN",
@@ -35,6 +38,9 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     """Return predictable state output without performing business side effects."""
     step_name = event["step_name"]
     workflow = deepcopy(event.get("workflow", {}))
+    if step_name not in STAGE_BY_STEP:
+        logger.info("unknown workflow step %s", step_name)
+        return workflow
     workflow["current_stage"] = STAGE_BY_STEP[step_name]
     workflow["last_completed_step"] = step_name
 

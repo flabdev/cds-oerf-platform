@@ -3,9 +3,13 @@
 Classification and workflow correlation are out of scope.
 """
 
-from typing import Literal
+import json
+from datetime import UTC, datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from oerf.platform.storage.dynamo import canonical_e164
 
 Channel = Literal["whatsapp", "sms", "rcs", "email", "dashboard"]
 
@@ -65,7 +69,7 @@ def _normalize_whatsapp(payload: dict[str, object]) -> NormalizedMessage:
     return NormalizedMessage(
         provider_msg_id=message_id.strip(),
         channel="whatsapp",
-        sender=sender.strip(),
+        sender=canonical_e164(sender.strip()),
         received_at=timestamp.strip(),
         text=text,
         type=_message_type(media),
@@ -100,6 +104,93 @@ def _message_type(media: list[MediaMetadata]) -> Literal["text", "image", "audio
     if mime.startswith("audio/"):
         return "audio"
     return "document"
+
+
+def whatsapp_event_body(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Turn an End User Messaging event into the canonical provider body.
+
+    The SQS record is either that canonical body or an SNS notification whose
+    ``Message`` carries ``whatsAppWebhookEntry``. The webhook ``from`` is the
+    digits Meta sends, without ``+``. A status event with no inbound message
+    returns ``None``. Any other body is returned unchanged.
+    """
+
+    event: dict[str, Any] = body
+    raw_message = body.get("Message")
+    if body.get("Type") == "Notification" and isinstance(raw_message, str):
+        parsed = json.loads(raw_message)
+        if not isinstance(parsed, dict):
+            return body
+        event = parsed
+    entry = event.get("whatsAppWebhookEntry")
+    if entry is None:
+        return body
+    webhook = json.loads(entry) if isinstance(entry, str) else entry
+    if not isinstance(webhook, dict):
+        return None
+    message = _first_whatsapp_message(webhook)
+    if message is None:
+        return None
+    sender = message.get("from")
+    message_id = message.get("id") or event.get("messageId")
+    if not isinstance(sender, str) or not isinstance(message_id, str):
+        raise NormalizationError("whatsapp message needs from and id")
+    text = _whatsapp_text(message)
+    received_at = _whatsapp_time(message, event)
+    canonical = {
+        "channel": "whatsapp",
+        "provider_msg_id": message_id.strip(),
+        "sender": canonical_e164(sender),
+        "received_at": received_at,
+        "text": text,
+        "type": "text",
+        "media": [],
+    }
+    context = message.get("context")
+    quoted = context.get("id") if isinstance(context, dict) else None
+    if isinstance(quoted, str) and quoted.strip():
+        canonical["context_msg_id"] = quoted.strip()
+    return canonical
+
+
+def _first_whatsapp_message(webhook: dict[str, Any]) -> dict[str, Any] | None:
+    found: list[dict[str, Any]] = []
+    changes = webhook.get("changes")
+    if isinstance(changes, list):
+        for change in changes:
+            value = change.get("value") if isinstance(change, dict) else None
+            messages = value.get("messages") if isinstance(value, dict) else None
+            if isinstance(messages, list):
+                found.extend(item for item in messages if isinstance(item, dict))
+    value = webhook.get("value")
+    messages = value.get("messages") if isinstance(value, dict) else None
+    if isinstance(messages, list):
+        found.extend(item for item in messages if isinstance(item, dict))
+    if found:
+        return found[0]
+    return None
+
+
+def _whatsapp_text(message: dict[str, Any]) -> str | None:
+    text = message.get("text")
+    if isinstance(text, dict) and isinstance(text.get("body"), str):
+        return text["body"]
+    button = message.get("button")
+    if isinstance(button, dict) and isinstance(button.get("text"), str):
+        return button["text"]
+    return None
+
+
+def _whatsapp_time(message: dict[str, Any], event: dict[str, Any]) -> str:
+    stamp = event.get("message_timestamp")
+    if isinstance(stamp, str) and "T" in stamp:
+        return stamp.strip()
+    raw = message.get("timestamp")
+    if isinstance(raw, str) and raw.strip().isdigit():
+        return datetime.fromtimestamp(int(raw.strip()), UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    raise NormalizationError("whatsapp message needs a timestamp")
 
 
 def _optional_str(value: object) -> str | None:

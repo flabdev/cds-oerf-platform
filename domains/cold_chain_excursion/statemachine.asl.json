@@ -179,13 +179,29 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.decision.has_feasible_options",
-          "BooleanEquals": false,
+          "And": [
+            {
+              "Variable": "$.decision.has_feasible_options",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.decision.has_feasible_options",
+              "BooleanEquals": false
+            }
+          ],
           "Next": "Escalate"
         },
         {
-          "Variable": "$.decision.needs_approval",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.decision.needs_approval",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.decision.needs_approval",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Approval"
         }
       ],
@@ -239,18 +255,42 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.approval.status",
-          "StringEquals": "approved",
+          "And": [
+            {
+              "Variable": "$.approval.status",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.approval.status",
+              "StringEquals": "approved"
+            }
+          ],
           "Next": "SecureFacility"
         },
         {
-          "Variable": "$.approval.status",
-          "StringEquals": "auto_proceed",
+          "And": [
+            {
+              "Variable": "$.approval.status",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.approval.status",
+              "StringEquals": "auto_proceed"
+            }
+          ],
           "Next": "SecureFacility"
         },
         {
-          "Variable": "$.approval.status",
-          "StringEquals": "cancelled",
+          "And": [
+            {
+              "Variable": "$.approval.status",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.approval.status",
+              "StringEquals": "cancelled"
+            }
+          ],
           "Next": "Cancel"
         }
       ],
@@ -296,8 +336,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.facility.accepted",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.facility.accepted",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.facility.accepted",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Act"
         }
       ],
@@ -379,13 +427,29 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.containment.status",
-          "StringEquals": "contained",
+          "And": [
+            {
+              "Variable": "$.containment.status",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.containment.status",
+              "StringEquals": "contained"
+            }
+          ],
           "Next": "RecordContainment"
         },
         {
-          "Variable": "$.containment.status",
-          "StringEquals": "reopened",
+          "And": [
+            {
+              "Variable": "$.containment.status",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.containment.status",
+              "StringEquals": "reopened"
+            }
+          ],
           "Next": "HandleReopen"
         }
       ],
@@ -508,13 +572,29 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.qa.disposition",
-          "StringEquals": "approved",
+          "And": [
+            {
+              "Variable": "$.qa.disposition",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.qa.disposition",
+              "StringEquals": "approved"
+            }
+          ],
           "Next": "Close"
         },
         {
-          "Variable": "$.qa.disposition",
-          "StringEquals": "rejected",
+          "And": [
+            {
+              "Variable": "$.qa.disposition",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.qa.disposition",
+              "StringEquals": "rejected"
+            }
+          ],
           "Next": "HandleReopen"
         }
       ],
@@ -662,23 +742,55 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.incident_state",
-          "StringEquals": "ASSESSING",
+          "And": [
+            {
+              "Variable": "$.incident_state",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.incident_state",
+              "StringEquals": "ASSESSING"
+            }
+          ],
           "Next": "Escalate"
         },
         {
-          "Variable": "$.incident_state",
-          "StringEquals": "AWAITING_APPROVAL",
+          "And": [
+            {
+              "Variable": "$.incident_state",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.incident_state",
+              "StringEquals": "AWAITING_APPROVAL"
+            }
+          ],
           "Next": "Escalate"
         },
         {
-          "Variable": "$.incident_state",
-          "StringEquals": "SECURING_FACILITY",
+          "And": [
+            {
+              "Variable": "$.incident_state",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.incident_state",
+              "StringEquals": "SECURING_FACILITY"
+            }
+          ],
           "Next": "Escalate"
         },
         {
-          "Variable": "$.incident_state",
-          "StringEquals": "IN_TRANSIT",
+          "And": [
+            {
+              "Variable": "$.incident_state",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.incident_state",
+              "StringEquals": "IN_TRANSIT"
+            }
+          ],
           "Next": "Escalate"
         }
       ],
@@ -688,8 +800,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.cancel_requested",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Cancel"
         }
       ],
@@ -803,8 +923,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.cancel_requested",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Cancel"
         }
       ],
@@ -814,8 +942,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.cancel_requested",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Cancel"
         }
       ],
@@ -825,8 +961,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.cancel_requested",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Cancel"
         }
       ],
@@ -836,8 +980,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.cancel_requested",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Cancel"
         }
       ],
@@ -847,8 +999,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.cancel_requested",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Cancel"
         }
       ],
@@ -858,8 +1018,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.cancel_requested",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Cancel"
         }
       ],
@@ -869,8 +1037,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.cancel_requested",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Cancel"
         }
       ],
@@ -880,8 +1056,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.cancel_requested",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Cancel"
         }
       ],
@@ -891,8 +1075,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.cancel_requested",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Cancel"
         }
       ],
@@ -902,8 +1094,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.cancel_requested",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Cancel"
         }
       ],
@@ -913,8 +1113,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.cancel_requested",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Cancel"
         }
       ],
@@ -924,8 +1132,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.cancel_requested",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Cancel"
         }
       ],
@@ -935,8 +1151,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.cancel_requested",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Cancel"
         }
       ],
@@ -946,8 +1170,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.cancel_requested",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Cancel"
         }
       ],

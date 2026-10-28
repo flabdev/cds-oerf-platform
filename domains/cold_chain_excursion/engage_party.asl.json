@@ -20,7 +20,7 @@
       "Type": "Choice",
       "Choices": [
         {"Variable": "$.stop_reason", "IsPresent": true, "Next": "Stopped"},
-        {"Variable": "$.cadence.exhausted", "BooleanEquals": true, "Next": "HasFinalQuestion"},
+        {"And": [{"Variable": "$.cadence.exhausted", "IsPresent": true}, {"Variable": "$.cadence.exhausted", "BooleanEquals": true}], "Next": "HasFinalQuestion"},
         {"Variable": "$.cadence.next_rung", "IsPresent": false, "Next": "HasFinalQuestion"}
       ],
       "Default": "WaitUntilDue"
@@ -32,7 +32,7 @@
     },
     "AwaitReply?": {
       "Type": "Choice",
-      "Choices": [{"Variable": "$.cadence.awaits_reply", "BooleanEquals": false, "Next": "SendOneWay"}],
+      "Choices": [{"And": [{"Variable": "$.cadence.awaits_reply", "IsPresent": true}, {"Variable": "$.cadence.awaits_reply", "BooleanEquals": false}], "Next": "SendOneWay"}],
       "Default": "SendViaRouter"
     },
     "SendOneWay": {
@@ -81,9 +81,9 @@
     "InterpretResult": {
       "Type": "Choice",
       "Choices": [
-        {"Variable": "$.response.intent", "StringEquals": "call_me", "Next": "HandleCallback"},
-        {"Variable": "$.response.intent", "StringEquals": "clarify", "Next": "ResetLadder"},
-        {"Variable": "$.response.valid", "BooleanEquals": true, "Next": "Answered"}
+        {"And": [{"Variable": "$.response.intent", "IsPresent": true}, {"Variable": "$.response.intent", "StringEquals": "call_me"}], "Next": "HandleCallback"},
+        {"And": [{"Variable": "$.response.intent", "IsPresent": true}, {"Variable": "$.response.intent", "StringEquals": "clarify"}], "Next": "ResetLadder"},
+        {"And": [{"Variable": "$.response.valid", "IsPresent": true}, {"Variable": "$.response.valid", "BooleanEquals": true}], "Next": "Answered"}
       ],
       "Default": "Clarify"
     },

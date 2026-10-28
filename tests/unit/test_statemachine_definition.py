@@ -338,6 +338,83 @@ def _definition_with_placeholder_arns(text: str, *, engagement: bool) -> str:
     return text
 
 
+_AWS_SKIP_TOKENS = (
+    "unable to locate credentials",
+    "could not find credentials",
+    "the config profile",
+    "expiredtoken",
+    "token has expired",
+    "error when retrieving token",
+    "invalid choice",
+)
+
+
+def _aws_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["AWS_EC2_METADATA_DISABLED"] = "true"
+    env.setdefault("AWS_REGION", _PLACEHOLDER_REGION)
+    env.setdefault("AWS_DEFAULT_REGION", _PLACEHOLDER_REGION)
+    return env
+
+
+def _aws_output(completed: subprocess.CompletedProcess[str]) -> str:
+    return (completed.stderr or completed.stdout).strip()
+
+
+def _skip_aws_cli(detail: str) -> None:
+    """Skip when this machine's AWS CLI or credentials cannot run the check."""
+
+    lowered = detail.lower()
+    if any(token in lowered for token in _AWS_SKIP_TOKENS):
+        pytest.skip(f"AWS CLI cannot run this check: {detail}")
+
+
+def _run_aws(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["aws", *args, "--region", _PLACEHOLDER_REGION, "--output", "json"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+
+
+def _state_machine_role(env: dict[str, str]) -> str:
+    """A role TestState can assume. CLI 2.15 requires one even for a Choice."""
+
+    listed = _run_aws(["stepfunctions", "list-state-machines"], env)
+    detail = _aws_output(listed)
+    if listed.returncode != 0:
+        _skip_aws_cli(detail)
+        raise AssertionError(detail)
+    machines = json.loads(listed.stdout).get("stateMachines") or []
+    chosen = next(
+        (item for item in machines if item.get("name") == "oerf-cold-chain"),
+        None,
+    )
+    if chosen is None and machines:
+        chosen = machines[0]
+    if not isinstance(chosen, dict) or "stateMachineArn" not in chosen:
+        pytest.skip("no state machine is deployed to supply a TestState role")
+    described = _run_aws(
+        [
+            "stepfunctions",
+            "describe-state-machine",
+            "--state-machine-arn",
+            chosen["stateMachineArn"],
+        ],
+        env,
+    )
+    detail = _aws_output(described)
+    if described.returncode != 0:
+        _skip_aws_cli(detail)
+        raise AssertionError(detail)
+    role = json.loads(described.stdout).get("roleArn")
+    if not isinstance(role, str) or not role.strip():
+        pytest.skip("the state machine has no execution role for TestState")
+    return role
+
+
 def _validate_with_step_functions(definition: str, label: str) -> dict:
     if shutil.which("aws") is None:
         pytest.skip("AWS CLI is not on PATH; install aws to validate the state machines")
@@ -346,45 +423,21 @@ def _validate_with_step_functions(definition: str, label: str) -> dict:
     ) as handle:
         handle.write(definition)
         definition_path = handle.name
-    env = os.environ.copy()
-    env["AWS_EC2_METADATA_DISABLED"] = "true"
-    env.setdefault("AWS_REGION", _PLACEHOLDER_REGION)
-    env.setdefault("AWS_DEFAULT_REGION", _PLACEHOLDER_REGION)
-    completed = subprocess.run(
+    completed = _run_aws(
         [
-            "aws",
             "stepfunctions",
             "validate-state-machine-definition",
             "--definition",
             f"file://{definition_path}",
             "--type",
             "STANDARD",
-            "--region",
-            _PLACEHOLDER_REGION,
-            "--output",
-            "json",
         ],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
+        _aws_env(),
     )
     Path(definition_path).unlink(missing_ok=True)
     if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout).strip()
-        lowered = detail.lower()
-        if any(
-            token in lowered
-            for token in (
-                "unable to locate credentials",
-                "could not find credentials",
-                "the config profile",
-                "expiredtoken",
-                "token has expired",
-                "error when retrieving token",
-            )
-        ):
-            pytest.skip(f"AWS CLI is not configured: {detail}")
+        detail = _aws_output(completed)
+        _skip_aws_cli(detail)
         raise AssertionError(f"{label}: AWS CLI failed:\n{detail}")
     body = json.loads(completed.stdout)
     # CLI 2.36 reports ``result`` OK/FAIL. The API field is ``validationStatus``.
@@ -414,6 +467,63 @@ def test_step_functions_accepts_both_definitions() -> None:
         _validate_with_step_functions(text, path.name)
 
 
+def _invoke_test_state(state: dict, payload: str) -> dict:
+    """Run one Choice through the Step Functions TestState API."""
+
+    if shutil.which("aws") is None:
+        pytest.skip("AWS CLI is not on PATH; install aws to test the choice state")
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".json", delete=False, encoding="utf-8"
+    ) as handle:
+        json.dump(state, handle)
+        definition_path = handle.name
+    env = _aws_env()
+    args = [
+        "stepfunctions",
+        "test-state",
+        "--definition",
+        f"file://{definition_path}",
+        "--input",
+        payload,
+    ]
+    completed = _run_aws(args, env)
+    detail = _aws_output(completed)
+    if completed.returncode != 0 and "--role-arn" in detail and "required" in detail:
+        completed = _run_aws([*args, "--role-arn", _state_machine_role(env)], env)
+        detail = _aws_output(completed)
+    Path(definition_path).unlink(missing_ok=True)
+    if completed.returncode != 0:
+        _skip_aws_cli(detail)
+        raise AssertionError(detail)
+    return json.loads(completed.stdout)
+
+
+@pytest.mark.aws
+def test_cancel_after_open_without_the_field_takes_the_default() -> None:
+    """TestState follows Default when cancel_requested is absent. It must not error."""
+
+    body = _invoke_test_state(load_definition()["States"]["CancelAfterOPEN?"], "{}")
+    assert body.get("status") == "SUCCEEDED", body
+    assert body.get("nextState") == "CancelRequested?"
+    assert body.get("error") in (None, "")
+
+
+@pytest.mark.aws
+def test_interpret_result_without_a_response_takes_clarify() -> None:
+    """A reply with no response object takes Clarify. It must not error."""
+
+    definition = json.loads(
+        (ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8")
+    )
+    body = _invoke_test_state(
+        definition["States"]["InterpretResult"],
+        json.dumps({"reply": {"text": "Running"}}),
+    )
+    assert body.get("status") == "SUCCEEDED", body
+    assert body.get("nextState") == "Clarify"
+    assert body.get("error") in (None, "")
+
+
 def test_human_approval_uses_bounded_task_token_and_timeout_route() -> None:
     states = load_definition()["States"]
     approval = states["Approval"]
@@ -435,7 +545,7 @@ def test_cancel_and_failure_routes_cover_canonical_terminal_transitions() -> Non
     assert states["Cancel"]["Parameters"]["Payload"]["step_name"] == "Cancel"
     failure_route = states["FailureRoute"]
     escalation_sources = {
-        choice["StringEquals"]
+        _string_equals(choice)
         for choice in failure_route["Choices"]
         if choice["Next"] == "Escalate"
     }
@@ -473,25 +583,19 @@ def test_cancellation_is_checked_after_work_steps_and_infeasible_assessment_esca
         gate = states[step]["Next"]
         assert gate.startswith("CancelAfter"), step
         assert states[gate]["Choices"] == [
-            {
-                "Variable": "$.cancel_requested",
-                "BooleanEquals": True,
-                "Next": "Cancel",
-            }
+            _when_present("$.cancel_requested", "BooleanEquals", True, "Cancel")
         ]
     assert states["CancelAfterAssess?"]["Default"] == "EngageDriverDiagnosis"
-    assert states["NeedApproval?"]["Choices"][0] == {
-        "Variable": "$.decision.has_feasible_options",
-        "BooleanEquals": False,
-        "Next": "Escalate",
-    }
+    assert states["NeedApproval?"]["Choices"][0] == _when_present(
+        "$.decision.has_feasible_options", "BooleanEquals", False, "Escalate"
+    )
 
 
 def test_human_approval_and_cancellation_decisions_are_explicit() -> None:
     states = load_definition()["States"]
 
     assert any(
-        choice["StringEquals"] == "cancelled" and choice["Next"] == "Cancel"
+        _string_equals(choice) == "cancelled" and choice["Next"] == "Cancel"
         for choice in states["ApprovalDecision"]["Choices"]
     )
     assert states["QADecision"]["Default"] == "FailureRoute"
@@ -543,11 +647,9 @@ def test_contained_branch_reaches_success() -> None:
         else:
             break
 
-    assert states["ContainmentDecision"]["Choices"][0] == {
-        "Variable": "$.containment.status",
-        "StringEquals": "contained",
-        "Next": "RecordContainment",
-    }
+    assert states["ContainmentDecision"]["Choices"][0] == _when_present(
+        "$.containment.status", "StringEquals", "contained", "RecordContainment"
+    )
     assert states["RecordContainment"]["Next"] == "CancelAfterRecordContainment?"
     assert states["CancelAfterRecordContainment?"]["Default"] == "BeginDisposition"
     assert states["BeginDisposition"]["Next"] == "CancelAfterBeginDisposition?"
@@ -617,23 +719,83 @@ INITIAL_EVENT = {
 }
 
 
-def resolve(data: dict, path: str) -> object:
+class StatesRuntime(Exception):
+    """A Choice comparison read a path the input does not contain.
+
+    Step Functions raises this. ``IsPresent`` is the comparison that does not.
+    """
+
+
+def _path_present(data: dict, path: str) -> bool:
     node: object = data
     for part in path.lstrip("$.").split("."):
         if not isinstance(node, dict) or part not in node:
-            return None
+            return False
+        node = node[part]
+    return True
+
+
+def _path_value(data: dict, path: str) -> object:
+    node: object = data
+    for part in path.lstrip("$.").split("."):
+        if not isinstance(node, dict) or part not in node:
+            raise StatesRuntime(
+                f"Invalid path '{path}': The choice state's condition path "
+                "references an invalid value."
+            )
         node = node[part]
     return node
 
 
+def _comparison_holds(rule: dict, data: dict) -> bool:
+    """Evaluate one Choice rule. ``And`` stops at the first false condition."""
+
+    if "And" in rule:
+        return all(_comparison_holds(item, data) for item in rule["And"])
+    if "Or" in rule:
+        return any(_comparison_holds(item, data) for item in rule["Or"])
+    if "Not" in rule:
+        return not _comparison_holds(rule["Not"], data)
+    variable = rule["Variable"]
+    if "IsPresent" in rule:
+        return _path_present(data, variable) is rule["IsPresent"]
+    if not _path_present(data, variable):
+        raise StatesRuntime(
+            f"Invalid path '{variable}': The choice state's condition path "
+            "references an invalid value."
+        )
+    actual = _path_value(data, variable)
+    if "BooleanEquals" in rule:
+        return actual == rule["BooleanEquals"]
+    if "StringEquals" in rule:
+        return actual == rule["StringEquals"]
+    raise AssertionError(f"unsupported choice comparison: {sorted(rule)}")
+
+
 def evaluate_choice(state: dict, data: dict) -> str:
     for choice in state["Choices"]:
-        actual = resolve(data, choice["Variable"])
-        if "BooleanEquals" in choice and actual == choice["BooleanEquals"]:
-            return choice["Next"]
-        if "StringEquals" in choice and actual == choice["StringEquals"]:
+        if _comparison_holds(choice, data):
             return choice["Next"]
     return state["Default"]
+
+
+def _string_equals(choice: dict) -> str | None:
+    if "StringEquals" in choice:
+        return choice["StringEquals"]
+    for item in choice.get("And", []):
+        if "StringEquals" in item:
+            return item["StringEquals"]
+    return None
+
+
+def _when_present(variable: str, comparison: str, expected: object, nxt: str) -> dict:
+    return {
+        "And": [
+            {"Variable": variable, "IsPresent": True},
+            {"Variable": variable, comparison: expected},
+        ],
+        "Next": nxt,
+    }
 
 
 def simulate(event: dict, handler_fn=handler, max_steps: int = 40) -> tuple:
@@ -701,6 +863,118 @@ def simulate(event: dict, handler_fn=handler, max_steps: int = 40) -> tuple:
             raise AssertionError(f"unsupported state type {state['Type']}")
 
     raise AssertionError("simulation did not terminate")
+
+
+def test_missing_cancel_flag_still_reaches_closed() -> None:
+    event = dict(INITIAL_EVENT)
+    del event["cancel_requested"]
+
+    outcome, final = simulate(event)
+
+    assert outcome == "WorkflowComplete"
+    assert final["incident_state"] == "CLOSED"
+
+
+def test_unguarded_choice_on_a_missing_path_raises() -> None:
+    state = {
+        "Type": "Choice",
+        "Choices": [
+            {"Variable": "$.cancel_requested", "BooleanEquals": True, "Next": "Cancel"}
+        ],
+        "Default": "GatherContext",
+    }
+
+    with pytest.raises(StatesRuntime, match=r"Invalid path '\$\.cancel_requested'"):
+        evaluate_choice(state, {})
+
+
+def test_present_guard_on_a_missing_path_takes_the_default() -> None:
+    state = load_definition()["States"]["CancelAfterOPEN?"]
+
+    assert evaluate_choice(state, {}) == "CancelRequested?"
+
+
+def test_engagement_missing_paths_take_the_safe_branch() -> None:
+    definition = json.loads(
+        (ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8")
+    )
+    states = definition["States"]
+
+    # No exhausted flag, and a rung is still planned: keep waiting, do not exhaust.
+    assert evaluate_choice(states["CheckStop"], {"cadence": {"next_rung": 1}}) == "WaitUntilDue"
+    # No awaits_reply flag: wait for a person instead of sending one-way.
+    assert evaluate_choice(states["AwaitReply?"], {"cadence": {}}) == "SendViaRouter"
+    # A reply that never produced response: clarify, do not treat it as valid.
+    assert (
+        evaluate_choice(states["InterpretResult"], {"reply": {"text": "Running"}}) == "Clarify"
+    )
+
+
+def test_ph2841_engagement_happy_path_reaches_answered() -> None:
+    """The strict walker follows a Running reply to Answered. A missing path raises."""
+
+    from oerf.platform.cadence.engage import handler as cadence_handler
+    from oerf.platform.cadence.interpret import handler as interpret_handler
+
+    definition = json.loads(
+        (ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8")
+    )
+    states = definition["States"]
+    current = definition["StartAt"]
+    data: dict = {
+        "tenant_id": "t1",
+        "incident_id": "INC-000001",
+        "shipment_id": "PH-2841",
+        "engagement_id": "ENG-INC-000001-driver-diagnose",
+        "role": "driver",
+        "ask": "diagnose",
+        "policy_id": "critical_field",
+        "facts": {"shipment_id": "PH-2841"},
+    }
+    visited: list[str] = []
+    for _ in range(20):
+        visited.append(current)
+        state = states[current]
+        if state["Type"] == "Pass" and state.get("End"):
+            break
+        if state["Type"] == "Choice":
+            current = evaluate_choice(state, data)
+            continue
+        if state["Type"] == "Wait":
+            current = state["Next"]
+            continue
+        if state["Type"] != "Task":
+            raise AssertionError(state["Type"])
+        if state["Resource"].endswith(".waitForTaskToken"):
+            data = dict(data)
+            data["reply"] = {"text": "Running"}
+            current = state["Next"]
+            continue
+        step_name = state["Parameters"]["Payload"]["step_name"]
+        payload = {"step_name": step_name, "workflow": data}
+        if step_name in {"EngagementComputeNextRung", "EngagementAdvanceRung"}:
+            data = cadence_handler(payload, None)
+        elif step_name == "EngagementInterpret":
+            data = interpret_handler(payload, None)
+        else:
+            raise AssertionError(step_name)
+        current = state["Next"]
+    else:
+        raise AssertionError("engagement simulation did not terminate")
+
+    assert visited == [
+        "ComputeNextRung",
+        "CheckStop",
+        "WaitUntilDue",
+        "AwaitReply?",
+        "SendViaRouter",
+        "Interpret",
+        "InterpretResult",
+        "Answered",
+    ]
+    assert data["response"]["intent"] == "unit_running"
+    assert data["response"]["valid"] is True
+    assert data["shipment_id"] == "PH-2841"
 
 
 def test_cancelled_input_terminates_without_running_business_steps() -> None:
