@@ -21,6 +21,9 @@ cdk.out/
 htmlcov/
 .pytest_cache/
 
+# Local notes and screenshots
+DELETE-ME/
+
 # Build
 build/
 dist/
