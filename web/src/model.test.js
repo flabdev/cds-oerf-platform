@@ -8,6 +8,7 @@ import {
   displayName,
   incidentListView,
   incidentView,
+  matchesSearch,
   needsWaitingEngagement,
   oneDecimal,
   rankingNote,
@@ -16,6 +17,17 @@ import {
   terminalNote,
 } from "./model.js";
 import { presentIncident } from "./session.js";
+
+test("search matches states written with spaces and every typed word", () => {
+  const row = { shipment_id: "PH-2841", incident_id: "INC-000001", state: "IN_TRANSIT" };
+  assert.equal(matchesSearch(row, "in transit"), true);
+  assert.equal(matchesSearch(row, "IN TRANSIT"), true);
+  assert.equal(matchesSearch(row, "in_transit"), true);
+  assert.equal(matchesSearch(row, "transit ph-2841"), true);
+  assert.equal(matchesSearch(row, "ph 2841"), true);
+  assert.equal(matchesSearch(row, "transit cancelled"), false);
+  assert.equal(matchesSearch(row, "   "), true);
+});
 
 test("signed-out and tenant-admin sessions", () => {
   assert.equal(displayName(null), "Guest");

@@ -72,8 +72,41 @@ export function mergeDeskRows(current, accepted) {
   if (typeof row.stage === "string" && row.stage.trim()) {
     merged.stage = row.stage;
   }
+  if (typeof row.shipment_id === "string" && row.shipment_id.trim()) {
+    merged.shipment_id = row.shipment_id.trim();
+  }
   if (typeof row.updated_at === "string" || Number.isFinite(row.updated_at)) {
     merged.updated_at = row.updated_at;
+  }
+  if (row.latest_reading && validReading(row.latest_reading)) {
+    const reading = {
+      ts: row.latest_reading.ts,
+      temperature_c: Number(row.latest_reading.temperature_c),
+    };
+    const readings = Array.isArray(merged.readings) ? merged.readings.slice() : [];
+    const seen = readings.some((item) => item?.ts === reading.ts && Number(item?.temperature_c) === reading.temperature_c);
+    if (!seen) {
+      readings.push(reading);
+    }
+    merged.readings = readings;
+  }
+  if (Array.isArray(row.timeline)) {
+    merged.transitions = row.timeline.map(toTransition).filter(Boolean);
+  }
+  if (typeof row.to_state === "string" && row.to_state.trim()) {
+    const event = toTransition({
+      at: typeof row.updated_at === "string" ? row.updated_at : "",
+      from_state: row.from_state,
+      to_state: row.to_state,
+    });
+    if (event) {
+      const transitions = Array.isArray(merged.transitions) ? merged.transitions.slice() : [];
+      const key = `${event.at}|${event.from_state}|${event.to_state}`;
+      if (!transitions.some((item) => `${item.at}|${item.from_state}|${item.to_state}` === key)) {
+        transitions.push(event);
+      }
+      merged.transitions = transitions;
+    }
   }
   const next = current.slice();
   next[index] = merged;
@@ -91,6 +124,33 @@ export async function absorbDeskEvent(current, accepted, fetchIncident) {
   }
   const fetched = await fetchIncident(incidentId);
   return insertFetchedRow(current, fetched);
+}
+
+export function replaceIncidentRow(current, detail) {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) {
+    return current;
+  }
+  if (typeof detail.incident_id !== "string" || !detail.incident_id.trim()) {
+    return current;
+  }
+  if (!Array.isArray(current)) {
+    return [detail];
+  }
+  const index = current.findIndex((item) => item.incident_id === detail.incident_id);
+  if (index < 0) {
+    return [...current, detail];
+  }
+  const previous = current[index];
+  if (
+    Number.isInteger(previous.version) &&
+    Number.isInteger(detail.version) &&
+    detail.version < previous.version
+  ) {
+    return current;
+  }
+  const next = current.slice();
+  next[index] = { ...previous, ...detail };
+  return next;
 }
 
 export function insertFetchedRow(current, fetched) {
@@ -190,6 +250,20 @@ function newerVersion(incoming, current) {
     return true;
   }
   return incoming > current;
+}
+
+function toTransition(entry) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return null;
+  }
+  const to = typeof entry.to_state === "string" && entry.to_state.trim()
+    ? entry.to_state.trim()
+    : (typeof entry.state === "string" ? entry.state.trim() : "");
+  const from = typeof entry.from_state === "string" ? entry.from_state.trim() : "";
+  if (!to && !from) {
+    return null;
+  }
+  return { at: typeof entry.at === "string" ? entry.at : "", from_state: from, to_state: to };
 }
 
 function text(value) {
