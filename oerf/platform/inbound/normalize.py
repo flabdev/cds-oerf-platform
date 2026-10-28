@@ -153,44 +153,145 @@ def whatsapp_event_body(body: dict[str, Any]) -> dict[str, Any] | None:
     return canonical
 
 
-def _first_whatsapp_message(webhook: dict[str, Any]) -> dict[str, Any] | None:
-    found: list[dict[str, Any]] = []
-    changes = webhook.get("changes")
-    if isinstance(changes, list):
+def _change_values(webhook: dict[str, Any]) -> list[dict[str, Any]]:
+    """Values from an entry object or a full Meta webhook that wraps ``entry``."""
+
+    blocks: list[dict[str, Any]] = []
+    if isinstance(webhook.get("changes"), list):
+        blocks.append(webhook)
+    entries = webhook.get("entry")
+    if isinstance(entries, list):
+        blocks.extend(item for item in entries if isinstance(item, dict))
+    values: list[dict[str, Any]] = []
+    for block in blocks:
+        changes = block.get("changes")
+        if not isinstance(changes, list):
+            continue
         for change in changes:
             value = change.get("value") if isinstance(change, dict) else None
-            messages = value.get("messages") if isinstance(value, dict) else None
-            if isinstance(messages, list):
-                found.extend(item for item in messages if isinstance(item, dict))
-    value = webhook.get("value")
-    messages = value.get("messages") if isinstance(value, dict) else None
-    if isinstance(messages, list):
-        found.extend(item for item in messages if isinstance(item, dict))
-    if found:
-        return found[0]
+            if isinstance(value, dict):
+                values.append(value)
+    direct = webhook.get("value")
+    if isinstance(direct, dict):
+        values.append(direct)
+    return values
+
+
+def _first_whatsapp_message(webhook: dict[str, Any]) -> dict[str, Any] | None:
+    for value in _change_values(webhook):
+        messages = value.get("messages")
+        if not isinstance(messages, list):
+            continue
+        for item in messages:
+            if isinstance(item, dict):
+                return item
     return None
 
 
+def whatsapp_status_ids(body: dict[str, Any]) -> list[tuple[str, str]]:
+    """Wamid and recipient from a status-only End User Messaging event.
+
+    ``statuses[].id`` is the Meta wamid a later quoted reply puts on
+    ``context.id``. An inbound message returns an empty list.
+    """
+
+    webhook = _webhook_entry(body)
+    if webhook is None:
+        return []
+    found: list[tuple[str, str]] = []
+    for value in _change_values(webhook):
+        statuses = value.get("statuses")
+        if not isinstance(statuses, list):
+            continue
+        for status in statuses:
+            if not isinstance(status, dict):
+                continue
+            wamid = status.get("id")
+            recipient = status.get("recipient_id")
+            if not isinstance(wamid, str) or not wamid.strip():
+                continue
+            if not isinstance(recipient, str) or not recipient.strip():
+                continue
+            found.append((wamid.strip(), canonical_e164(recipient)))
+    return found
+
+
+def _webhook_entry(body: dict[str, Any]) -> dict[str, Any] | None:
+    """The decoded ``whatsAppWebhookEntry``, or None when the body is not one."""
+
+    event: dict[str, Any] = body
+    raw_message = body.get("Message")
+    if body.get("Type") == "Notification" and isinstance(raw_message, str):
+        parsed = json.loads(raw_message)
+        if not isinstance(parsed, dict):
+            return None
+        event = parsed
+    entry = event.get("whatsAppWebhookEntry")
+    if entry is None:
+        return None
+    webhook = json.loads(entry) if isinstance(entry, str) else entry
+    if not isinstance(webhook, dict):
+        return None
+    return webhook
+
+
 def _whatsapp_text(message: dict[str, Any]) -> str | None:
-    text = message.get("text")
-    if isinstance(text, dict) and isinstance(text.get("body"), str):
-        return text["body"]
+    """The reply body Interpret reads. Button labels win over a free-text body.
+
+    A template quick reply is ``button.text`` / ``button.payload`` (``Running``,
+    ``Stopped``). An interactive reply is ``button_reply.title`` / ``id``.
+    """
+
+    candidates: list[object] = []
     button = message.get("button")
-    if isinstance(button, dict) and isinstance(button.get("text"), str):
-        return button["text"]
+    if isinstance(button, dict):
+        candidates.extend((button.get("text"), button.get("payload")))
+    interactive = message.get("interactive")
+    if isinstance(interactive, dict):
+        for key in ("button_reply", "list_reply"):
+            reply = interactive.get(key)
+            if isinstance(reply, dict):
+                candidates.extend((reply.get("title"), reply.get("id")))
+    text = message.get("text")
+    if isinstance(text, dict):
+        candidates.append(text.get("body"))
+    elif isinstance(text, str):
+        candidates.append(text)
+    for value in candidates:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
     return None
 
 
 def _whatsapp_time(message: dict[str, Any], event: dict[str, Any]) -> str:
-    stamp = event.get("message_timestamp")
-    if isinstance(stamp, str) and "T" in stamp:
-        return stamp.strip()
-    raw = message.get("timestamp")
-    if isinstance(raw, str) and raw.strip().isdigit():
-        return datetime.fromtimestamp(int(raw.strip()), UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if isinstance(raw, str) and raw.strip():
-        return raw.strip()
+    for value in (event.get("message_timestamp"), message.get("timestamp")):
+        iso = _iso_timestamp(value)
+        if iso is not None:
+            return iso
+        unix = _unix_timestamp(value)
+        if unix is not None:
+            return unix
     raise NormalizationError("whatsapp message needs a timestamp")
+
+
+def _iso_timestamp(value: object) -> str | None:
+    if isinstance(value, str) and "T" in value and value.strip():
+        return value.strip()
+    return None
+
+
+def _unix_timestamp(value: object) -> str | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        number = int(value.strip())
+    else:
+        return None
+    if number < 0:
+        return None
+    return datetime.fromtimestamp(number, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _optional_str(value: object) -> str | None:

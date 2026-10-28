@@ -392,12 +392,105 @@ def test_expired_task_token_is_acknowledged_without_a_second_call(setup_inbound)
         {"Error": {"Code": "InvalidToken", "Message": "invalid token"}}, "SendTaskSuccess"
     )
 
-    assert process_message(_provider(), deps) == "resumed"
+    assert process_message(_provider(), deps) == "late"
 
     assert len(callbacks.calls) == 1
     closed = engagements.get(opened.tenant_id, opened.incident_id, opened.engagement_id)
     assert closed is not None and closed.status != "WAITING"
     assert process_message(_provider("incoming-2"), deps) == "ignored"
+
+
+@pytest.mark.parametrize("code", ["TaskTimedOut", "TaskDoesNotExist", "InvalidToken"])
+def test_a_late_token_is_acknowledged_and_named(
+    setup_inbound, code: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    deps, engagements, _registry, callbacks, opened = setup_inbound
+    callbacks.error = ClientError(
+        {"Error": {"Code": code, "Message": "secret-task-token"}},
+        "SendTaskSuccess",
+    )
+    configure_dependencies(deps)
+    body = json.dumps(_provider(text="Running"))
+    try:
+        result = handler({"Records": [{"messageId": "sqs-late", "body": body}]}, None)
+    finally:
+        configure_dependencies(None)
+
+    text = capsys.readouterr().out
+    assert result == {"batchItemFailures": []}
+    assert f"late reply, token expired {code}" in text
+    assert "secret-task-token" not in text
+    assert "Running" not in text
+    closed = engagements.get(opened.tenant_id, opened.incident_id, opened.engagement_id)
+    assert closed is not None and closed.status != "WAITING"
+
+
+def test_a_throttled_callback_is_retried(setup_inbound) -> None:
+    deps, engagements, _registry, callbacks, opened = setup_inbound
+    callbacks.error = ClientError(
+        {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
+        "SendTaskSuccess",
+    )
+    configure_dependencies(deps)
+    body = json.dumps(_provider())
+    try:
+        failed = handler({"Records": [{"messageId": "sqs-throttle", "body": body}]}, None)
+        callbacks.error = None
+        retried = handler({"Records": [{"messageId": "sqs-throttle", "body": body}]}, None)
+    finally:
+        configure_dependencies(None)
+
+    assert failed == {"batchItemFailures": [{"itemIdentifier": "sqs-throttle"}]}
+    assert retried == {"batchItemFailures": []}
+    waiting = engagements.get(opened.tenant_id, opened.incident_id, opened.engagement_id)
+    assert waiting is not None and waiting.status == "ANSWERED"
+
+
+def test_a_rejected_callback_is_acknowledged_without_retry(
+    setup_inbound, capsys: pytest.CaptureFixture[str]
+) -> None:
+    deps, engagements, _registry, callbacks, opened = setup_inbound
+    callbacks.error = ClientError(
+        {
+            "Error": {"Code": "ValidationException", "Message": "bad output secret-task-token"},
+            "ResponseMetadata": {"HTTPStatusCode": 400},
+        },
+        "SendTaskSuccess",
+    )
+    configure_dependencies(deps)
+    body = json.dumps(_provider(text="Running"))
+    try:
+        result = handler({"Records": [{"messageId": "sqs-reject", "body": body}]}, None)
+    finally:
+        configure_dependencies(None)
+
+    text = capsys.readouterr().out
+    assert result == {"batchItemFailures": []}
+    assert "error=ClientError" in text
+    assert "bad output" not in text
+    assert "secret-task-token" not in text
+    assert "Running" not in text
+    waiting = engagements.get(opened.tenant_id, opened.incident_id, opened.engagement_id)
+    assert waiting is not None and waiting.status == "WAITING"
+
+
+def test_a_callback_failure_logs_the_exception_class_only(
+    setup_inbound, capsys: pytest.CaptureFixture[str]
+) -> None:
+    deps, _engagements, _registry, callbacks, _opened = setup_inbound
+    callbacks.error = RuntimeError("boom Running")
+    configure_dependencies(deps)
+    body = json.dumps(_provider(text="Running"))
+    try:
+        result = handler({"Records": [{"messageId": "sqs-class", "body": body}]}, None)
+    finally:
+        configure_dependencies(None)
+
+    text = capsys.readouterr().out
+    assert result == {"batchItemFailures": [{"itemIdentifier": "sqs-class"}]}
+    assert "error=RuntimeError" in text
+    assert "boom" not in text
+    assert "Running" not in text
 
 
 def test_a_failed_callback_releases_the_dedupe_id_for_retry(setup_inbound) -> None:

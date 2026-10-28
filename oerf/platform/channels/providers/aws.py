@@ -5,16 +5,36 @@ from __future__ import annotations
 from oerf.platform.channels.providers.base import ProviderResult
 
 
+def _message_ids(result: dict) -> tuple[str, ...]:
+    found: list[str] = []
+    raw = result.get("message_ids")
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            if isinstance(item, str) and item and item not in found:
+                found.append(item)
+    primary = result.get("message_id")
+    if isinstance(primary, str) and primary and primary not in found:
+        found.insert(0, primary)
+    return tuple(found)
+
+
 def _from_legacy(result: dict) -> ProviderResult:
+    ids = _message_ids(result)
+    primary = ids[0] if ids else None
     if result.get("status") == "SIMULATED":
         return ProviderResult(
             delivered=False,
-            provider_msg_id=result.get("message_id"),
+            provider_msg_id=primary,
+            provider_msg_ids=ids,
             reason="simulated",
             simulated=True,
         )
     if result.get("success"):
-        return ProviderResult(delivered=True, provider_msg_id=result.get("message_id"))
+        return ProviderResult(
+            delivered=True,
+            provider_msg_id=primary,
+            provider_msg_ids=ids,
+        )
     return ProviderResult(delivered=False, reason=str(result.get("error") or "delivery_failed"))
 
 

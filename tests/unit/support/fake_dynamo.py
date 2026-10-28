@@ -72,6 +72,9 @@ class FakeDynamoClient:
             raise client_error("ValidationException")
         pk = ExpressionAttributeValues[":pk"]["S"]
         prefix = ExpressionAttributeValues[":prefix"]["S"]
+        # DynamoDB rejects begins_with with an empty string.
+        if prefix == "":
+            raise client_error("ValidationException")
         with self._guard:
             found = [
                 _copy(item)
