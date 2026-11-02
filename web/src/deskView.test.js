@@ -148,6 +148,20 @@ test("allowance remaining ticks with the clock and stops at zero", () => {
   assert.equal(spent.kpis.allowance.remaining, 0);
   assert.equal(spent.kpis.allowance.level, "spent");
   assert.equal(spent.options.every((option) => option.feasible === false), true);
+  const contained = {
+    ...item,
+    state: "CONTAINED",
+    timeline: [{ at: "2026-10-28T14:10:00Z", from_state: "VERIFYING", to_state: "CONTAINED" }],
+  };
+  const stillOpen = buildDesk(contained, Date.parse("2026-10-28T14:20:00Z"));
+  assert.equal(stillOpen.kpis.allowance.remaining, 25);
+  assert.notEqual(stillOpen.kpis.allowance.remaining, 35);
+  const closed = buildDesk({
+    ...item,
+    state: "CLOSED",
+    timeline: [{ at: "2026-10-28T14:10:00Z", from_state: "CONTAINED", to_state: "CLOSED" }],
+  }, Date.parse("2026-10-28T14:20:00Z"));
+  assert.equal(closed.kpis.allowance.remaining, 35);
 });
 
 test("repeated diagnosing events collapse to one activity line", () => {

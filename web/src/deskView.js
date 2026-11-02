@@ -542,7 +542,7 @@ function elapsedLabel(item, now) {
 
 function freezeAt(item, transitions) {
   const name = incidentState(item?.state);
-  if (name !== "CANCELLED" && name !== "CLOSED" && name !== "CONTAINED") {
+  if (name !== "CANCELLED" && name !== "CLOSED") {
     return null;
   }
   const event = [...transitions].reverse().find((entry) => incidentState(entry.to_state) === name);
