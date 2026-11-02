@@ -1,8 +1,22 @@
 name: Deploy OERF
 
+# Develop copy of deploy.yml. It deploys only the dev stage (stacks named *-dev)
+# from develop. main keeps its own copy of this file unchanged.
+# Run it from Actions > Deploy OERF > Run workflow > Use workflow from: develop.
+# Until the dev stage is first set up, feature/dev-stage-environment may also
+# deploy. Remove that branch here and from the dev environment's branch rules in
+# the PR that merges it into develop.
+# The real guard is outside this file: the dev environment's branch rules and a
+# dev deploy role that can change only stacks named *-dev.
+
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: diff = read-only change set; deploy = cdk deploy
+        type: choice
+        options: [diff, deploy]
+        default: diff
       agentcore:
         description: Deploy the AgentCore runtime (builds the ARM64 image)
         type: boolean
@@ -15,26 +29,14 @@ on:
         description: Turn on live channel and Bedrock calls
         type: boolean
         default: false
-      waba_id:
-        description: WhatsApp Business Account id (waba-...). Empty uses repository variable WABA_ID.
-        type: string
-        default: ""
       seed_demo_devices:
         description: Write demo DEVICE rows from the seed files
         type: boolean
         default: false
-      phone_number_id:
-        description: WhatsApp phone number id. Empty uses repository variable WA_PHONE_NUMBER_ID.
-        type: string
-        default: ""
-      alarm_email:
-        description: Alarm topic email. Empty uses repository variable ALARM_EMAIL.
-        type: string
-        default: ""
 
-# One in-flight deploy for this region. A second run waits.
+# One in-flight deploy per stage. main uses cdk-deploy-us-east-1.
 concurrency:
-  group: cdk-deploy-us-east-1
+  group: cdk-deploy-us-east-1-dev
   cancel-in-progress: false
 
 permissions:
@@ -42,8 +44,11 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy to AWS via CDK
+    name: Deploy dev stage via CDK
     runs-on: ubuntu-latest
+    # The OIDC subject becomes repo:<org>/<repo>:environment:dev.
+    # OerfGitHubDeployRole-dev trusts only that subject.
+    environment: dev
     permissions:
       id-token: write
       contents: read
@@ -52,26 +57,36 @@ jobs:
         shell: bash
 
     steps:
-      - name: Require main
+      - name: Require develop
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
-            echo "::error::CDK deploy runs only for refs/heads/main."
-            exit 1
-          fi
+          case "${GITHUB_REF}" in
+            refs/heads/develop) ;;
+            # Temporary: the branch that sets up the dev stage. Remove on merge.
+            refs/heads/feature/dev-stage-environment) ;;
+            *)
+              echo "::error::The dev stage deploys from develop only."
+              exit 1
+              ;;
+          esac
+          echo "Deploying ${GITHUB_REF_NAME} to the dev stage" >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Require deploy repository variables
+      - name: Require deploy variables
         env:
           AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
           DEPLOY_ROLE_NAME: ${{ vars.DEPLOY_ROLE_NAME }}
         run: |
           set -euo pipefail
           if [[ ! "${AWS_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]]; then
-            echo "::error::Repository variable AWS_ACCOUNT_ID must be a 12-digit account id."
+            echo "::error::Variable AWS_ACCOUNT_ID must be a 12-digit account id."
             exit 1
           fi
           if [[ ! "${DEPLOY_ROLE_NAME}" =~ ^[A-Za-z0-9+=,.@_-]{1,64}$ ]]; then
-            echo "::error::Repository variable DEPLOY_ROLE_NAME must be an IAM role name."
+            echo "::error::Environment variable DEPLOY_ROLE_NAME (dev) must be an IAM role name."
+            exit 1
+          fi
+          if [[ "${DEPLOY_ROLE_NAME}" != *-dev ]]; then
+            echo "::error::DEPLOY_ROLE_NAME must be the dev role (ends in -dev), not main's role."
             exit 1
           fi
 
@@ -117,49 +132,82 @@ jobs:
           DASHBOARD: ${{ (inputs.dashboard == true || inputs.dashboard == 'true') && 'true' || 'false' }}
           CHANNELS_LIVE: ${{ (inputs.channels_live == true || inputs.channels_live == 'true') && 'true' || 'false' }}
           SEED_DEMO_DEVICES: ${{ (inputs.seed_demo_devices == true || inputs.seed_demo_devices == 'true') && 'true' || 'false' }}
-          WABA_ID: ${{ inputs.waba_id }}
-          WABA_ID_VAR: ${{ vars.WABA_ID }}
-          PHONE_NUMBER_ID: ${{ inputs.phone_number_id }}
-          PHONE_NUMBER_ID_VAR: ${{ vars.WA_PHONE_NUMBER_ID }}
-          ALARM_EMAIL: ${{ inputs.alarm_email }}
-          ALARM_EMAIL_VAR: ${{ vars.ALARM_EMAIL }}
+          PHONE_NUMBER_ID: ${{ vars.WA_PHONE_NUMBER_ID }}
+          ALARM_EMAIL: ${{ vars.ALARM_EMAIL }}
+          SHARED_INBOUND_TOPIC_ARN: ${{ vars.SHARED_INBOUND_TOPIC_ARN }}
         run: |
           set -euo pipefail
-          resolve() {
-            local input="$1"
-            local fallback="$2"
-            if [[ -n "${input}" ]]; then
-              printf '%s' "${input}"
-            else
-              printf '%s' "${fallback}"
-            fi
-          }
-          waba_id="$(resolve "${WABA_ID}" "${WABA_ID_VAR}")"
-          phone_number_id="$(resolve "${PHONE_NUMBER_ID}" "${PHONE_NUMBER_ID_VAR}")"
-          alarm_email="$(resolve "${ALARM_EMAIL}" "${ALARM_EMAIL_VAR}")"
-          for value in "${waba_id}" "${phone_number_id}" "${alarm_email}"; do
+          for value in "${PHONE_NUMBER_ID}" "${ALARM_EMAIL}" "${SHARED_INBOUND_TOPIC_ARN}"; do
             if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
-              echo "::error::waba_id, phone_number_id, and alarm_email must be a single line."
+              echo "::error::Variables must be a single line."
               exit 1
             fi
           done
           {
+            printf '%s\n' "stage=dev"
             printf '%s\n' "agentcore:enabled=${AGENTCORE}"
             printf '%s\n' "dashboard:enabled=${DASHBOARD}"
             printf '%s\n' "channels:live=${CHANNELS_LIVE}"
             if [[ "${SEED_DEMO_DEVICES}" == "true" ]]; then
               printf '%s\n' "demo:seedDevices=true"
             fi
-            if [[ -n "${waba_id}" ]]; then
-              printf '%s\n' "whatsapp:wabaId=${waba_id}"
+            # Never whatsapp:wabaId in dev. The WABA has one event destination,
+            # owned by main. Dev subscribes to main's inbound topic instead (A5).
+            if [[ -n "${SHARED_INBOUND_TOPIC_ARN}" ]]; then
+              printf '%s\n' "whatsapp:sharedInboundTopicArn=${SHARED_INBOUND_TOPIC_ARN}"
             fi
-            if [[ -n "${phone_number_id}" ]]; then
-              printf '%s\n' "whatsapp:phoneNumberId=${phone_number_id}"
+            if [[ -n "${PHONE_NUMBER_ID}" ]]; then
+              printf '%s\n' "whatsapp:phoneNumberId=${PHONE_NUMBER_ID}"
             fi
-            if [[ -n "${alarm_email}" ]]; then
-              printf '%s\n' "alarms:email=${alarm_email}"
+            if [[ -n "${ALARM_EMAIL}" ]]; then
+              printf '%s\n' "alarms:email=${ALARM_EMAIL}"
             fi
           } > "${RUNNER_TEMP}/cdk-context-args"
+          if grep -q '^whatsapp:wabaId=' "${RUNNER_TEMP}/cdk-context-args"; then
+            echo "::error::whatsapp:wabaId must not be set for the dev stage."
+            exit 1
+          fi
+
+      # Fails unless every stack this app would touch is a dev stack. Until the
+      # app is stage-aware (A1), stack names are main's, so every run stops here.
+      - name: Guard - dev stacks only
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r entry || [[ -n "${entry}" ]]; do
+            args+=(-c "${entry}")
+          done < "${RUNNER_TEMP}/cdk-context-args"
+          cdk ls "${args[@]}" > "${RUNNER_TEMP}/stacks.txt"
+          cat "${RUNNER_TEMP}/stacks.txt"
+          if [[ ! -s "${RUNNER_TEMP}/stacks.txt" ]]; then
+            echo "::error::cdk ls returned no stacks."
+            exit 1
+          fi
+          if grep -qv -- '-dev$' "${RUNNER_TEMP}/stacks.txt"; then
+            echo "::error::Non-dev stack in the app. Refusing to touch main's stacks."
+            exit 1
+          fi
+
+      # Evidence for comparing this run with a laptop deploy (A0).
+      - name: Record run environment
+        run: |
+          set -euo pipefail
+          {
+            echo "### Deploy environment"
+            echo '```'
+            echo "mode: ${{ inputs.mode }}"
+            echo "branch: ${GITHUB_REF_NAME}"
+            echo "commit: ${GITHUB_SHA}"
+            echo "cdk: $(cdk --version)"
+            echo "python: $(python --version 2>&1)"
+            echo "pip: $(pip --version)"
+            echo "docker: $(docker --version 2>/dev/null || echo none)"
+            echo "context:"
+            sed 's/^/  /' "${RUNNER_TEMP}/cdk-context-args"
+            echo "stacks:"
+            sed 's/^/  /' "${RUNNER_TEMP}/stacks.txt"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: CDK diff
         run: |
@@ -173,6 +221,7 @@ jobs:
           cdk diff "${args[@]}"
 
       - name: CDK deploy
+        if: ${{ inputs.mode == 'deploy' }}
         run: |
           set -euo pipefail
           args=(--all --require-approval never)
@@ -180,3 +229,14 @@ jobs:
             args+=(-c "${entry}")
           done < "${RUNNER_TEMP}/cdk-context-args"
           cdk deploy "${args[@]}"
+
+      - name: First failed CloudFormation event
+        if: ${{ failure() && inputs.mode == 'deploy' }}
+        run: |
+          set -uo pipefail
+          for stack in $(cat "${RUNNER_TEMP}/stacks.txt"); do
+            echo "== ${stack}"
+            aws cloudformation describe-stack-events --stack-name "${stack}" \
+              --query "StackEvents[?contains(ResourceStatus,'FAILED')].[Timestamp,LogicalResourceId,ResourceType,ResourceStatusReason]" \
+              --output text 2>/dev/null | tail -n 5 || true
+          done
