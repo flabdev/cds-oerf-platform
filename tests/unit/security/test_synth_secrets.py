@@ -129,6 +129,10 @@ def _synth(outdir: Path, context: list[str]) -> None:
             "AWS_SESSION_TOKEN",
         }
     }
+    parsed = {"account": ACCOUNT, "stage": "main"}
+    for item in context:
+        key, value = item.split("=", 1)
+        parsed[key] = value
     env.update(
         {
             "CDK_OUTDIR": str(outdir),
@@ -136,13 +140,13 @@ def _synth(outdir: Path, context: list[str]) -> None:
             "CDK_DEFAULT_REGION": REGION,
             "AWS_EC2_METADATA_DISABLED": "true",
             "SES_SOURCE_EMAIL": "",
+            # python -m infra.app reads context from this variable. The CDK CLI
+            # is what turns -c into it.
+            "CDK_CONTEXT_JSON": json.dumps(parsed),
         }
     )
-    command = [sys.executable, "-m", "infra.app", "--context", f"account={ACCOUNT}"]
-    for item in context:
-        command.extend(["--context", item])
     result = subprocess.run(
-        command,
+        [sys.executable, "-m", "infra.app"],
         cwd=REPO,
         env=env,
         capture_output=True,

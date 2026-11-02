@@ -11,6 +11,7 @@ import aws_cdk as cdk
 import pytest
 from aws_cdk.assertions import Template
 
+from infra.naming import Stage
 from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
@@ -173,8 +174,10 @@ def _restore_env(saved: dict[str, str | None]) -> None:
 def synthesize(context: dict | None = None) -> tuple[OerfComputeStack, Template]:
     app = cdk.App(context=context)
     env = cdk.Environment(account=ACCOUNT, region=REGION)
-    data = OerfDataStack(app, "OerfDataStack", env=env)
-    stack = OerfComputeStack(app, "OerfComputeStack", data_stack=data, env=env)
+    data = OerfDataStack(app, "OerfDataStack", stage=Stage("main"), env=env)
+    stack = OerfComputeStack(
+        app, "OerfComputeStack", data_stack=data, stage=Stage("main"), env=env
+    )
     return stack, Template.from_stack(stack)
 
 
@@ -469,14 +472,17 @@ def _synthesized_templates(context: dict | None = None) -> dict[str, Template]:
         merged.update(context)
     app = cdk.App(context=merged)
     env = cdk.Environment(account=ACCOUNT, region=REGION)
-    data = OerfDataStack(app, "OerfDataStack", env=env)
-    compute = OerfComputeStack(app, "OerfComputeStack", data_stack=data, env=env)
+    data = OerfDataStack(app, "OerfDataStack", stage=Stage("main"), env=env)
+    compute = OerfComputeStack(
+        app, "OerfComputeStack", data_stack=data, stage=Stage("main"), env=env
+    )
     api = OerfApiStack(
         app,
         "OerfApiStack",
         data_stack=data,
         inbound_queue=compute.inbound_queue,
         websocket_url=compute.ws_stage.url,
+        stage=Stage("main"),
         env=env,
     )
     observability = OerfObservabilityStack(
@@ -493,6 +499,7 @@ def _synthesized_templates(context: dict | None = None) -> dict[str, Template]:
             data.engage_party_state_machine,
         ],
         channel_router_log_group=compute.channel_router_fn.log_group,
+        stage=Stage("main"),
         env=env,
     )
     return {
@@ -1347,6 +1354,7 @@ def test_synth_without_cdk_default_account(tmp_path: Path) -> None:
     env = {key: value for key, value in os.environ.items() if key != "CDK_DEFAULT_ACCOUNT"}
     env["CDK_OUTDIR"] = str(tmp_path)
     env["CDK_DEFAULT_REGION"] = REGION
+    env["CDK_CONTEXT_JSON"] = json.dumps({"stage": "main"})
     result = subprocess.run(
         [sys.executable, "-m", "infra.app"],
         cwd=REPO_ROOT,

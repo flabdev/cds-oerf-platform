@@ -37,3 +37,6 @@ node_modules/
 .codevector.json
 opencode.json
 .cline/providers.json
+# Local stage synth output. Not committed.
+cdk.out.*/
+.jsii-cache/

@@ -8,6 +8,7 @@ attribute is already in the schema.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 ATTRIBUTE_NAME = "tenant_id"
@@ -39,9 +40,18 @@ def ensure_tenant_id_attribute(pool_id: str, client: Any) -> bool:
     return True
 
 
+def _physical_id(event: dict[str, Any]) -> str:
+    """Stable id for this custom resource. Unset keeps the main-stage id."""
+
+    current = event.get("PhysicalResourceId")
+    if current:
+        return str(current)
+    return os.environ.get("TENANT_ATTRIBUTE_PHYSICAL_ID", PHYSICAL_ID)
+
+
 def on_event(event: dict[str, Any], client: Any) -> dict[str, str]:
     """Custom-resource handler. Delete does not remove the attribute."""
-    physical_id = str(event.get("PhysicalResourceId") or PHYSICAL_ID)
+    physical_id = _physical_id(event)
     if event.get("RequestType") == "Delete":
         return {"PhysicalResourceId": physical_id}
     properties = event["ResourceProperties"]

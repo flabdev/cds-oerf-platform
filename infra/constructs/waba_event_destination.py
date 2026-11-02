@@ -30,6 +30,7 @@ from aws_cdk import (
 from constructs import Construct
 
 from infra.constructs.social_messaging_arns import waba_arn
+from infra.naming import Stage
 
 _ASSET = Path(__file__).resolve().parents[1] / "custom_resources"
 _HANDLER = _ASSET / "waba_destination.py"
@@ -75,6 +76,7 @@ class WabaEventDestination(Construct):
         *,
         topic: sns.ITopic,
         waba_id: str,
+        stage: Stage,
     ) -> None:
         super().__init__(scope, construct_id)
         if not waba_id.startswith("waba-") or "/" in waba_id:
@@ -83,7 +85,7 @@ class WabaEventDestination(Construct):
         resource_arn = waba_arn(stack.region, stack.account, waba_id)
         _allow_publish(topic, resource_arn, stack.account)
         _grant_topic_key(topic, resource_arn, stack.account)
-        function = _handler(self, resource_arn)
+        function = _handler(self, resource_arn, stage)
         provider_logs = logs.LogGroup(
             self,
             "ProviderLogGroup",
@@ -149,7 +151,7 @@ def _grant_topic_key(topic: sns.ITopic, waba_arn: str, account: str) -> None:
     )
 
 
-def _handler(scope: Construct, waba_arn: str) -> lambda_.Function:
+def _handler(scope: Construct, waba_arn: str, stage: Stage) -> lambda_.Function:
     log_group = logs.LogGroup(
         scope,
         "LogGroup",
@@ -166,7 +168,7 @@ def _handler(scope: Construct, waba_arn: str) -> lambda_.Function:
     return lambda_.Function(
         scope,
         "Function",
-        function_name="oerf-waba-event-destination",
+        function_name=stage.res("waba-event-destination"),
         runtime=lambda_.Runtime.PYTHON_3_11,
         handler="waba_destination.on_event",
         code=lambda_.Code.from_asset(

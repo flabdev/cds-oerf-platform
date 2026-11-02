@@ -10,6 +10,7 @@ import aws_cdk as cdk
 import pytest
 
 from infra.constructs import agentcore_runtime
+from infra.naming import Stage
 from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
@@ -36,14 +37,17 @@ pytestmark = pytest.mark.security
 def test_runtime_asset_contains_oerf_and_omits_docs_and_tests(tmp_path: Path) -> None:
     app = cdk.App(outdir=str(tmp_path))
     env = cdk.Environment(account=_ACCOUNT, region=_REGION)
-    data = OerfDataStack(app, "OerfDataStack", env=env)
-    compute = OerfComputeStack(app, "OerfComputeStack", data_stack=data, env=env)
+    data = OerfDataStack(app, "OerfDataStack", stage=Stage("main"), env=env)
+    compute = OerfComputeStack(
+        app, "OerfComputeStack", data_stack=data, stage=Stage("main"), env=env
+    )
     OerfApiStack(
         app,
         "OerfApiStack",
         data_stack=data,
         inbound_queue=compute.inbound_queue,
         websocket_url="https://example.execute-api.us-east-1.amazonaws.com/prod",
+        stage=Stage("main"),
         env=env,
     )
     app.synth()
@@ -139,8 +143,8 @@ def test_staged_agentcore_image_keeps_the_allow_list(tmp_path: Path) -> None:
 
     app = cdk.App(outdir=str(tmp_path), context={"agentcore:enabled": "true"})
     env = cdk.Environment(account=_ACCOUNT, region=_REGION)
-    data = OerfDataStack(app, "OerfDataStack", env=env)
-    OerfComputeStack(app, "OerfComputeStack", data_stack=data, env=env)
+    data = OerfDataStack(app, "OerfDataStack", stage=Stage("main"), env=env)
+    OerfComputeStack(app, "OerfComputeStack", data_stack=data, stage=Stage("main"), env=env)
     app.synth()
 
     assets = _docker_image_assets(tmp_path)

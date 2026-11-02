@@ -3,9 +3,9 @@ name: CI
 # Pull-request and main-branch checks for this repo. A failing job blocks the change.
 #
 # Python installs the package with the dev extra, then runs ruff, pytest with the aws
-# marker excluded, pytest -m security as its own step, and four CDK synths: the default
-# stacks, dashboard:enabled=true,
-# whatsapp:wabaId, and agentcore:enabled=true. Every synth passes
+# marker excluded, pytest -m security as its own step, and CDK synths for stage=main
+# (default, dashboard, WhatsApp WABA id, AgentCore) and stage=dev (the same set
+# except the WABA id, which dev rejects). Every synth passes
 # -c account=000000000000 so ambient credentials cannot replace the placeholder.
 # --lookups false makes no AWS API calls. The AgentCore synth stages the image
 # asset only. The image is built on deploy, not here.
@@ -66,19 +66,30 @@ jobs:
         run: npm install -g aws-cdk@2.1145.0
 
       - name: CDK synth
-        run: cdk synth --lookups false --quiet -c account=000000000000
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=main
 
       - name: CDK synth with dashboard
-        run: cdk synth --lookups false --quiet -c account=000000000000 -c dashboard:enabled=true
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=main -c dashboard:enabled=true
 
       - name: CDK synth with WhatsApp WABA id
-        run: cdk synth --lookups false --quiet -c account=000000000000 -c whatsapp:wabaId=waba-0000000000000000
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=main -c whatsapp:wabaId=waba-0000000000000000
 
       # DockerImageAsset fingerprints the context into cdk.out. cdk synth does
       # not publish assets, so this step does not run docker build. deploy.yml
       # builds the linux/arm64 image when the agentcore input is true.
       - name: CDK synth with AgentCore
-        run: cdk synth --lookups false --quiet -c account=000000000000 -c agentcore:enabled=true
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=main -c agentcore:enabled=true
+
+      # Dev omits whatsapp:wabaId. That flag fails synthesis because main owns
+      # the single WABA event destination.
+      - name: CDK synth dev
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=dev
+
+      - name: CDK synth dev with dashboard
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=dev -c dashboard:enabled=true
+
+      - name: CDK synth dev with AgentCore
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=dev -c agentcore:enabled=true
 
   web:
     name: Web

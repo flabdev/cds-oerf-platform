@@ -27,9 +27,9 @@ from aws_cdk import (
 from constructs import Construct
 
 from infra.iam_conditions import pin_source_account
+from infra.naming import Stage, qualify_dev_names
 from infra.runtime_asset import runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
-from infra.ws_clients import DASHBOARD_CLIENT_PARAMETER
 
 _DEFAULT_THROTTLE_RATE = 20
 _DEFAULT_THROTTLE_BURST = 40
@@ -89,9 +89,12 @@ class OerfApiStack(Stack):
         data_stack: OerfDataStack,
         inbound_queue: sqs.IQueue,
         websocket_url: str,
+        *,
+        stage: Stage,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
+        self.stage = stage
         code = lambda_.Code.from_asset(".", **runtime_code_args())
         self.query_fn = _dashboard_function(
             self,
@@ -163,13 +166,16 @@ class OerfApiStack(Stack):
         )
         # Access logging needs the account CloudWatch role. CDK grants that
         # role when cloud_watch_role is true. Deleting this stack retains it,
-        # because the role is account-wide.
+        # because the role is account-wide. Dev does not create a second
+        # AWS::ApiGateway::Account. Its access logs use the role main created.
+        account_role: dict[str, object] = {"cloud_watch_role": stage.is_main}
+        if stage.is_main:
+            account_role["cloud_watch_role_removal_policy"] = RemovalPolicy.RETAIN
         self.rest_api = apigw.RestApi(
             self,
             "OerfDashboardRestApi",
-            rest_api_name="oerf-dashboard",
-            cloud_watch_role=True,
-            cloud_watch_role_removal_policy=RemovalPolicy.RETAIN,
+            rest_api_name=stage.res("dashboard"),
+            **account_role,
             deploy_options=apigw.StageOptions(
                 throttling_rate_limit=_context_int(
                     self, "api:throttleRate", _DEFAULT_THROTTLE_RATE
@@ -232,11 +238,12 @@ class OerfApiStack(Stack):
         cadence.add_method("GET", query_integration, **authorization)
         cadence.add_method("PUT", query_integration, **authorization)
 
+        domain_prefix = stage.res(self.account)
         self.hosted_domain = cognito.UserPoolDomain(
             self,
             "DashboardHostedDomain",
             user_pool=data_stack.user_pool,
-            cognito_domain=cognito.CognitoDomainOptions(domain_prefix=f"oerf-{self.account}"),
+            cognito_domain=cognito.CognitoDomainOptions(domain_prefix=domain_prefix),
         )
         self.user_pool_client = cognito.UserPoolClient(
             self,
@@ -263,13 +270,13 @@ class OerfApiStack(Stack):
         ssm.StringParameter(
             self,
             "DashboardClientIdParameter",
-            parameter_name=DASHBOARD_CLIENT_PARAMETER,
+            parameter_name=stage.ssm("ws-allowed-clients/dashboard"),
             string_value=self.user_pool_client.user_pool_client_id,
         )
         CfnOutput(
             self,
             "CognitoDomain",
-            value=f"https://oerf-{self.account}.auth.{self.region}.amazoncognito.com",
+            value=f"https://{domain_prefix}.auth.{self.region}.amazoncognito.com",
         )
         CfnOutput(self, "UserPoolClientId", value=self.user_pool_client.user_pool_client_id)
         CfnOutput(self, "UserPoolId", value=data_stack.user_pool.user_pool_id)
@@ -277,3 +284,5 @@ class OerfApiStack(Stack):
         CfnOutput(self, "RestApiUrl", value=self.rest_api.url)
         CfnOutput(self, "WebSocketUrl", value=websocket_url)
         pin_source_account(self)
+        if not stage.is_main:
+            qualify_dev_names(self)

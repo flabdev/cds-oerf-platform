@@ -71,7 +71,10 @@ def seed_demo_devices(client: Any, table_name: str, root: Path | None = None) ->
 
 def seed_handler(event: dict[str, Any], _context: Any) -> dict[str, str]:
     """CloudFormation custom-resource entry point for demo device rows."""
-    physical_id = str(event.get("PhysicalResourceId") or "oerf-demo-device-seed")
+    physical_id = str(
+        event.get("PhysicalResourceId")
+        or os.environ.get("SEED_PHYSICAL_ID", "oerf-demo-device-seed")
+    )
     if event.get("RequestType") == "Delete":
         return {"PhysicalResourceId": physical_id}
     table_name = os.environ.get("ROUTING_TABLE_NAME", "").strip()

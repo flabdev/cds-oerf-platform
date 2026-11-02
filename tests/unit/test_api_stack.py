@@ -7,6 +7,7 @@ import pytest
 from aws_cdk import aws_cloudfront as cloudfront, aws_sqs as sqs
 from aws_cdk.assertions import Template
 
+from infra.naming import Stage
 from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
@@ -21,7 +22,7 @@ WEBSOCKET_URL = "wss://abc.execute-api.us-east-1.amazonaws.com/prod"
 def templates() -> tuple[Template, Template]:
     app = cdk.App()
     env = cdk.Environment(account=ACCOUNT, region=REGION)
-    data = OerfDataStack(app, "OerfDataStack", env=env)
+    data = OerfDataStack(app, "OerfDataStack", stage=Stage("main"), env=env)
     refs = cdk.Stack(app, "InboundRefs", env=env)
     queue = sqs.Queue(refs, "InboundQueue")
     stack = OerfApiStack(
@@ -30,6 +31,7 @@ def templates() -> tuple[Template, Template]:
         data_stack=data,
         inbound_queue=queue,
         websocket_url=WEBSOCKET_URL,
+        stage=Stage("main"),
         env=env,
     )
     return Template.from_stack(stack), Template.from_stack(refs)
@@ -96,7 +98,7 @@ def test_stage_throttles_and_logs_the_request_line(template: Template) -> None:
 def test_throttle_limits_come_from_context() -> None:
     app = cdk.App(context={"api:throttleRate": "5", "api:throttleBurst": "9"})
     env = cdk.Environment(account=ACCOUNT, region=REGION)
-    data = OerfDataStack(app, "OerfDataStack", env=env)
+    data = OerfDataStack(app, "OerfDataStack", stage=Stage("main"), env=env)
     refs = cdk.Stack(app, "InboundRefs", env=env)
     queue = sqs.Queue(refs, "InboundQueue")
     stack = OerfApiStack(
@@ -105,6 +107,7 @@ def test_throttle_limits_come_from_context() -> None:
         data_stack=data,
         inbound_queue=queue,
         websocket_url=WEBSOCKET_URL,
+        stage=Stage("main"),
         env=env,
     )
     stage = next(iter(Template.from_stack(stack).find_resources("AWS::ApiGateway::Stage").values()))
@@ -303,14 +306,17 @@ def test_websocket_is_the_compute_endpoint_and_cors_is_cloudfront(
 def test_websocket_allow_list_matches_the_hosted_ui_client() -> None:
     app = cdk.App()
     env = cdk.Environment(account=ACCOUNT, region=REGION)
-    data = OerfDataStack(app, "OerfDataStack", env=env)
-    compute = OerfComputeStack(app, "OerfComputeStack", data_stack=data, env=env)
+    data = OerfDataStack(app, "OerfDataStack", stage=Stage("main"), env=env)
+    compute = OerfComputeStack(
+        app, "OerfComputeStack", data_stack=data, stage=Stage("main"), env=env
+    )
     api = OerfApiStack(
         app,
         "OerfApiStack",
         data_stack=data,
         inbound_queue=compute.inbound_queue,
         websocket_url=WEBSOCKET_URL,
+        stage=Stage("main"),
         env=env,
     )
     api_template = Template.from_stack(api)

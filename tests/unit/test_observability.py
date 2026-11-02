@@ -8,6 +8,7 @@ import aws_cdk as cdk
 import pytest
 from aws_cdk.assertions import Template
 
+from infra.naming import Stage
 from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
@@ -45,8 +46,10 @@ _NAMED_FUNCTIONS = {
 def _build(context: dict | None = None, *, dashboard: bool = False):
     app = cdk.App(context=context)
     env = cdk.Environment(account=ACCOUNT, region=REGION)
-    data = OerfDataStack(app, "OerfDataStack", env=env)
-    compute = OerfComputeStack(app, "OerfComputeStack", data_stack=data, env=env)
+    data = OerfDataStack(app, "OerfDataStack", stage=Stage("main"), env=env)
+    compute = OerfComputeStack(
+        app, "OerfComputeStack", data_stack=data, stage=Stage("main"), env=env
+    )
     scopes = [data, compute]
     if dashboard:
         api = OerfApiStack(
@@ -55,6 +58,7 @@ def _build(context: dict | None = None, *, dashboard: bool = False):
             data_stack=data,
             inbound_queue=compute.inbound_queue,
             websocket_url=compute.ws_stage.url,
+            stage=Stage("main"),
             env=env,
         )
         scopes.append(api)
@@ -68,6 +72,7 @@ def _build(context: dict | None = None, *, dashboard: bool = False):
         dead_letter_queues=queues,
         state_machines=machines,
         channel_router_log_group=compute.channel_router_fn.log_group,
+        stage=Stage("main"),
         env=env,
     )
     names = {

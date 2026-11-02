@@ -23,6 +23,8 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from infra.naming import Stage
+
 _PERIOD = Duration.minutes(5)
 # router.py logs these outcome values when a send or the route fails.
 # "sent" and "simulated" are not failures. There is no outcome "failed".
@@ -71,13 +73,14 @@ class OerfObservabilityStack(Stack):
         dead_letter_queues: Sequence[sqs.IQueue],
         state_machines: Sequence[sfn.IStateMachine],
         channel_router_log_group: logs.ILogGroup,
+        stage: Stage,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
         if not functions or not dead_letter_queues or not state_machines:
             raise ValueError("observability stack needs functions, DLQs, and state machines")
 
-        self.alarm_topic = sns.Topic(self, "AlarmTopic", display_name="oerf-alarms")
+        self.alarm_topic = sns.Topic(self, "AlarmTopic", display_name=stage.res("alarms"))
         email = self.node.try_get_context("alarms:email")
         if isinstance(email, str) and email.strip():
             self.alarm_topic.add_subscription(subscriptions.EmailSubscription(email.strip()))
@@ -119,20 +122,23 @@ class OerfObservabilityStack(Stack):
         for alarm in self.alarms:
             alarm.add_alarm_action(action)
 
-        delivery_failures = self._delivery_failures(channel_router_log_group)
+        namespace = stage.channels_namespace()
+        delivery_failures = self._delivery_failures(channel_router_log_group, namespace)
         delivery_alarm = self._alarm("ChannelDeliveryFailures", delivery_failures)
         delivery_alarm.add_alarm_action(action)
         self.alarms.append(delivery_alarm)
         by_channel = cloudwatch.MathExpression(
             expression=(
-                "SEARCH('{OERF/Channels,channel} "
-                'MetricName="DeliveryFailures"\', \'Sum\', 300)'
+                f"SEARCH('{{{namespace},channel}} "
+                "MetricName=\"DeliveryFailures\"', 'Sum', 300)"
             ),
             period=_PERIOD,
             label="DeliveryFailures by channel",
         )
 
-        dashboard = cloudwatch.Dashboard(self, "OerfOperations", dashboard_name="oerf-operations")
+        dashboard = cloudwatch.Dashboard(
+            self, "OerfOperations", dashboard_name=stage.res("operations")
+        )
         dashboard.add_widgets(
             cloudwatch.GraphWidget(title="DLQ depth", left=dlq_metrics),
             cloudwatch.GraphWidget(title="State machine failures", left=machine_metrics),
@@ -143,7 +149,9 @@ class OerfObservabilityStack(Stack):
             ),
         )
 
-    def _delivery_failures(self, log_group: logs.ILogGroup) -> cloudwatch.IMetric:
+    def _delivery_failures(
+        self, log_group: logs.ILogGroup, namespace: str
+    ) -> cloudwatch.IMetric:
         """Count router JSON lines whose outcome is a delivery failure.
 
         The alarm metric has no dimension, so a line with no channel still
@@ -161,7 +169,7 @@ class OerfObservabilityStack(Stack):
             "ChannelDeliveryFailureFilter",
             log_group=log_group,
             filter_pattern=pattern,
-            metric_namespace="OERF/Channels",
+            metric_namespace=namespace,
             metric_name="DeliveryFailures",
             metric_value="1",
         )
@@ -170,13 +178,13 @@ class OerfObservabilityStack(Stack):
             "ChannelDeliveryFailureByChannelFilter",
             log_group=log_group,
             filter_pattern=pattern,
-            metric_namespace="OERF/Channels",
+            metric_namespace=namespace,
             metric_name="DeliveryFailures",
             metric_value="1",
             dimensions={"channel": "$.channel"},
         )
         return cloudwatch.Metric(
-            namespace="OERF/Channels",
+            namespace=namespace,
             metric_name="DeliveryFailures",
             statistic="Sum",
             period=_PERIOD,

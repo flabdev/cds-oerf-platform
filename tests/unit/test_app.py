@@ -19,10 +19,21 @@ REGION = "us-east-1"
 
 
 def run_app(outdir: Path, **env_overrides: str) -> subprocess.CompletedProcess:
-    """Run ``python -m infra.app`` with a controlled environment."""
+    """Run ``python -m infra.app`` with a controlled environment.
+
+    Context always includes ``stage=main`` unless the caller already set ``stage``.
+    """
     env = {
         key: value for key, value in os.environ.items() if key != "CDK_DEFAULT_ACCOUNT"
     }
+    context: dict[str, object] = {}
+    raw_context = env_overrides.get("CDK_CONTEXT_JSON")
+    if raw_context:
+        loaded = json.loads(raw_context)
+        if isinstance(loaded, dict):
+            context.update(loaded)
+    context.setdefault("stage", "main")
+    env_overrides = {**env_overrides, "CDK_CONTEXT_JSON": json.dumps(context)}
     env.update(
         {
             "CDK_OUTDIR": str(outdir),

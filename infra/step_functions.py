@@ -1,11 +1,15 @@
 """Fixed names for the cold-chain step functions.
 
-``OerfDataStack`` writes these names into ``oerf-cold-chain`` as literal Lambda
-ARNs. It does not reference ``OerfComputeStack``. ``OerfComputeStack`` creates
-the functions with the same names.
+``OerfDataStack`` writes these names into the cold-chain state machine as
+literal Lambda ARNs. It does not reference ``OerfComputeStack``.
+``OerfComputeStack`` creates the functions with the same names.
+
+The maps below are the main-stage names. ``names_for`` applies a ``Stage``.
 """
 
 from __future__ import annotations
+
+from infra.naming import Stage
 
 #: Phase name to the deployed function name.
 STEP_FUNCTION_NAMES = {
@@ -29,6 +33,27 @@ ENGAGE_FUNCTION_NAMES = {
 }
 
 CHANNEL_ROUTER_NAME = "oerf-channel-router"
+
+
+def _apply(stage: Stage, main_name: str) -> str:
+    """``oerf-step-context`` stays that on main and becomes ``oerf-dev-step-context``."""
+
+    prefix = "oerf-"
+    if not main_name.startswith(prefix):
+        raise ValueError(f"expected an oerf- name, got {main_name!r}")
+    return stage.res(main_name[len(prefix) :])
+
+
+def step_function_names_for(stage: Stage) -> dict[str, str]:
+    return {key: _apply(stage, name) for key, name in STEP_FUNCTION_NAMES.items()}
+
+
+def engage_function_names_for(stage: Stage) -> dict[str, str]:
+    return {key: _apply(stage, name) for key, name in ENGAGE_FUNCTION_NAMES.items()}
+
+
+def channel_router_name_for(stage: Stage) -> str:
+    return _apply(stage, CHANNEL_ROUTER_NAME)
 
 #: Phase name to the frozen handler path in ``docs/interfaces.md`` section 8.
 STEP_HANDLERS = {

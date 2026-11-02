@@ -1,7 +1,9 @@
 """Party address for one engagement send.
 
 Mocked channels read the contact registry. Live channels read
-``/oerf/demo-numbers/{tenant}/{role}`` from SSM. The value is never logged.
+``{DEMO_NUMBERS_PREFIX}/{tenant}/{role}`` from SSM. The value is never logged.
+The prefix defaults to ``/oerf/demo-numbers`` and can be set with
+``DEMO_NUMBERS_PREFIX``.
 """
 
 from __future__ import annotations
@@ -12,6 +14,13 @@ from typing import Protocol
 from oerf.platform.channels.registry import PhoneRegistry
 
 DEMO_NUMBERS_PREFIX = "/oerf/demo-numbers"
+
+
+def demo_numbers_prefix() -> str:
+    """SSM prefix for live party numbers. Unset keeps the main-stage path."""
+
+    raw = os.environ.get("DEMO_NUMBERS_PREFIX", DEMO_NUMBERS_PREFIX).strip()
+    return raw or DEMO_NUMBERS_PREFIX
 
 
 class AddressError(ValueError):
@@ -37,7 +46,7 @@ def demo_number_name(tenant_id: str, role: str) -> str:
     party = role.strip()
     if not tenant or not party:
         raise AddressError("a demo-number parameter needs a tenant and a role")
-    return f"{DEMO_NUMBERS_PREFIX}/{tenant}/{party}"
+    return f"{demo_numbers_prefix()}/{tenant}/{party}"
 
 
 def resolve_party_address(

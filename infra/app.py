@@ -4,6 +4,7 @@ import os
 
 import aws_cdk as cdk
 
+from infra.naming import Stage
 from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
@@ -59,17 +60,20 @@ region = (
 )
 
 cdk_env = cdk.Environment(account=account, region=region)
+stage = Stage.from_context(app.node.try_get_context("stage"))
 
 data_stack = OerfDataStack(
     app,
-    "OerfDataStack",
+    stage.stack("OerfDataStack"),
+    stage=stage,
     env=cdk_env,
 )
 
 compute_stack = OerfComputeStack(
     app,
-    "OerfComputeStack",
+    stage.stack("OerfComputeStack"),
     data_stack=data_stack,
+    stage=stage,
     env=cdk_env,
 )
 
@@ -81,10 +85,11 @@ if _dashboard_enabled(app):
     # dashboard publishes that stack's WebSocket endpoint.
     api_stack = OerfApiStack(
         app,
-        "OerfApiStack",
+        stage.stack("OerfApiStack"),
         data_stack=data_stack,
         inbound_queue=compute_stack.inbound_queue,
         websocket_url=compute_stack.ws_stage.url,
+        stage=stage,
         env=cdk_env,
     )
     stacks.append(api_stack)
@@ -93,7 +98,7 @@ if _dashboard_enabled(app):
 stacks.append(
     OerfObservabilityStack(
         app,
-        "OerfObservabilityStack",
+        stage.stack("OerfObservabilityStack"),
         functions=lambda_functions(*scopes),
         dead_letter_queues=[
             compute_stack.inbound_dlq,
@@ -105,6 +110,7 @@ stacks.append(
             data_stack.engage_party_state_machine,
         ],
         channel_router_log_group=compute_stack.channel_router_fn.log_group,
+        stage=stage,
         env=cdk_env,
     )
 )

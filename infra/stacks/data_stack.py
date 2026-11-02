@@ -20,13 +20,14 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from infra.naming import Stage, qualify_dev_names
 from infra.step_functions import (
     ASL_ENGAGE_PLACEHOLDERS,
     ASL_STEP_PLACEHOLDERS,
-    CHANNEL_ROUTER_NAME,
-    ENGAGE_FUNCTION_NAMES,
-    STEP_FUNCTION_NAMES,
+    channel_router_name_for,
+    engage_function_names_for,
     function_arn,
+    step_function_names_for,
 )
 
 # PITR is enabled on all four DynamoDB tables (see guide section 21).
@@ -108,12 +109,16 @@ def _use_aws_managed_key(table: dynamodb.Table) -> None:
     )
 
 
-def _engage_invoke_resources(region: str, account: str, stub_arn: str) -> list[str]:
+def _engage_invoke_resources(
+    region: str,
+    account: str,
+    stub_arn: str,
+    function_names: list[str],
+) -> list[str]:
     """The stub, the cadence and interpret functions, and the channel router."""
 
     resources = [stub_arn, f"{stub_arn}:*"]
-    names = [*ENGAGE_FUNCTION_NAMES.values(), CHANNEL_ROUTER_NAME]
-    for name in names:
+    for name in function_names:
         arn = function_arn(region, account, name)
         resources.extend([arn, f"{arn}:*"])
     return resources
@@ -124,6 +129,7 @@ def _auth_lambda(
     construct_id: str,
     function_name: str,
     handler: str,
+    environment: dict[str, str] | None = None,
 ) -> lambda_.Function:
     """One role and a 30-day log group for a Cognito auth function."""
     log_group = logs.LogGroup(
@@ -138,6 +144,10 @@ def _auth_lambda(
         assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
     )
     log_group.grant_write(role)
+    # Omit environment when unset. Passing None is not the same as today's template.
+    settings: dict[str, object] = {}
+    if environment:
+        settings["environment"] = environment
     return lambda_.Function(
         stack,
         construct_id,
@@ -155,6 +165,7 @@ def _auth_lambda(
         # tracing ACTIVE adds xray:PutTraceSegments and xray:PutTelemetryRecords
         # on Resource *. Those two actions are not resource-scopable.
         tracing=lambda_.Tracing.ACTIVE,
+        **settings,
     )
 
 
@@ -163,11 +174,18 @@ class OerfDataStack(Stack):
         self,
         scope: Construct,
         construct_id: str,
+        *,
+        stage: Stage,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
+        self.stage = stage
+        # Transaction Search is one configuration per account. Dev uses the
+        # one main creates when agentcore is on. It does not create another.
         self.transaction_search_config = (
-            _enable_transaction_search(self) if _agentcore_enabled(self) else None
+            _enable_transaction_search(self)
+            if _agentcore_enabled(self) and stage.is_main
+            else None
         )
         kms_managed = _kms_managed(self)
         table_encryption = (
@@ -329,7 +347,7 @@ class OerfDataStack(Stack):
         self.event_bus = events.EventBus(
             self,
             "OerfEventBus",
-            event_bus_name="oerf-events",
+            event_bus_name=stage.res("events"),
         )
         # ---------------------------------------------------------
         # Step Functions: cold_chain_excursion_v1 workflow skeleton
@@ -370,13 +388,16 @@ class OerfDataStack(Stack):
             description="Execution role for the OERF cold-chain state machine",
         )
         # Literal ARNs. A CDK reference would make this stack depend on compute.
+        step_names = step_function_names_for(stage)
+        engage_names = engage_function_names_for(stage)
+        router_name = channel_router_name_for(stage)
         step_arns = [
-            function_arn(self.region, self.account, name) for name in STEP_FUNCTION_NAMES.values()
+            function_arn(self.region, self.account, name) for name in step_names.values()
         ]
         invoke_resources = [workflow_stub.function_arn, f"{workflow_stub.function_arn}:*"]
         for arn in step_arns:
             invoke_resources.extend([arn, f"{arn}:*"])
-        router_arn = function_arn(self.region, self.account, CHANNEL_ROUTER_NAME)
+        router_arn = function_arn(self.region, self.account, router_name)
         invoke_resources.extend([router_arn, f"{router_arn}:*"])
         workflow_role.add_to_policy(
             iam.PolicyStatement(
@@ -394,7 +415,7 @@ class OerfDataStack(Stack):
         for placeholder, phase in ASL_STEP_PLACEHOLDERS.items():
             definition = definition.replace(
                 placeholder,
-                function_arn(self.region, self.account, STEP_FUNCTION_NAMES[phase]),
+                function_arn(self.region, self.account, step_names[phase]),
             )
         definition = definition.replace("__STUB_ARN__", workflow_stub.function_arn)
         definition = definition.replace("__CHANNEL_ROUTER_ARN__", router_arn)
@@ -410,7 +431,7 @@ class OerfDataStack(Stack):
         for placeholder, phase in ASL_ENGAGE_PLACEHOLDERS.items():
             engagement_definition = engagement_definition.replace(
                 placeholder,
-                function_arn(self.region, self.account, ENGAGE_FUNCTION_NAMES[phase]),
+                function_arn(self.region, self.account, engage_names[phase]),
             )
         engagement_definition = engagement_definition.replace(
             "__CHANNEL_ROUTER_ARN__",
@@ -426,7 +447,10 @@ class OerfDataStack(Stack):
             iam.PolicyStatement(
                 actions=["lambda:InvokeFunction"],
                 resources=_engage_invoke_resources(
-                    self.region, self.account, workflow_stub.function_arn
+                    self.region,
+                    self.account,
+                    workflow_stub.function_arn,
+                    [*engage_names.values(), router_name],
                 ),
             )
         )
@@ -452,7 +476,7 @@ class OerfDataStack(Stack):
         # rule/StepFunctionsGetEventsForStepFunctionsExecutionRule.
         # StartExecution uses a state machine ARN. Describe and Stop use an
         # execution ARN. Combining the three on one resource is incorrect.
-        engage_state_machine_name = "oerf-engage-party"
+        engage_state_machine_name = stage.res("engage-party")
         self.engage_party_state_machine = sfn.StateMachine(
             self,
             "EngagePartyStateMachine",
@@ -507,7 +531,7 @@ class OerfDataStack(Stack):
         self.cold_chain_state_machine = sfn.StateMachine(
             self,
             "OerfColdChainStateMachine",
-            state_machine_name="oerf-cold-chain",
+            state_machine_name=stage.res("cold-chain"),
             state_machine_type=sfn.StateMachineType.STANDARD,
             role=workflow_role,
             tracing_enabled=True,
@@ -532,7 +556,7 @@ class OerfDataStack(Stack):
         self.user_pool = cognito.UserPool(
             self,
             "OerfUserPool",
-            user_pool_name="oerf-users",
+            user_pool_name=stage.res("users"),
             self_sign_up_enabled=False,
             auto_verify=cognito.AutoVerifiedAttrs(email=True),
             feature_plan=cognito.FeaturePlan.ESSENTIALS,
@@ -553,7 +577,7 @@ class OerfDataStack(Stack):
             _auth_lambda(
                 self,
                 "PreTokenFunction",
-                "oerf-pre-token",
+                stage.res("pre-token"),
                 "pre_token.handler",
             ),
         )
@@ -564,11 +588,17 @@ class OerfDataStack(Stack):
             "LambdaConfig.PreTokenGenerationConfig.LambdaVersion",
             "V2_0",
         )
+        tenant_env = None
+        if not stage.is_main:
+            # The handler defaults to the main physical id. Set it only for dev
+            # so the main function keeps today's environment block.
+            tenant_env = {"TENANT_ATTRIBUTE_PHYSICAL_ID": stage.res("custom-tenant-id")}
         tenant_attribute_fn = _auth_lambda(
             self,
             "TenantIdAttributeFunction",
-            "oerf-tenant-attribute",
+            stage.res("tenant-attribute"),
             "tenant_attribute.handler",
+            environment=tenant_env,
         )
         tenant_attribute_fn.add_to_role_policy(
             iam.PolicyStatement(
@@ -605,6 +635,36 @@ class OerfDataStack(Stack):
         # ---------------------------------------------------------
         # IAM: GitHub OIDC Provider for CI/CD (SEC-1)
         # ---------------------------------------------------------
+        # One provider URL per account. Dev does not create a second one,
+        # and it does not import this role.
+        if stage.is_main:
+            self._github_deploy_role()
+
+        # ---------------------------------------------------------
+        # Stack Outputs
+        # ---------------------------------------------------------
+        CfnOutput(self, "PlatformTableName", value=self.platform_table.table_name)
+        CfnOutput(self, "TenantTableName", value=self.tenant_table.table_name)
+        CfnOutput(self, "IncidentTableName", value=self.incident_table.table_name)
+        CfnOutput(self, "RoutingTableName", value=self.routing_table.table_name)
+        CfnOutput(self, "EvidenceBucketName", value=self.evidence_bucket.bucket_name)
+        CfnOutput(self, "ReportBucketName", value=self.report_bucket.bucket_name)
+        CfnOutput(self, "CognitoUserPoolId", value=self.user_pool.user_pool_id)
+        CfnOutput(self, "EventBusArn", value=self.event_bus.event_bus_arn)
+        CfnOutput(
+            self, "ColdChainStateMachineArn", value=self.cold_chain_state_machine.state_machine_arn
+        )
+        CfnOutput(
+            self,
+            "EngagePartyStateMachineArn",
+            value=self.engage_party_state_machine.state_machine_arn,
+        )
+        if not stage.is_main:
+            qualify_dev_names(self)
+
+    def _github_deploy_role(self) -> None:
+        """Account-wide GitHub OIDC provider and the main deploy role."""
+
         # aud and sub are exact. There is no StringLike and no wildcard.
         github_domain = "token.actions.githubusercontent.com"
         # Immutable subject first, then the name form. Either may be the token sub.
@@ -622,7 +682,6 @@ class OerfDataStack(Stack):
             url=f"https://{github_domain}",
             client_ids=["sts.amazonaws.com"],
         )
-
         github_role = iam.Role(
             self,
             "GitHubDeployRole",
@@ -657,25 +716,5 @@ class OerfDataStack(Stack):
                 resources=[bootstrap_roles],
             )
         )
-
-        # ---------------------------------------------------------
-        # Stack Outputs
-        # ---------------------------------------------------------
         CfnOutput(self, "GitHubDeployRoleArn", value=github_role.role_arn)
-        CfnOutput(self, "PlatformTableName", value=self.platform_table.table_name)
-        CfnOutput(self, "TenantTableName", value=self.tenant_table.table_name)
-        CfnOutput(self, "IncidentTableName", value=self.incident_table.table_name)
-        CfnOutput(self, "RoutingTableName", value=self.routing_table.table_name)
-        CfnOutput(self, "EvidenceBucketName", value=self.evidence_bucket.bucket_name)
-        CfnOutput(self, "ReportBucketName", value=self.report_bucket.bucket_name)
-        CfnOutput(self, "CognitoUserPoolId", value=self.user_pool.user_pool_id)
-        CfnOutput(self, "EventBusArn", value=self.event_bus.event_bus_arn)
-        CfnOutput(
-            self, "ColdChainStateMachineArn", value=self.cold_chain_state_machine.state_machine_arn
-        )
-        CfnOutput(
-            self,
-            "EngagePartyStateMachineArn",
-            value=self.engage_party_state_machine.state_machine_arn,
-        )
 
