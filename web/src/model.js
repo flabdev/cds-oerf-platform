@@ -109,6 +109,38 @@ export function needsWaitingEngagement(action) {
   return action === "confirm_transfer" || action === "pick_option";
 }
 
+export function applySampleAction(incidents, incidentId, action, optionId, at = new Date().toISOString()) {
+  if (!Array.isArray(incidents) || !incidentId || !action) {
+    return incidents;
+  }
+  return incidents.map((item) => {
+    if (item?.incident_id !== incidentId || isTerminal(item.state)) {
+      return item;
+    }
+    const stamp = typeof at === "string" && at.trim() ? at : new Date().toISOString();
+    const timeline = Array.isArray(item.timeline) ? item.timeline.slice() : [];
+    if (action === "pick_option" && optionId) {
+      timeline.push({ at: stamp, from_state: item.state, to_state: "SECURING_FACILITY" });
+      return {
+        ...item,
+        state: "SECURING_FACILITY",
+        stage: "SECURING_FACILITY",
+        chosen_option: optionId,
+        timeline,
+      };
+    }
+    if (action === "confirm_transfer") {
+      timeline.push({ at: stamp, from_state: item.state, to_state: "VERIFYING" });
+      return { ...item, state: "VERIFYING", stage: "VERIFYING", timeline };
+    }
+    if (action === "cancel") {
+      timeline.push({ at: stamp, from_state: item.state, to_state: "CANCELLED" });
+      return { ...item, state: "CANCELLED", stage: "CANCELLED", timeline };
+    }
+    return item;
+  });
+}
+
 export function actionNotice(action, { queued = false, missingEngagement = false } = {}) {
   const name = ACTION_NAMES[action] || "Action";
   if (missingEngagement) {

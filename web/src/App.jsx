@@ -9,6 +9,7 @@ import {
   actionNotice,
   actionRequest,
   allowanceDraft,
+  applySampleAction,
   incidentListView,
   isTerminal,
   matchesSearch,
@@ -19,7 +20,7 @@ import {
 } from "./model.js";
 import { stageProgress } from "./states.js";
 import { publishAllowance as publishTenantAllowance } from "./session.js";
-import { formatMinutes } from "./utils/format.js";
+import { formatTenths } from "./utils/format.js";
 
 function minutesAgo(minutes) {
   return new Date(Date.now() - minutes * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -35,17 +36,22 @@ const PROFILE = {
       allowance_mode: "cumulative",
     },
   ],
+  facilities: [
+    { id: "FAC-A", name: "Riverside hub" },
+    { id: "FAC-B", name: "North depot" },
+  ],
 };
 
 const SAMPLE = [
   {
     incident_id: "INC-000001",
-    state: "IN_TRANSIT",
-    stage: "IN_TRANSIT",
+    state: "ASSESSING",
+    stage: "ASSESSING",
     shipment_id: "PH-2841",
     product_profile_id: "PP-2-8-45",
     config_snapshot: PROFILE,
-    allowance_remaining: 33,
+    facilities: PROFILE.facilities,
+    allowance_remaining: 35,
     opened_at: minutesAgo(18),
     range_c: [2, 8],
     readings: [
@@ -56,14 +62,14 @@ const SAMPLE = [
     ],
     timeline: [
       { at: minutesAgo(16), from_state: "OPEN", to_state: "DIAGNOSING" },
+      { at: minutesAgo(15), from_state: "DIAGNOSING", to_state: "DIAGNOSING" },
+      { at: minutesAgo(14.5), from_state: "DIAGNOSING", to_state: "DIAGNOSING" },
       { at: minutesAgo(14), from_state: "DIAGNOSING", to_state: "ASSESSING" },
-      { at: minutesAgo(11), from_state: "ASSESSING", to_state: "SECURING_FACILITY" },
-      { at: minutesAgo(8), from_state: "SECURING_FACILITY", to_state: "IN_TRANSIT" },
     ],
     options: [
-      { id: "FAC-A", spare_minutes: 24, projected_minutes: 21, feasible: true },
+      { id: "FAC-A", spare_minutes: 24, projected_minutes: 21, feasible: true, eta_min: 18 },
       { id: "continue", spare_minutes: 41, projected_minutes: 4, feasible: true },
-      { id: "FAC-B", spare_minutes: 9, projected_minutes: 36, feasible: false },
+      { id: "FAC-B", spare_minutes: 9, projected_minutes: 36, feasible: false, eta_min: 31 },
     ],
     recommendation: { recommended_option: "FAC-A" },
     evidence: { fault_codes: ["E17"] },
@@ -72,27 +78,30 @@ const SAMPLE = [
   },
   {
     incident_id: "INC-000002",
-    state: "ASSESSING",
-    stage: "ASSESSING",
+    state: "IN_TRANSIT",
+    stage: "IN_TRANSIT",
     shipment_id: "VX-3101",
     product_profile_id: "PP-2-8-45",
     config_snapshot: PROFILE,
-    allowance_remaining: 41,
+    facilities: PROFILE.facilities,
+    allowance_remaining: 45,
     opened_at: minutesAgo(9),
     range_c: [2, 8],
     readings: [
       { ts: minutesAgo(9), temperature_c: 6.2 },
-      { ts: minutesAgo(4), temperature_c: 7.1 },
+      { ts: minutesAgo(4), temperature_c: 8.4 },
     ],
     timeline: [
       { at: minutesAgo(7), from_state: "OPEN", to_state: "DIAGNOSING" },
       { at: minutesAgo(5), from_state: "DIAGNOSING", to_state: "ASSESSING" },
+      { at: minutesAgo(3), from_state: "ASSESSING", to_state: "IN_TRANSIT" },
     ],
     options: [
-      { id: "FAC-A", spare_minutes: 28, projected_minutes: 17, feasible: true },
+      { id: "FAC-A", spare_minutes: 28, projected_minutes: 17, feasible: true, eta_min: 12 },
       { id: "continue", spare_minutes: 36, projected_minutes: 9, feasible: true },
     ],
     recommendation: { recommended_option: "FAC-A" },
+    chosen_option: "FAC-A",
     evidence: { fault_codes: [] },
     engagement_status: "WAITING",
     engagement_id: "ENG-02",
@@ -104,7 +113,6 @@ const SAMPLE = [
     shipment_id: "SBX-0001",
     product_profile_id: "PP-2-8-45",
     config_snapshot: PROFILE,
-    allowance_remaining: 12,
     opened_at: minutesAgo(40),
     range_c: [2, 8],
     readings: [
@@ -201,10 +209,12 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
   const [selectedId, setSelectedId] = useState("INC-000001");
   const [choice, setChoice] = useState("");
   const [now, setNow] = useState(() => Date.now());
+  const [sampleIncidents, setSampleIncidents] = useState(null);
   const showAllowance = session.role === "tenant_admin";
+  const records = !onSubmit && Array.isArray(sampleIncidents) ? sampleIncidents : incidents;
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 30000);
+    const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
 
@@ -270,11 +280,11 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
   }, [selectedId]);
 
   const visible = useMemo(() => {
-    if (!Array.isArray(incidents)) {
-      return incidents;
+    if (!Array.isArray(records)) {
+      return records;
     }
-    return incidents.filter((item) => !item.tenant_id || item.tenant_id === selectedTenant);
-  }, [incidents, selectedTenant]);
+    return records.filter((item) => !item.tenant_id || item.tenant_id === selectedTenant);
+  }, [records, selectedTenant]);
   const openList = incidentListView(session.state === "signed-out" ? { error: "Sign in required" } : visible);
   const list = scope === "all" ? allIncidents(visible, session) : openList;
   const rows = list.state === "ready"
@@ -354,9 +364,19 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
     const request = actionRequest(current.incident_id, action, optionId, actionId, engagement);
     setActionError("");
     setConfirming(false);
+    if (!onSubmit) {
+      setSampleIncidents((currentRows) => applySampleAction(
+        Array.isArray(currentRows) ? currentRows : incidents,
+        current.incident_id,
+        action,
+        optionId,
+      ));
+      say(queuedNote(action, action === "pick_option" ? pickedName : ""));
+      return;
+    }
     setPendingAction(action);
     try {
-      await onSubmit?.(request);
+      await onSubmit(request);
       say(queuedNote(action, action === "pick_option" ? pickedName : ""));
     } catch (error) {
       setPendingAction("");
@@ -603,7 +623,7 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
               const row = buildDesk(item, now);
               const stage = stageProgress(item);
               const active = current?.incident_id === item.incident_id;
-              const minutes = formatMinutes(row.kpis.allowance.remaining);
+              const minutes = formatTenths(row.kpis.allowance.remaining);
               return (
                 <li key={item.incident_id}>
                   <button
@@ -730,13 +750,13 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
                 <section className={`hero ${kpiAllowance.level}`} aria-label="Allowance left">
                   <div className="readout">
                     <span className="figure">
-                      {kpiAllowance.remaining == null ? "—" : formatMinutes(kpiAllowance.remaining)}
+                      {kpiAllowance.remaining == null ? "—" : formatTenths(kpiAllowance.remaining)}
                     </span>
                     <span className="figure-label">
                       <strong>min of allowance left</strong>
                       {kpiAllowance.total != null ? (
                         <span>
-                          out of {formatMinutes(kpiAllowance.total)} min
+                          out of {formatTenths(kpiAllowance.total)} min
                           {kpiAllowance.estimated ? ", estimated from readings" : ""}
                         </span>
                       ) : null}

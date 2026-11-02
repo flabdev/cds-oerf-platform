@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   actionNotice,
   actionRequest,
+  applySampleAction,
   allowanceDraft,
   displayName,
   incidentListView,
@@ -81,6 +82,19 @@ test("an action is a post with the client ids and no task token", () => {
     option_id: "FACILITY_A",
   });
   assert.equal("task_token" in request.body, false);
+});
+
+test("sample pick routes the shipment to the chosen facility", () => {
+  const rows = applySampleAction(
+    [{ incident_id: "INC-1", state: "ASSESSING", timeline: [] }],
+    "INC-1",
+    "pick_option",
+    "FAC-A",
+    "2026-10-28T14:12:00Z",
+  );
+  assert.equal(rows[0].state, "SECURING_FACILITY");
+  assert.equal(rows[0].chosen_option, "FAC-A");
+  assert.equal(rows[0].timeline.at(-1).to_state, "SECURING_FACILITY");
 });
 
 test("a live detail maps the response and the chart uses the readings", () => {
