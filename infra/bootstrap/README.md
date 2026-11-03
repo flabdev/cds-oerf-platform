@@ -158,7 +158,9 @@ aws cloudformation describe-stacks \
   --output text
 ```
 
-GitHub dev deploys use `OerfGitHubDeployRole-dev`, assume the oerfdev bootstrap roles, and run the same stack names with the same context keys except `demo:seedDevices` (off unless seeding again). When the dashboard input is true, that workflow also builds `web/` and passes `desk:publish=true`.
+GitHub dev deploys run automatically when a merge lands on `develop` (`.github/workflows/deploy.yml` runs CI first, then deploy). Pushes that change only Markdown under `docs/` or `*.md` files do not start a deploy. Manual runs use **Actions → Deploy OERF → Run workflow** with **Use workflow from: develop** only. After this PR merges, set the GitHub **dev** environment branch rule to **develop** only (remove any temporary feature branch).
+
+Each run uses `OerfGitHubDeployRole-dev`, assumes the oerfdev bootstrap roles, and targets the `*-dev` stacks. A push deploy uses `mode=deploy`, AgentCore and the dashboard on, `desk:publish=true`, `demo:seedDevices` off, and `channels:live` from the dev environment variable `CHANNELS_LIVE` (false when unset). A manual run keeps the workflow inputs (default `mode=diff`). When the dashboard flag is true, the workflow builds `web/` and passes `desk:publish=true`.
 
 ### 4. IAM simulation (dev deploy role)
 

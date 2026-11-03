@@ -22,6 +22,7 @@ on:
   push:
     branches:
       - main
+  workflow_call:
 
 permissions:
   contents: read
@@ -29,7 +30,7 @@ permissions:
 jobs:
   python:
     name: Python
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     defaults:
@@ -121,7 +122,7 @@ jobs:
 
   web:
     name: Web
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     defaults:
