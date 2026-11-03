@@ -6,6 +6,12 @@ resources or IAM. That is OERF-301 (Ananda) and OERF-310. It does not mark any
 channel production-ready. The AWS account owner finishes the external
 approvals and fills the secret values outside this repository.
 
+Live WhatsApp IAM is scoped only when CDK context `whatsapp:phoneNumberId` is
+set. `channels:live` refuses synth and GitHub deploy without that id
+(repository variable `WA_PHONE_NUMBER_ID` or the workflow input). Put the
+End User Messaging phone-number id there, not in git. `whatsapp:wabaId`
+(`WABA_ID`) is still required for the inbound topic event destination.
+
 No token, password, access key, or live phone number belongs in git, logs, or
 fixtures. Seed phones such as `${PHONE_T1_DRIVER}` and `qa@example.com` are
 placeholders.
@@ -39,12 +45,24 @@ parameter name is unset. Inbound media does not use a Meta access token. The
 handler calls `GetWhatsAppMessageMedia` and End User Messaging writes the object
 through a presigned PUT the inbound role signs.
 The message body is rendered by the channel router from the template catalog
-in `domains/cold_chain_excursion/messages.json`. Only `driver_checkin` has SMS
-text today. Other template ids fail that channel with `no_template` and the
-router tries the next channel.
+in `domains/cold_chain_excursion/messages.json`. Live WhatsApp sends
+`oerf_<logical_name>` with body parameters in template order. The Meta copies
+to approve are `scripts/whatsapp/templates.json`. Bodies that exist in
+`messages.json` today:
 
-Approval still open: WhatsApp Business registration, template approval, and
-the inbound webhook. Rate limits are whatever the approved account allows.
+| Logical id | Live template name | Channels with text |
+| --- | --- | --- |
+| `driver_checkin` | `oerf_driver_checkin` | WhatsApp, SMS |
+| `driver_ack` | `oerf_driver_ack` | WhatsApp |
+| `driver_reroute` | `oerf_driver_reroute` | WhatsApp |
+| `status_update` | `oerf_status_update` | WhatsApp |
+
+Other template ids fail that channel with `no_template` and the router tries
+the next channel.
+
+Approval still open: WhatsApp Business registration, template approval for the
+names above, and the inbound webhook. Set repository variables `WA_PHONE_NUMBER_ID`
+and `WABA_ID` before ticking `channels_live` on **Deploy CDK Infrastructure**. Rate limits are whatever the approved account allows.
 They are not recorded here because they are not known yet.
 
 The inbound webhook is the compute stack's standard SNS topic. It is not
@@ -64,8 +82,8 @@ test is still an account-owner step. Secret name: `oerf/rcs/agent`.
 SMS origination is `oerf/pinpoint/origination_number`. Voice origination is
 `oerf/pinpoint/voice_origination`. Neither value is in this repository.
 `VoiceProvider.send` returns `voice_provider_not_configured` and `delivered`
-false. The current SMS function can call SNS when mock mode is off. That call
-is not evidence of a Pinpoint origination number or of production access.
+false. Live SMS is `sns:Publish` from the router (OERF-116). That call is not
+evidence of a Pinpoint origination number or of production access.
 
 ## Email
 

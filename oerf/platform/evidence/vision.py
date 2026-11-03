@@ -16,8 +16,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from typing import Any
+from urllib.parse import unquote_plus
 
 import boto3
 from botocore.exceptions import ClientError
@@ -38,6 +40,7 @@ logger.setLevel(logging.INFO)
 BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
 INCIDENT_TABLE_NAME = os.environ.get("INCIDENT_TABLE_NAME", "")
 TENANT_TABLE_NAME = os.environ.get("TENANT_TABLE_NAME", "")
+EVIDENCE_BUCKET_NAME = os.environ.get("EVIDENCE_BUCKET_NAME", "")
 USE_MOCK_BEDROCK = os.environ.get("USE_MOCK_BEDROCK", "true").lower() == "true"
 GUARDRAIL_ID = os.environ.get("GUARDRAIL_ID", "")
 GUARDRAIL_VERSION = os.environ.get("GUARDRAIL_VERSION", "")
@@ -137,13 +140,18 @@ def _analysis_from_text(text_content: str) -> dict[str, Any]:
 
 
 def tenant_key(tenant_id: str, key: str) -> bool:
-    """True when ``key`` is inside the tenant's evidence prefix.
+    """True when ``key`` is inside the caller tenant's evidence prefix."""
 
-    Tenant prefixes are the S3 half of tenant isolation: a message for one
-    tenant cannot make the handler read another tenant's object.
-    """
+    return isinstance(key, str) and key.startswith(KEY_PREFIX.format(tenant_id=tenant_id))
 
-    return key.startswith(KEY_PREFIX.format(tenant_id=tenant_id))
+
+def _identity_from_key(key: str) -> tuple[str, str]:
+    """Extract tenant and incident from the canonical inbound evidence key."""
+
+    match = re.fullmatch(r"tenants/([^/]+)/inbound/([^/]+)/.+\.(?:jpg|png|webp)", key, re.I)
+    if match is None:
+        raise ValueError("unsupported evidence key")
+    return match.group(1), match.group(2)
 
 
 def _policy(tenant_id: str) -> EvidencePolicy:
@@ -167,8 +175,7 @@ def _persist_reading(
         get_dynamodb().Table(INCIDENT_TABLE_NAME).update_item(
             Key={"pk": incident_pk(tenant_id, incident_id), "sk": "META"},
             UpdateExpression=(
-                "SET evidence_analysis = :ea, evidence_verification = :ev, "
-                "last_analyzed_key = :k"
+                "SET evidence_analysis = :ea, evidence_verification = :ev, last_analyzed_key = :k"
             ),
             ExpressionAttributeValues={
                 ":ea": analysis,
@@ -223,19 +230,63 @@ def _guardrail_action(response: dict[str, Any] | None) -> str:
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    """Analyze direct evidence requests or tenant-scoped S3 notifications."""
+    if event.get("source") == "aws.s3" and event.get("detail-type") == "Object Created":
+        try:
+            detail = event["detail"]
+            bucket = detail["bucket"]["name"]
+            key = detail["object"]["key"]
+            tenant_id, incident_id = _identity_from_key(key)
+        except (KeyError, TypeError, ValueError):
+            return {"success": False, "error": "invalid_s3_evidence_event"}
+        return handler(
+            {
+                "bucket": bucket,
+                "key": key,
+                "tenant_id": tenant_id,
+                "incident_id": incident_id,
+            },
+            context,
+        )
+
+    records = event.get("Records")
+    if isinstance(records, list):
+        outcomes = []
+        for record in records:
+            try:
+                s3_record = record["s3"]
+                bucket = s3_record["bucket"]["name"]
+                key = unquote_plus(s3_record["object"]["key"])
+                tenant_id, incident_id = _identity_from_key(key)
+            except (KeyError, TypeError, ValueError):
+                outcomes.append({"success": False, "error": "invalid_s3_evidence_event"})
+                continue
+            outcomes.append(
+                handler(
+                    {
+                        "bucket": bucket,
+                        "key": key,
+                        "tenant_id": tenant_id,
+                        "incident_id": incident_id,
+                    },
+                    context,
+                )
+            )
+        return {"records": outcomes, "success": all(item.get("success") for item in outcomes)}
+
     """Lambda entry point for evidence image analysis.
 
     Expected event payload:
     {
         "bucket": "evidence-bucket-name",
-        "key": "tenants/T1/photos/reefer_display.jpg",
+        "key": "tenants/T1/inbound/INC-001/reefer_display.jpg",
         "tenant_id": "T1",
         "incident_id": "INC-001"
     }
 
-    The key must sit under ``tenants/{tenant_id}/``. The reading is stored only
-    when it is well formed, and the stored record carries the verification so a
-    reader can ask a human when the model is unsure or claims an unknown code.
+    The key must sit under ``tenants/{tenant_id}/``. S3 notifications derive
+    tenant and incident identity from ``tenants/{tenant}/inbound/{incident}/``.
+    The reading is stored only when well formed, with verification metadata.
     """
     bucket = event.get("bucket", "")
     key = event.get("key", "")
@@ -244,6 +295,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if tenant_id is None:
         logger.error("Rejected evidence analysis: tenant_required")
         return {"success": False, "error": "tenant_required", "fallback_required": True}
+    if EVIDENCE_BUCKET_NAME and bucket != EVIDENCE_BUCKET_NAME:
+        return {"success": False, "error": "evidence_bucket_mismatch", "fallback_required": True}
 
     if not tenant_key(tenant_id, key):
         logger.warning("Refusing evidence key outside the tenant prefix")
@@ -265,8 +318,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             "power_status": "RUNNING",
             "confidence_score": 0.95,
             "display_readout_summary": (
-                "Simulated analysis: High temp alarm AL02 active, "
-                "ambient 12.8C vs setpoint 4.0C"
+                "Simulated analysis: High temp alarm AL02 active, ambient 12.8C vs setpoint 4.0C"
             ),
         }
         reading = validate_analysis(

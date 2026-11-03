@@ -43,6 +43,8 @@ EXPECTED_FUNCTIONS = {
         "handler": "oerf.platform.evidence.vision.handler",
         "env": {
             "INCIDENT_TABLE_NAME",
+            "TENANT_TABLE_NAME",
+            "EVIDENCE_BUCKET_NAME",
             "BEDROCK_MODEL_ID",
             "USE_MOCK_BEDROCK",
             "GUARDRAIL_ID",
@@ -152,6 +154,10 @@ EXPECTED_FUNCTIONS = {
         "handler": "oerf.platform.cadence.interpret.handler",
         "env": {"LOG_LEVEL", "AGENTCORE_ENABLED"},
     },
+    "oerf-engage-lifecycle": {
+        "handler": "oerf.platform.cadence.engagement_lifecycle.handler",
+        "env": {"LOG_LEVEL"},
+    },
 }
 
 
@@ -222,9 +228,7 @@ def statements_for_role(template: Template, role_logical_id: str) -> list[dict]:
     for policy in template.find_resources("AWS::IAM::Policy").values():
         props = policy["Properties"]
         refs = [
-            ref["Ref"]
-            for ref in props.get("Roles", [])
-            if isinstance(ref, dict) and "Ref" in ref
+            ref["Ref"] for ref in props.get("Roles", []) if isinstance(ref, dict) and "Ref" in ref
         ]
         if role_logical_id in refs:
             found.extend(props["PolicyDocument"]["Statement"])
@@ -383,7 +387,7 @@ def test_step_roles_have_only_the_handler_actions(template: Template) -> None:
 def test_engagement_adapters_cannot_send_or_resume(template: Template) -> None:
     """Cadence and interpret hold no table, no provider send, and no task token."""
 
-    for name in ("oerf-engage-cadence", "oerf-engage-interpret"):
+    for name in ("oerf-engage-cadence", "oerf-engage-interpret", "oerf-engage-lifecycle"):
         actions = role_actions(template, name)
         assert not any(action.startswith("dynamodb:") for action in actions), name
         assert "states:SendTaskSuccess" not in actions
@@ -529,8 +533,8 @@ def test_synthesized_stacks_use_only_known_dynamodb_actions() -> None:
             for action in _action_strings(statement.get("Action", [])):
                 if action.startswith("dynamodb:") and action not in _KNOWN_DYNAMODB_ACTIONS:
                     offenders.append(f"{name} {action}")
-    assert offenders == [], (
-        "DynamoDB IAM action is not in the known allow-list: " + ", ".join(offenders)
+    assert offenders == [], "DynamoDB IAM action is not in the known allow-list: " + ", ".join(
+        offenders
     )
 
 
@@ -558,8 +562,8 @@ def test_star_resources_are_listed_in_the_exceptions_file(
             for name in names:
                 if name not in allowed:
                     offenders.append(f"{stack_name} {name}")
-    assert offenders == [], (
-        "Resource * is outside docs/security/iam-exceptions.md: " + ", ".join(offenders)
+    assert offenders == [], "Resource * is outside docs/security/iam-exceptions.md: " + ", ".join(
+        offenders
     )
     oidc = {
         "iam:CreateOpenIDConnectProvider",
@@ -770,9 +774,7 @@ def test_waba_destination_scopes_publish_and_the_provider_role() -> None:
     custom = enabled.find_resources("AWS::CloudFormation::CustomResource")
     assert len(custom) == 1
     props = next(
-        resource["Properties"]
-        for resource in custom.values()
-        if "WabaId" in resource["Properties"]
+        resource["Properties"] for resource in custom.values() if "WabaId" in resource["Properties"]
     )
     assert props["WabaId"] == _WABA_ID
     assert props["TopicArn"]["Ref"].startswith("InboundTopic")
@@ -886,8 +888,13 @@ def test_temperature_rule_retries_to_a_dlq_and_limits_ingest_concurrency(
     template: Template,
 ) -> None:
     rules = template.find_resources("AWS::Events::Rule")
-    assert len(rules) == 1
-    props = next(iter(rules.values()))["Properties"]
+    ingest_rules = {
+        logical_id: rule
+        for logical_id, rule in rules.items()
+        if rule["Properties"]["EventPattern"].get("source") == ["sim.reefer"]
+    }
+    assert len(ingest_rules) == 1
+    props = next(iter(ingest_rules.values()))["Properties"]
     pattern = props["EventPattern"]
     if isinstance(pattern, str):
         pattern = json.loads(pattern)
@@ -910,6 +917,30 @@ def test_temperature_rule_retries_to_a_dlq_and_limits_ingest_concurrency(
         if "states:StartExecution" in names:
             assert statement.get("Resource") != "*"
             assert resource_is_star(statement.get("Resource")) is False
+
+
+def test_evidence_object_created_rule_is_tenant_scoped_and_targets_analyzer(
+    template: Template,
+) -> None:
+    rules = template.find_resources("AWS::Events::Rule")
+    matching = [
+        resource["Properties"]
+        for resource in rules.values()
+        if resource["Properties"]["EventPattern"].get("source") == ["aws.s3"]
+    ]
+    assert len(matching) == 1
+    props = matching[0]
+    assert props["EventPattern"]["detail-type"] == ["Object Created"]
+    assert props["EventPattern"]["detail"]["bucket"]["name"]
+    keys = props["EventPattern"]["detail"]["object"]["key"]
+    assert keys == [
+        {"wildcard": "tenants/*/inbound/*/*/*.jpg"},
+        {"wildcard": "tenants/*/inbound/*/*/*.png"},
+        {"wildcard": "tenants/*/inbound/*/*/*.webp"},
+    ]
+    assert len(props["Targets"]) == 1
+    target_arn = props["Targets"][0]["Arn"]
+    assert "EvidenceAnalyzerFunction" in json.dumps(target_arn)
 
 
 def test_ingest_concurrency_comes_from_context() -> None:
@@ -994,6 +1025,15 @@ def test_channel_mocks_default_true_and_whatsapp_is_unscoped_without_a_phone_id(
     ]
 
 
+def test_channels_live_requires_a_phone_number_id() -> None:
+    saved = _without_synth_env()
+    try:
+        with pytest.raises(ValueError, match="whatsapp:phoneNumberId"):
+            synthesize(context={"channels:live": "true"})
+    finally:
+        _restore_env(saved)
+
+
 def test_channels_live_disables_mocks_and_scopes_whatsapp_to_the_phone_number() -> None:
     phone_id = "phone-number-id-01234567890123456789012345678901"
     phone_arn = (
@@ -1024,14 +1064,15 @@ def test_channels_live_disables_mocks_and_scopes_whatsapp_to_the_phone_number() 
     inbound_statements = statements_for_role(
         live, role_logical_id(functions_by_name(live)["oerf-inbound"])
     )
-    fetch = _statements_with_action(
-        inbound_statements, "social-messaging:GetWhatsAppMessageMedia"
-    )
+    fetch = _statements_with_action(inbound_statements, "social-messaging:GetWhatsAppMessageMedia")
     assert len(fetch) == 1
     assert _resource_list(fetch[0]["Resource"]) == [phone_arn]
-    assert functions_by_name(live)["oerf-inbound"]["Environment"]["Variables"][
-        "WHATSAPP_PHONE_NUMBER_ID"
-    ] == phone_id
+    assert (
+        functions_by_name(live)["oerf-inbound"]["Environment"]["Variables"][
+            "WHATSAPP_PHONE_NUMBER_ID"
+        ]
+        == phone_id
+    )
     vision = functions_by_name(live)["oerf-evidence-analyzer"]["Environment"]["Variables"]
     assert vision["USE_MOCK_BEDROCK"] == "false"
     assert vision["BEDROCK_MODEL_ID"] == "amazon.nova-lite-v1:0"
@@ -1042,9 +1083,7 @@ def test_social_messaging_arns_drop_the_api_prefix() -> None:
     waba_id = "waba-0000000000000000"
     phone_id = "phone-number-id-1111111111111111"
     waba_resource = f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:waba/0000000000000000"
-    phone_resource = (
-        f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:phone-number-id/1111111111111111"
-    )
+    phone_resource = f"arn:aws:social-messaging:{REGION}:{ACCOUNT}:phone-number-id/1111111111111111"
     saved = _without_synth_env()
     try:
         templates = _synthesized_templates(
@@ -1200,9 +1239,7 @@ def test_ses_send_is_scoped_to_the_identity_arn(monkeypatch: pytest.MonkeyPatch)
         statement
         for statement in statements
         if statement.get("Action") == "ses:SendEmail"
-        or (
-            isinstance(statement.get("Action"), list) and "ses:SendEmail" in statement["Action"]
-        )
+        or (isinstance(statement.get("Action"), list) and "ses:SendEmail" in statement["Action"])
     ]
     assert len(ses) == 1
     resource = ses[0]["Resource"]

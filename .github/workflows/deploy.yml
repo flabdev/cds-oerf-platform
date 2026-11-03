@@ -146,13 +146,30 @@ jobs:
 
       - name: Assemble CDK context
         env:
-          PHONE_NUMBER_ID: ${{ vars.WA_PHONE_NUMBER_ID }}
-          ALARM_EMAIL: ${{ vars.ALARM_EMAIL }}
+          PHONE_NUMBER_ID: ${{ inputs.phone_number_id }}
+          PHONE_NUMBER_ID_VAR: ${{ vars.WA_PHONE_NUMBER_ID }}
+          ALARM_EMAIL: ${{ inputs.alarm_email }}
+          ALARM_EMAIL_VAR: ${{ vars.ALARM_EMAIL }}
           SHARED_INBOUND_TOPIC_ARN: ${{ vars.SHARED_INBOUND_TOPIC_ARN }}
           AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          for value in "${PHONE_NUMBER_ID}" "${ALARM_EMAIL}" "${SHARED_INBOUND_TOPIC_ARN}"; do
+          resolve() {
+            local input="$1"
+            local fallback="$2"
+            if [[ -n "${input}" ]]; then
+              printf '%s' "${input}"
+            else
+              printf '%s' "${fallback}"
+            fi
+          }
+          phone_number_id="$(resolve "${PHONE_NUMBER_ID}" "${PHONE_NUMBER_ID_VAR}")"
+          alarm_email="$(resolve "${ALARM_EMAIL}" "${ALARM_EMAIL_VAR}")"
+          if [[ "${CHANNELS_LIVE}" == "true" && -z "${phone_number_id}" ]]; then
+            echo "::error::channels_live requires phone_number_id or repository variable WA_PHONE_NUMBER_ID so WhatsApp IAM is scoped."
+            exit 1
+          fi
+          for value in "${phone_number_id}" "${alarm_email}" "${SHARED_INBOUND_TOPIC_ARN}"; do
             if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
               echo "::error::Variables must be a single line."
               exit 1
@@ -175,11 +192,11 @@ jobs:
             if [[ -n "${SHARED_INBOUND_TOPIC_ARN}" ]]; then
               printf '%s\n' "whatsapp:sharedInboundTopicArn=${SHARED_INBOUND_TOPIC_ARN}"
             fi
-            if [[ -n "${PHONE_NUMBER_ID}" ]]; then
-              printf '%s\n' "whatsapp:phoneNumberId=${PHONE_NUMBER_ID}"
+            if [[ -n "${phone_number_id}" ]]; then
+              printf '%s\n' "whatsapp:phoneNumberId=${phone_number_id}"
             fi
-            if [[ -n "${ALARM_EMAIL}" ]]; then
-              printf '%s\n' "alarms:email=${ALARM_EMAIL}"
+            if [[ -n "${alarm_email}" ]]; then
+              printf '%s\n' "alarms:email=${alarm_email}"
             fi
           } > "${RUNNER_TEMP}/cdk-context-args"
           if grep -q '^whatsapp:wabaId=' "${RUNNER_TEMP}/cdk-context-args"; then

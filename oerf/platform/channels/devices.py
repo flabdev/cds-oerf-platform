@@ -43,6 +43,40 @@ def register_device(
     )
 
 
+def expected_demo_devices(root: Path | None = None) -> dict[str, tuple[str, str]]:
+    """Device id to ``(tenant_id, shipment_id)`` from ``sim/seed/*/shipments.json``."""
+
+    mapping: dict[str, tuple[str, str]] = {}
+    seed_root = root or _SEED_ROOT
+    for path in sorted(seed_root.glob("*/shipments.json")):
+        rows = json.loads(path.read_text(encoding="utf-8"))
+        for row in rows:
+            device = str(row.get("device") or "").strip()
+            if not device:
+                continue
+            mapping[device] = (str(row["tenant_id"]), str(row["shipment_id"]))
+    return mapping
+
+
+def verify_demo_devices(client: Any, table_name: str, root: Path | None = None) -> list[str]:
+    """Return device ids from the seed files that are missing or mismatched.
+
+    Empty means every seeded ``DEVICE#`` row is present with the expected tenant
+    and shipment. Call this after a deploy with ``demo:seedDevices=true``.
+    """
+
+    from oerf.platform.ingest.handler import DynamoDeviceResolver
+
+    expected = expected_demo_devices(root)
+    resolver = DynamoDeviceResolver(client, table_name)
+    missing: list[str] = []
+    for device_id, wanted in expected.items():
+        found = resolver.resolve(device_id)
+        if found != wanted:
+            missing.append(device_id)
+    return missing
+
+
 def seed_demo_devices(client: Any, table_name: str, root: Path | None = None) -> list[str]:
     """Register the device on each shipment file under ``sim/seed``.
 

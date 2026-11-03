@@ -102,7 +102,7 @@
     "HandleCallback": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {"FunctionName": "__ENGAGEMENT_STUB_ARN__", "Payload": {"step_name": "EngagementHandleCallback", "workflow.$": "$"}},
+      "Parameters": {"FunctionName": "__ENGAGE_LIFECYCLE_ARN__", "Payload": {"step_name": "EngagementHandleCallback", "workflow.$": "$"}},
       "OutputPath": "$.Payload",
       "TimeoutSeconds": 30,
       "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2}],
@@ -127,7 +127,7 @@
     "ResetLadder": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {"FunctionName": "__ENGAGEMENT_STUB_ARN__", "Payload": {"step_name": "EngagementResetLadder", "workflow.$": "$"}},
+      "Parameters": {"FunctionName": "__ENGAGE_LIFECYCLE_ARN__", "Payload": {"step_name": "EngagementResetLadder", "workflow.$": "$"}},
       "OutputPath": "$.Payload",
       "TimeoutSeconds": 30,
       "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}],
@@ -163,23 +163,32 @@
     "Answered": {"Type": "Pass", "Parameters": {"status": "answered", "intent.$": "$.response.intent", "fields.$": "$.response.fields", "evidence_refs.$": "$.response.evidence_refs", "engagement_id.$": "$.engagement_id"}, "End": true},
     "HasFinalQuestion": {
       "Type": "Choice",
-      "Choices": [{"Variable": "$.cadence.final_question", "IsPresent": true, "Next": "SendFinalQuestion"}],
+      "Choices": [{"Variable": "$.cadence.final_question", "IsPresent": true, "Next": "PrepareFinalQuestion"}],
       "Default": "ApplyExhaustAction"
+    },
+    "PrepareFinalQuestion": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {"FunctionName": "__ENGAGE_LIFECYCLE_ARN__", "Payload": {"step_name": "EngagementFinalQuestion", "workflow.$": "$"}},
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 30,
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "EngagementFailed"}],
+      "Next": "SendFinalQuestion"
     },
     "SendFinalQuestion": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
-      "Parameters": {"FunctionName": "__ENGAGEMENT_STUB_ARN__", "Payload": {"step_name": "EngagementFinalQuestion", "task_token.$": "$$.Task.Token", "workflow.$": "$"}},
+      "Parameters": {"FunctionName": "__CHANNEL_ROUTER_ARN__", "Payload": {"step_name": "EngagementSendViaRouter", "task_token.$": "$$.Task.Token", "workflow.$": "$"}},
       "ResultSelector": {"response.$": "$"},
       "ResultPath": "$.reply",
-      "TimeoutSeconds": 86400,
+      "TimeoutSecondsPath": "$.cadence.final_question_timeout_seconds",
       "Catch": [{"ErrorEquals": ["States.Timeout"], "ResultPath": "$.final_question_timeout", "Next": "ApplyExhaustAction"}, {"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "EngagementFailed"}],
       "Next": "Interpret"
     },
     "ApplyExhaustAction": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {"FunctionName": "__ENGAGEMENT_STUB_ARN__", "Payload": {"step_name": "EngagementApplyExhaustAction", "workflow.$": "$"}},
+      "Parameters": {"FunctionName": "__ENGAGE_LIFECYCLE_ARN__", "Payload": {"step_name": "EngagementApplyExhaustAction", "workflow.$": "$"}},
       "OutputPath": "$.Payload",
       "TimeoutSeconds": 30,
       "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}],

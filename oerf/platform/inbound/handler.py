@@ -139,7 +139,12 @@ class MediaConfigError(Exception):
 
 class MediaEvidenceStore(Protocol):
     def store(
-        self, tenant_id: str, message_id: str, media_id: str, mime_type: str | None
+        self,
+        tenant_id: str,
+        incident_id: str,
+        message_id: str,
+        media_id: str,
+        mime_type: str | None,
     ) -> str | None:
         """Store one provider media item and return its tenant-scoped S3 key."""
 
@@ -166,7 +171,14 @@ class WhatsAppMediaEvidenceStore:
             )
         return self._s3
 
-    def store(self, tenant_id: str, message_id: str, media_id: str, mime_type: str | None) -> str:
+    def store(
+        self,
+        tenant_id: str,
+        incident_id: str,
+        message_id: str,
+        media_id: str,
+        mime_type: str | None,
+    ) -> str:
         del mime_type
         phone_id = _whatsapp_phone_number_id()
         if not phone_id:
@@ -185,7 +197,9 @@ class WhatsAppMediaEvidenceStore:
         if size is None or size > _media_max_bytes():
             _reject_media(tenant_id)
         message_ref = hashlib.sha256(message_id.encode("utf-8")).hexdigest()
-        evidence_key = f"tenants/{tenant_id}/inbound/{message_ref}/{uuid.uuid4().hex}{extension}"
+        evidence_key = (
+            f"tenants/{tenant_id}/inbound/{incident_id}/{message_ref}/{uuid.uuid4().hex}{extension}"
+        )
         # Bucket default encryption is SSE-KMS aws/s3 (ADR-033). Signing an
         # encryption header would override that default, so the PUT signs none.
         url = self._s3_client().generate_presigned_url(
@@ -278,6 +292,7 @@ def _evidence_store() -> MediaEvidenceStore | None:
 def _persist_media(
     message: NormalizedMessage,
     tenant_id: str,
+    incident_id: str,
     store: MediaEvidenceStore | None,
 ) -> list[dict[str, str | None]]:
     """Store provider media and project only safe metadata into the callback."""
@@ -290,6 +305,7 @@ def _persist_media(
                 _reject_media(tenant_id)
             evidence_key = store.store(
                 tenant_id,
+                incident_id,
                 message.provider_msg_id,
                 item.id,
                 item.mime_type,
@@ -354,9 +370,7 @@ def build_dependencies() -> InboundDependencies:
         callbacks=stepfunctions,
         registry=DynamoPhoneRegistry(_client, ROUTING_TABLE_NAME, TENANT_TABLE_NAME),
         media_evidence=_evidence_store(),
-        incidents=DynamoIncidentStore(
-            _client, INCIDENT_TABLE_NAME, tenant_table=TENANT_TABLE_NAME
-        ),
+        incidents=DynamoIncidentStore(_client, INCIDENT_TABLE_NAME, tenant_table=TENANT_TABLE_NAME),
         executions=stepfunctions,
         state_machine_arn=os.environ.get("STATE_MACHINE_ARN", ""),
     )
@@ -497,7 +511,12 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
             count=1,
         )
         return "ignored"
-    media = _persist_media(message, engagement.tenant_id, dependencies.media_evidence)
+    media = _persist_media(
+        message,
+        engagement.tenant_id,
+        engagement.incident_id,
+        dependencies.media_evidence,
+    )
     return _resume(engagement, _provider_payload(message, media), dependencies)
 
 

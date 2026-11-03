@@ -514,6 +514,16 @@ def test_s3_buckets_block_public_access(template: Template) -> None:
         }, logical_id
 
 
+def test_only_evidence_bucket_publishes_object_events_to_eventbridge(template: Template) -> None:
+    buckets = template.find_resources("AWS::S3::Bucket")
+    evidence = _bucket(buckets, "EvidenceBucket")
+    report = _bucket(buckets, "ReportBucket")
+    assert evidence["NotificationConfiguration"]["EventBridgeConfiguration"] == {
+        "EventBridgeEnabled": True
+    }
+    assert "NotificationConfiguration" not in report
+
+
 def test_s3_buckets_have_versioning_enabled(template: Template) -> None:
     for logical_id, bucket in template.find_resources("AWS::S3::Bucket").items():
         assert bucket["Properties"]["VersioningConfiguration"] == {

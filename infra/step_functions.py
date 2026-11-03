@@ -30,6 +30,7 @@ STEP_FUNCTION_NAMES = {
 ENGAGE_FUNCTION_NAMES = {
     "cadence": "oerf-engage-cadence",
     "interpret": "oerf-engage-interpret",
+    "lifecycle": "oerf-engage-lifecycle",
 }
 
 CHANNEL_ROUTER_NAME = "oerf-channel-router"
@@ -86,6 +87,7 @@ ASL_STEP_PLACEHOLDERS = {
 ASL_ENGAGE_PLACEHOLDERS = {
     "__ENGAGE_CADENCE_ARN__": "cadence",
     "__ENGAGE_INTERPRET_ARN__": "interpret",
+    "__ENGAGE_LIFECYCLE_ARN__": "lifecycle",
 }
 
 #: Cold-chain state name to the phase that serves it. ``VerifyLoop`` calls the

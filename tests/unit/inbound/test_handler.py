@@ -41,7 +41,7 @@ def setup_inbound():
     callbacks = CallbackClient()
 
     class _NoopEvidence:
-        def store(self, tenant_id, message_id, media_id, mime_type):
+        def store(self, tenant_id, incident_id, message_id, media_id, mime_type):
             return None
 
     deps = InboundDependencies(dedupe, engagements, callbacks, registry, _NoopEvidence())
@@ -283,12 +283,12 @@ def test_quoted_correlation_takes_precedence_over_address_matches(setup_inbound)
 
 def test_media_evidence_is_stored_and_key_is_forwarded(setup_inbound) -> None:
     deps, _engagements, _registry, callbacks, opened = setup_inbound
-    stored: list[tuple[str, str, str, str | None]] = []
+    stored: list[tuple[str, str, str, str, str | None]] = []
 
     class _Evidence:
-        def store(self, tenant_id, message_id, media_id, mime_type):
-            stored.append((tenant_id, message_id, media_id, mime_type))
-            return f"tenants/{tenant_id}/inbound/{message_id}/evidence.jpg"
+        def store(self, tenant_id, incident_id, message_id, media_id, mime_type):
+            stored.append((tenant_id, incident_id, message_id, media_id, mime_type))
+            return f"tenants/{tenant_id}/inbound/{incident_id}/{message_id}/evidence.jpg"
 
     deps = InboundDependencies(
         deps.dedupe, deps.engagements, deps.callbacks, deps.registry, _Evidence()
@@ -298,9 +298,11 @@ def test_media_evidence_is_stored_and_key_is_forwarded(setup_inbound) -> None:
 
     assert process_message(body, deps) == "resumed"
     payload = json.loads(callbacks.calls[0]["output"])
-    assert stored == [(opened.tenant_id, "incoming-1", "meta-media-1", "image/jpeg")]
+    assert stored == [
+        (opened.tenant_id, opened.incident_id, "incoming-1", "meta-media-1", "image/jpeg")
+    ]
     assert payload["media"][0]["evidence_key"] == (
-        "tenants/trusted-tenant/inbound/incoming-1/evidence.jpg"
+        "tenants/trusted-tenant/inbound/incident-1/incoming-1/evidence.jpg"
     )
 
 

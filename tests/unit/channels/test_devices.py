@@ -1,6 +1,12 @@
 """Device registry rows that ingest is allowed to trust."""
 
-from oerf.platform.channels.devices import register_device, seed_demo_devices, seed_handler
+from oerf.platform.channels.devices import (
+    expected_demo_devices,
+    register_device,
+    seed_demo_devices,
+    seed_handler,
+    verify_demo_devices,
+)
 from oerf.platform.ingest.handler import DynamoDeviceResolver
 from oerf.platform.storage.dynamo import device_pk, key
 from tests.unit.support.fake_dynamo import FakeDynamoClient
@@ -39,6 +45,10 @@ def test_demo_seed_registers_the_shipment_devices() -> None:
     assert stored["Item"]["tenant_id"]["S"] == "t1"
     assert stored["Item"]["shipment_id"]["S"] == "PH-2841"
     assert seed_demo_devices(client, "routing") == written
+    assert expected_demo_devices()["RF-7781"] == ("t1", "PH-2841")
+    assert verify_demo_devices(client, "routing") == []
+    empty = FakeDynamoClient()
+    assert "RF-7781" in verify_demo_devices(empty, "routing")
 
 
 def test_custom_resource_seeds_on_create_and_is_a_noop_on_delete(monkeypatch) -> None:

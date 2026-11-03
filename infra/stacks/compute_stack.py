@@ -217,8 +217,15 @@ class OerfComputeStack(Stack):
         # ---------------------------------------------------------
         ses_source_email = os.environ.get("SES_SOURCE_EMAIL", "")
         # Live channel sends only when context channels:live is true.
-        channel_mock = "false" if _context_enabled(self, "channels:live", default=False) else "true"
-        whatsapp_phone_number_id = _context_str(self, "whatsapp:phoneNumberId")
+        channels_live = _context_enabled(self, "channels:live", default=False)
+        channel_mock = "false" if channels_live else "true"
+        whatsapp_phone_number_id = _context_str(self, "whatsapp:phoneNumberId").strip()
+        if channels_live and not whatsapp_phone_number_id:
+            raise ValueError(
+                "channels:live requires whatsapp:phoneNumberId so "
+                "social-messaging:SendWhatsAppMessage and "
+                "GetWhatsAppMessageMedia are scoped to that phone-number-id ARN"
+            )
         self.channel_router_fn = self._function(
             "ChannelRouterFunction",
             function_name=stage.res("channel-router"),
@@ -274,8 +281,9 @@ class OerfComputeStack(Stack):
                     ],
                 )
             )
-        # sns:Publish to a phone number has no resource ARN. SMS should move
-        # to pinpoint-sms-voice-v2 under OERF-116 (Mudita).
+        # sns:Publish to a phone number has no resource ARN. SMS stays on SNS
+        # (OERF-116): Pinpoint origination is not in this account, and the
+        # engagement path is mocked until channels:live. See ADR-008.
         self.channel_router_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["sns:Publish"],
@@ -289,8 +297,8 @@ class OerfComputeStack(Stack):
                 phone_number_arn(self.region, self.account, whatsapp_phone_number_id)
             ]
         else:
-            # whatsapp:phoneNumberId is unset, so no phone-number-id ARN exists
-            # at synth. See docs/security/iam-exceptions.md.
+            # Mocked synth has no phone-number-id ARN. Live synth is rejected
+            # above. See docs/security/iam-exceptions.md.
             whatsapp_resources = ["*"]
         self.channel_router_fn.add_to_role_policy(
             iam.PolicyStatement(
@@ -339,20 +347,41 @@ class OerfComputeStack(Stack):
             timeout=Duration.seconds(60),
             environment={
                 "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
+                "TENANT_TABLE_NAME": data_stack.tenant_table.table_name,
+                "EVIDENCE_BUCKET_NAME": data_stack.evidence_bucket.bucket_name,
                 "BEDROCK_MODEL_ID": bedrock_model_id,
                 "USE_MOCK_BEDROCK": bedrock_mock,
                 "GUARDRAIL_ID": self.guardrail.guardrail_id,
                 "GUARDRAIL_VERSION": self.guardrail.guardrail_version,
             },
         )
+        # EventBridge avoids an S3 bucket -> compute Lambda cross-stack reference.
+        # Only incident-scoped inbound images match; analyzer outputs go to DynamoDB.
         data_stack.evidence_bucket.grant_read(self.evidence_analyzer_fn)
+        evidence_rule = events.Rule(
+            self,
+            "EvidenceObjectCreatedRule",
+            event_pattern=events.EventPattern(
+                source=["aws.s3"],
+                detail_type=["Object Created"],
+                detail={
+                    "bucket": {"name": [data_stack.evidence_bucket.bucket_name]},
+                    "object": {
+                        "key": [
+                            {"wildcard": "tenants/*/inbound/*/*/*.jpg"},
+                            {"wildcard": "tenants/*/inbound/*/*/*.png"},
+                            {"wildcard": "tenants/*/inbound/*/*/*.webp"},
+                        ]
+                    },
+                },
+            ),
+        )
+        evidence_rule.add_target(targets.LambdaFunction(self.evidence_analyzer_fn))
         data_stack.incident_table.grant_read_write_data(self.evidence_analyzer_fn)
         self.evidence_analyzer_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["bedrock:InvokeModel"],
-                resources=[
-                    f"arn:aws:bedrock:{self.region}::foundation-model/{bedrock_model_id}"
-                ],
+                resources=[f"arn:aws:bedrock:{self.region}::foundation-model/{bedrock_model_id}"],
             )
         )
         self.evidence_analyzer_fn.add_to_role_policy(
@@ -543,9 +572,7 @@ class OerfComputeStack(Stack):
                         {
                             "dynamodb": {
                                 "Keys": {
-                                    "pk": {
-                                        "S": lambda_.FilterRule.begins_with("TENANT#")
-                                    },
+                                    "pk": {"S": lambda_.FilterRule.begins_with("TENANT#")},
                                     "sk": {"S": lambda_.FilterRule.is_equal("META")},
                                 }
                             }
@@ -663,9 +690,7 @@ class OerfComputeStack(Stack):
         # ADR-019. StopExecution applies to an execution ARN, not the state
         # machine. The handler derives that ARN from STATE_MACHINE_ARN and the
         # execution name ingest used for StartExecution.
-        data_stack.cold_chain_state_machine.grant_execution(
-            self.inbound_fn, "states:StopExecution"
-        )
+        data_stack.cold_chain_state_machine.grant_execution(self.inbound_fn, "states:StopExecution")
         self.inbound_fn.add_event_source(
             event_sources.SqsEventSource(
                 self.inbound_queue,
@@ -947,6 +972,15 @@ class OerfComputeStack(Stack):
             "CadenceFunction",
             function_name=self.stage.res("engage-cadence"),
             handler="oerf.platform.cadence.engage.handler",
+            code=code,
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            environment={"LOG_LEVEL": "INFO"},
+        )
+        self._function(
+            "EngageLifecycleFunction",
+            function_name=self.stage.res("engage-lifecycle"),
+            handler="oerf.platform.cadence.engagement_lifecycle.handler",
             code=code,
             timeout=Duration.seconds(30),
             memory_size=256,
