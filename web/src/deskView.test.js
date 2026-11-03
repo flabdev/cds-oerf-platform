@@ -116,12 +116,70 @@ test("options keep the rules order and name continue without inventing a facilit
   assert.equal(buildDesk({
     evidence: { photos: ["shot.jpg"], fault_codes: ["E17"] },
   }, now).kpis.evidence.value, "1 photo");
-  assert.match(desk.kpis.allowance.value, /33 \/ 45 min left/);
-  assert.equal(desk.kpis.allowance.estimated, false);
+  assert.match(desk.kpis.allowance.value, /33\.0 \/ 45\.0 min left/);
+  assert.equal(desk.kpis.allowance.estimated, true);
   assert.equal(desk.kpis.allowance.remaining, 33);
   assert.equal(desk.kpis.allowance.total, 45);
   assert.equal(desk.kpis.allowance.level, "steady");
   assert.equal(desk.feed.some((entry) => entry.text.startsWith("Rules recommended FAC-A")), true);
+});
+
+test("allowance remaining ticks with the clock and stops at zero", () => {
+  const item = {
+    product_profile_id: "PP-2-8-45",
+    config_snapshot: { product_profiles: [{ id: "PP-2-8-45", excursion_allowance_min: 45, range_c: [2, 8] }] },
+    range_c: [2, 8],
+    allowance_remaining: 40,
+    readings: [{ ts: "2026-10-28T14:00:00Z", temperature_c: 9.1 }],
+    options: [
+      { id: "FAC-A", spare_minutes: 12, projected_minutes: 33, feasible: true },
+      { id: "FAC-B", spare_minutes: 2, projected_minutes: 43, feasible: true },
+    ],
+  };
+  const ten = buildDesk(item, Date.parse("2026-10-28T14:10:00Z"));
+  assert.equal(ten.kpis.allowance.remaining, 35);
+  assert.equal(ten.kpis.above.value, "10 min");
+  assert.equal(ten.options.find((option) => option.id === "FAC-A").feasible, true);
+  const forty = buildDesk(item, Date.parse("2026-10-28T14:40:00Z"));
+  assert.equal(forty.kpis.allowance.remaining, 5);
+  assert.equal(forty.options.find((option) => option.id === "FAC-B").feasible, false);
+  assert.match(forty.options.find((option) => option.id === "FAC-B").reason, /45/);
+  const spent = buildDesk(item, Date.parse("2026-10-28T15:00:00Z"));
+  assert.equal(spent.kpis.allowance.remaining, 0);
+  assert.equal(spent.kpis.allowance.level, "spent");
+  assert.equal(spent.options.every((option) => option.feasible === false), true);
+  const contained = {
+    ...item,
+    state: "CONTAINED",
+    timeline: [{ at: "2026-10-28T14:10:00Z", from_state: "VERIFYING", to_state: "CONTAINED" }],
+  };
+  const stillOpen = buildDesk(contained, Date.parse("2026-10-28T14:20:00Z"));
+  assert.equal(stillOpen.kpis.allowance.remaining, 25);
+  assert.notEqual(stillOpen.kpis.allowance.remaining, 35);
+  const closed = buildDesk({
+    ...item,
+    state: "CLOSED",
+    timeline: [{ at: "2026-10-28T14:10:00Z", from_state: "CONTAINED", to_state: "CLOSED" }],
+  }, Date.parse("2026-10-28T14:20:00Z"));
+  assert.equal(closed.kpis.allowance.remaining, 35);
+});
+
+test("repeated diagnosing events collapse to one activity line", () => {
+  const desk = buildDesk({
+    opened_at: "2026-10-28T13:50:00Z",
+    timeline: [
+      { at: "2026-10-28T13:51:00Z", from_state: "OPEN", to_state: "DIAGNOSING" },
+      { at: "2026-10-28T13:51:20Z", from_state: "DIAGNOSING", to_state: "DIAGNOSING" },
+      { at: "2026-10-28T13:51:40Z", from_state: "OPEN", to_state: "DIAGNOSING" },
+      { at: "2026-10-28T13:52:00Z", from_state: "DIAGNOSING", to_state: "ASSESSING" },
+    ],
+  }, now);
+  const states = desk.feed.filter((entry) => entry.kind === "state").map((entry) => entry.text);
+  assert.deepEqual(states, [
+    "Incident opened",
+    "Open → Diagnosing",
+    "Diagnosing → Assessing",
+  ]);
 });
 
 test("the allowance level warms at a third left and when it is used up", () => {

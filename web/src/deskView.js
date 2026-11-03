@@ -1,6 +1,6 @@
 /** Detail view-model. Every number comes from the incident payload or a stated estimate. */
 
-import { formatClock, formatDuration, formatLimit, formatMinutes, formatTemperature } from "./utils/format.js";
+import { formatClock, formatDuration, formatLimit, formatMinutes, formatTenths, formatTemperature } from "./utils/format.js";
 import { incidentState, readTransitions, stateMeta, visibleActions } from "./states.js";
 
 const PLOT = { width: 520, height: 200, padL: 44, padR: 16, padT: 22, padB: 32 };
@@ -11,15 +11,15 @@ export function buildDesk(item, now = Date.now()) {
   const readings = chartReadings(item);
   const profile = profileOf(item);
   const total = allowanceTotal(item, profile);
-  const above = band ? minutesSinceAbove(readings, band[1], now) : null;
+  const frozenAt = freezeAt(item, transitions);
+  const above = band ? excursionMinutes(readings, band, frozenAt ?? now) : null;
+  const computed = total != null && above != null ? total - above : null;
   const apiRemaining = finite(item?.allowance_remaining);
-  const estimated = apiRemaining == null && total != null && above != null ? total - above : null;
-  const remaining = apiRemaining != null ? apiRemaining : estimated;
-  const disagrees = apiRemaining != null && estimated == null && total != null && above != null
-    && formatMinutes(apiRemaining) !== formatMinutes(total - above);
+  const remaining = computed != null ? computed : apiRemaining;
+  const estimated = computed != null && frozenAt == null;
   const recommendationId = recommendedId(item);
   const chosenId = chosenOptionId(item);
-  const options = optionCards(item, total, recommendationId, chosenId);
+  const options = optionCards(item, total, remaining, apiRemaining, recommendationId, chosenId);
   return {
     shipmentId: text(item?.shipment_id),
     profileName: text(profile?.name),
@@ -32,10 +32,9 @@ export function buildDesk(item, now = Date.now()) {
     kpis: {
       temperature: temperatureKpi(readings, band),
       above: aboveKpi(above, band),
-      allowance: allowanceKpi(remaining, total, apiRemaining == null && estimated != null),
+      allowance: allowanceKpi(remaining, total, estimated),
       evidence: evidenceKpi(item),
     },
-    allowanceDisagrees: Boolean(disagrees),
     chart: temperaturePlot(readings, band, {
       openedAt: item?.opened_at,
       containedAt: containedAt(transitions),
@@ -142,10 +141,16 @@ function feedItems(item, transitions, options, recommendationId, now) {
   if (text(item?.opened_at)) {
     items.push(timed("state", item.opened_at, "Incident opened", now));
   }
-  for (const entry of transitions) {
+  let lastTo = "";
+  for (const entry of notableTransitions(transitions)) {
+    const toName = incidentState(entry.to_state);
+    if (!toName || toName === lastTo) {
+      continue;
+    }
+    lastTo = toName;
     const from = entry.from_state ? stateMeta(entry.from_state).label : "";
-    const to = entry.to_state ? stateMeta(entry.to_state).label : "";
-    if (!to || incidentState(entry.to_state) === "OPEN") {
+    const to = stateMeta(entry.to_state).label;
+    if (!to || toName === "OPEN") {
       continue;
     }
     const label = from && from !== to ? `${from} → ${to}` : to;
@@ -238,29 +243,55 @@ function engagementItem(item) {
   return { kind: "engagement", at: "", time: "", title: "", text: label };
 }
 
-function optionCards(item, total, recommendationId, chosenId) {
+function notableTransitions(transitions) {
+  return (Array.isArray(transitions) ? transitions : []).filter((entry) => {
+    const from = incidentState(entry.from_state);
+    const to = incidentState(entry.to_state);
+    if (!to || from === to) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function optionCards(item, total, remaining, snapshotRemaining, recommendationId, chosenId) {
   const raw = Array.isArray(item?.options) && item.options.length
     ? item.options
     : (Array.isArray(item?.recommendation?.options) ? item.recommendation.options : []);
+  const extraUsed = snapshotRemaining != null && remaining != null
+    ? Math.max(0, snapshotRemaining - remaining)
+    : 0;
   const cards = raw
     .filter((option) => option && typeof option.id === "string" && option.id.trim())
     .map((option) => {
       const id = option.id.trim();
       const spare = finite(option.spare_minutes);
+      const liveSpare = spare == null ? null : spare - extraUsed;
       const projected = finite(option.projected_minutes);
+      const liveProjected = projected == null ? null : projected + extraUsed;
       const eta = finite(option.eta_min) ?? finite(option.drive_min) ?? finite(option.eta);
-      const reason = firstString(option.reason, option.infeasible_reason);
-      const ratio = spare != null && total != null && total > 0
-        ? Math.max(0, Math.min(1, spare / total))
+      let reason = firstString(option.reason, option.infeasible_reason);
+      let feasible = option.feasible === true;
+      if (remaining != null && remaining <= 0) {
+        feasible = false;
+        reason = reason || "Allowance is used up";
+      } else if (liveSpare != null && liveSpare < 0) {
+        feasible = false;
+        reason = reason || (total != null
+          ? `Exceeds the ${formatMinutes(total)} min allowance`
+          : "Exceeds the allowance");
+      }
+      const ratio = liveSpare != null && total != null && total > 0
+        ? Math.max(0, Math.min(1, liveSpare / total))
         : null;
       return {
         id,
         name: optionName(option, item),
-        spareMinutes: spare,
-        spareLabel: spare == null ? "" : `${formatMinutes(spare)} min spare`,
-        projectedLabel: projected == null ? "" : `projected ${formatMinutes(projected)} min`,
+        spareMinutes: liveSpare,
+        spareLabel: liveSpare == null ? "" : `${formatMinutes(Math.max(0, liveSpare))} min spare`,
+        projectedLabel: liveProjected == null ? "" : `projected ${formatMinutes(liveProjected)} min`,
         etaLabel: eta == null ? "" : `ETA ${formatMinutes(eta)} min`,
-        feasible: option.feasible === true,
+        feasible,
         reason: reason || "",
         recommended: id === recommendationId,
         selected: id === chosenId,
@@ -330,25 +361,26 @@ function allowanceKpi(remaining, total, estimated) {
   if (remaining == null) {
     return { value: "—", detail: "", ratio: null, estimated: false, remaining: null, total, level: "unknown" };
   }
-  const left = `${formatMinutes(remaining)} min left`;
+  const leftMinutes = Math.max(0, remaining);
+  const left = `${formatTenths(leftMinutes)} min left`;
   if (total == null || total <= 0) {
     return {
       value: left,
       detail: estimated ? "est." : "",
       ratio: null,
       estimated,
-      remaining,
+      remaining: leftMinutes,
       total: null,
       level: remaining <= 0 ? "spent" : "steady",
     };
   }
-  const ratio = Math.max(0, Math.min(1, remaining / total));
+  const ratio = Math.max(0, Math.min(1, leftMinutes / total));
   return {
-    value: `${formatMinutes(remaining)} / ${formatMinutes(total)} min left`,
+    value: `${formatTenths(leftMinutes)} / ${formatTenths(total)} min left`,
     detail: estimated ? "est." : "",
     ratio,
     estimated,
-    remaining,
+    remaining: leftMinutes,
     total,
     level: allowanceLevel(remaining, ratio),
   };
@@ -508,16 +540,37 @@ function elapsedLabel(item, now) {
   return formatDuration(Math.max(0, (now - opened) / 60000));
 }
 
-function minutesSinceAbove(readings, max, now) {
-  const points = readings.filter((row) => Number.isFinite(Date.parse(row.ts)));
+function freezeAt(item, transitions) {
+  const name = incidentState(item?.state);
+  if (name !== "CANCELLED" && name !== "CLOSED") {
+    return null;
+  }
+  const event = [...transitions].reverse().find((entry) => incidentState(entry.to_state) === name);
+  const stamp = Date.parse(event?.at || item?.updated_at);
+  return Number.isFinite(stamp) ? stamp : null;
+}
+
+function excursionMinutes(readings, band, until) {
+  const [low, high] = band;
+  const points = readings
+    .map((row) => ({ time: Date.parse(row.ts), temperature: Number(row.temperature_c) }))
+    .filter((row) => Number.isFinite(row.time) && Number.isFinite(row.temperature))
+    .sort((left, right) => left.time - right.time);
   if (!points.length) {
     return null;
   }
-  const first = points.find((row) => Number(row.temperature_c) > max);
-  if (!first) {
-    return 0;
+  const outside = (temperature) => temperature < low || temperature > high;
+  let elapsed = 0;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    if (outside(points[index].temperature)) {
+      elapsed += Math.max(0, points[index + 1].time - points[index].time) / 60000;
+    }
   }
-  return Math.max(0, (now - Date.parse(first.ts)) / 60000);
+  const last = points[points.length - 1];
+  if (outside(last.temperature) && Number.isFinite(until) && until > last.time) {
+    elapsed += (until - last.time) / 60000;
+  }
+  return elapsed;
 }
 
 function containedAt(transitions) {
