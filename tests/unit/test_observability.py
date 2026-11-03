@@ -6,6 +6,7 @@ from collections import Counter
 
 import aws_cdk as cdk
 import pytest
+from aws_cdk import Stack
 from aws_cdk.assertions import Template
 
 from infra.naming import Stage
@@ -128,7 +129,9 @@ def test_alarms_cover_every_dlq_machine_and_lambda(built) -> None:
     ):
         assert any(logical_id.startswith(prefix) for logical_id in alarms), prefix
 
-    topic = next(iter(template.find_resources("AWS::SNS::Topic")))
+    topics = template.find_resources("AWS::SNS::Topic")
+    topic = next(iter(topics))
+    assert next(iter(topics.values()))["Properties"]["TopicName"] == "oerf-alarms"
     for alarm in alarms.values():
         props = alarm["Properties"]
         assert props["Threshold"] == 0
@@ -171,12 +174,8 @@ def test_waba_providers_each_get_one_errors_alarm() -> None:
     template, functions, _queues, _machines, _names = _build(
         context={"whatsapp:wabaId": "waba-0000000000000000"}
     )
-    alarms = template.find_resources("AWS::CloudWatch::Alarm")
-    errors = {
-        logical_id: alarm
-        for logical_id, alarm in alarms.items()
-        if alarm["Properties"].get("MetricName") == "Errors"
-    }
+    errors = _error_alarms(functions)
+    assert "WabaEventDestination" not in json.dumps(template.to_json())
     assert len(errors) == len(functions)
     assert len({_function_dimension(alarm["Properties"]) for alarm in errors.values()}) == len(
         functions
@@ -188,7 +187,7 @@ def test_waba_providers_each_get_one_errors_alarm() -> None:
     }
     assert len(prefixes) == 2
     for prefix in prefixes:
-        assert any(logical_id.startswith(prefix) for logical_id in errors)
+        assert any(logical_id.split("/", 1)[-1].startswith(prefix) for logical_id in errors)
 
 
 def test_device_seed_gate_adds_one_provider_alarm() -> None:
@@ -229,28 +228,54 @@ def test_dashboard_lambdas_get_error_alarms() -> None:
     assert len(functions) == len(default_functions) + 2
     errors = [
         alarm["Properties"]["MetricName"]
-        for alarm in template.find_resources("AWS::CloudWatch::Alarm").values()
-        if "MetricName" in alarm["Properties"]
+        for alarm in _error_alarms(functions).values()
     ]
     assert errors.count("Errors") == len(functions)
+    rendered = json.dumps(template.to_json())
+    assert "DashboardQueryFunction" not in rendered
+    assert "DashboardActionFunction" not in rendered
 
 
 def _framework_alarms(context: dict | None = None):
-    template, functions, _queues, _machines, names = _build(context=context)
-    errors = {
-        logical_id: alarm
-        for logical_id, alarm in template.find_resources("AWS::CloudWatch::Alarm").items()
-        if alarm["Properties"].get("MetricName") == "Errors"
-    }
+    _template, functions, _queues, _machines, names = _build(context=context)
+    errors = _error_alarms(functions)
     framework = [fn for fn in functions if fn.node.id == "framework-onEvent"]
     return errors, framework, names, functions
+
+
+def _error_alarms(functions: list) -> dict[str, dict]:
+    """Errors alarms for these functions, including ones owned by their stack."""
+
+    root = functions[0].node.root
+    stacks = []
+    seen: set[int] = set()
+    observability = root.node.try_find_child("OerfObservabilityStack")
+    assert observability is not None
+    stacks.append(observability)
+    seen.add(id(observability))
+    for fn in functions:
+        stack = Stack.of(fn)
+        if id(stack) in seen:
+            continue
+        seen.add(id(stack))
+        stacks.append(stack)
+    found: dict[str, dict] = {}
+    for stack in stacks:
+        if not isinstance(stack, Stack):
+            continue
+        for logical_id, alarm in Template.from_stack(stack).find_resources(
+            "AWS::CloudWatch::Alarm"
+        ).items():
+            if alarm["Properties"].get("MetricName") == "Errors":
+                found[f"{stack.node.id}/{logical_id}"] = alarm
+    return found
 
 
 def _assert_each_framework_alarm(errors: dict, framework: list, functions: list) -> None:
     prefixes = {re.sub(r"[^A-Za-z0-9]", "", error_alarm_id(fn, functions)) for fn in framework}
     assert len(prefixes) == len(framework)
     for prefix in prefixes:
-        assert any(logical_id.startswith(prefix) for logical_id in errors)
+        assert any(logical_id.split("/", 1)[-1].startswith(prefix) for logical_id in errors)
 
 
 def _assert_unique_function_alarms_keep_their_ids(alarms: dict, functions: list) -> None:
