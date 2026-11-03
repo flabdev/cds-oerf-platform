@@ -16,3 +16,169 @@ What changed from that stock template:
 Bootstrap it only as stack `CDKToolkit-dev` with `--qualifier oerfdev` and no `--trust`. Do not apply this file to `CDKToolkit`.
 
 When the CDK CLI is upgraded, run `cdk bootstrap --show-template`, diff it against this file, and re-apply only the CloudFormation limits above. Keep `BootstrapVariant` custom so the new stock template does not replace this one. Bump the recorded version if `CdkBootstrapVersion` changes.
+
+## Laptop deploy
+
+Run these from the repo root. Use the project Python 3.11 venv so `cdk` can import `aws_cdk`:
+
+```bash
+export AWS_PROFILE=Fission-OERF
+export AWS_DEFAULT_REGION=us-east-1
+source .venv311/bin/activate
+python3 -c "import aws_cdk; print('ok')"
+```
+
+Unset stale session variables if `aws sts get-caller-identity` fails with `InvalidClientTokenId`:
+
+```bash
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+aws sts get-caller-identity --profile Fission-OERF --region us-east-1
+```
+
+Every `aws` command below repeats `--profile Fission-OERF --region us-east-1` so it stays correct even when the exports are not set. `cdk` uses the exported profile and region.
+
+Do not pass `whatsapp:wabaId` for dev. Dev does not create the WABA event destination.
+
+### 1. Bootstrap `CDKToolkit-dev`
+
+```bash
+cdk bootstrap aws://906048429638/us-east-1 \
+  --profile Fission-OERF \
+  --toolkit-stack-name CDKToolkit-dev \
+  --qualifier oerfdev \
+  --template infra/bootstrap/dev-bootstrap.yaml \
+  --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess \
+  -c stage=dev \
+  -c account=906048429638
+```
+
+Use laptop credentials with permission to create the toolkit stack. Do not apply this template to main’s `CDKToolkit`.
+
+### 2. Deploy `OerfCiStack-dev` (GitHub role)
+
+`cdk deploy OerfCiStack-dev` fails on purpose: the oerfdev deploy role has an explicit deny on this stack. Synth, then create or update the stack with CloudFormation as your laptop principal (not via the bootstrap deploy role):
+
+```bash
+cdk synth --quiet \
+  --profile Fission-OERF \
+  -c stage=dev \
+  -c account=906048429638 \
+  -c ci:deployRoleStack=true \
+  -c github:oidcProviderArn=arn:aws:iam::906048429638:oidc-provider/token.actions.githubusercontent.com
+
+aws cloudformation deploy \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfCiStack-dev \
+  --template-file cdk.out/OerfCiStack-dev.template.json \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+  --no-fail-on-empty-changeset
+```
+
+Replace the OIDC provider ARN if the account’s GitHub provider ARN differs.
+
+### 3. First dev deploy (four app stacks)
+
+Docker must be running (`agentcore:enabled=true` builds the AgentCore image).
+
+Put the dev WhatsApp phone-number id in SSM. This is the End User Messaging **phone-number id** (for example `phone-number-id-…`), not an E.164 phone number. Use a placeholder until a real id exists:
+
+```bash
+PLACEHOLDER_PHONE_ID='phone-number-id-01234567890123456789012345678901'
+
+aws ssm put-parameter \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --name /oerf/dev/whatsapp/phone-number-id \
+  --type String \
+  --value "$PLACEHOLDER_PHONE_ID" \
+  --overwrite
+```
+
+Pass the same id as CDK context so IAM resources scope correctly at synth time. On the **first** deploy only, add `-c demo:seedDevices=true`. Later deploys omit that flag.
+
+```bash
+cdk diff \
+  --profile Fission-OERF \
+  OerfDataStack-dev OerfComputeStack-dev OerfApiStack-dev OerfObservabilityStack-dev \
+  -c stage=dev \
+  -c account=906048429638 \
+  -c agentcore:enabled=true \
+  -c dashboard:enabled=true \
+  -c channels:live=false \
+  -c whatsapp:phoneNumberId="$PLACEHOLDER_PHONE_ID" \
+  -c demo:seedDevices=true
+
+cdk deploy \
+  --profile Fission-OERF \
+  OerfDataStack-dev OerfComputeStack-dev OerfApiStack-dev OerfObservabilityStack-dev \
+  -c stage=dev \
+  -c account=906048429638 \
+  -c agentcore:enabled=true \
+  -c dashboard:enabled=true \
+  -c channels:live=false \
+  -c whatsapp:phoneNumberId="$PLACEHOLDER_PHONE_ID" \
+  -c demo:seedDevices=true
+```
+
+GitHub dev deploys use `OerfGitHubDeployRole-dev`, assume the oerfdev bootstrap roles, and run the same stack names with the same context keys except `demo:seedDevices` (off unless seeding again).
+
+### 4. IAM simulation (dev deploy role)
+
+After bootstrap, confirm the oerfdev **deploy** role cannot touch main stacks or the protected dev stacks. Replace nothing if the account and region match.
+
+```bash
+DEPLOY_ROLE=arn:aws:iam::906048429638:role/cdk-oerfdev-deploy-role-906048429638-us-east-1
+
+# Main stack name (no -dev suffix): no allow → implicitDeny
+aws iam simulate-principal-policy \
+  --profile Fission-OERF \
+  --policy-source-arn "$DEPLOY_ROLE" \
+  --action-names cloudformation:UpdateStack \
+  --resource-arns arn:aws:cloudformation:us-east-1:906048429638:stack/OerfComputeStack/example
+
+# CI role stack: explicitDeny (DenyOerfCiStack)
+aws iam simulate-principal-policy \
+  --profile Fission-OERF \
+  --policy-source-arn "$DEPLOY_ROLE" \
+  --action-names cloudformation:DescribeStacks \
+  --resource-arns arn:aws:cloudformation:us-east-1:906048429638:stack/OerfCiStack-dev/example
+
+# Dev toolkit writes: explicitDeny (DenyToolkitWrites)
+aws iam simulate-principal-policy \
+  --profile Fission-OERF \
+  --policy-source-arn "$DEPLOY_ROLE" \
+  --action-names cloudformation:ExecuteChangeSet \
+  --resource-arns arn:aws:cloudformation:us-east-1:906048429638:changeSet/example/CDKToolkit-dev
+```
+
+Expect `EvalDecision` **`implicitDeny`** on `OerfComputeStack`, and **`explicitDeny`** on `OerfCiStack-dev` and `CDKToolkit-dev`. A sanity check that dev app stacks are allowed:
+
+```bash
+aws iam simulate-principal-policy \
+  --profile Fission-OERF \
+  --policy-source-arn "$DEPLOY_ROLE" \
+  --action-names cloudformation:UpdateStack \
+  --resource-arns arn:aws:cloudformation:us-east-1:906048429638:stack/OerfDataStack-dev/example
+```
+
+Expect **`allowed`**.
+
+### 5. Dev synth and deploy context
+
+Every dev `cdk synth`, `cdk diff`, and `cdk deploy` needs:
+
+```text
+-c stage=dev -c account=906048429638
+```
+
+First full dev deploy (section 3) also passes `-c agentcore:enabled=true`, `-c dashboard:enabled=true`, `-c channels:live=false`, `-c whatsapp:phoneNumberId=<id>`, and `-c demo:seedDevices=true` once. `OerfCiStack-dev` synth adds `-c ci:deployRoleStack=true` and `-c github:oidcProviderArn=<arn>`.
+
+### 6. Common CLI failures
+
+| Symptom | Fix |
+| --- | --- |
+| `stage' is required ... (got None)` | Add `-c stage=dev` or `-c stage=main` on every `cdk` command. |
+| `No module named 'aws_cdk'` | Activate `.venv311` before `cdk` (see top of this section). |
+| `InvalidClientTokenId` on `aws sts` | Use `Fission-OERF`, not the default profile; clear stale `AWS_*` session env vars. |
+| Explicit deny on `OerfCiStack-dev` during `cdk deploy` | Deploy that stack with `aws cloudformation deploy` as laptop admin (section 2). |
