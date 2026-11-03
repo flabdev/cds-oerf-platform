@@ -88,9 +88,8 @@ def record_outbound_message(
     channel: str,
     recipient: str,
     status: str,
-    task_token: str | None = None,
 ) -> None:
-    """Record outbound message in RoutingTable for audit and callback correlation."""
+    """Write a legacy MSG# audit row. Resume tokens live on ENG# / OUTMSG#."""
     if not ROUTING_TABLE_NAME:
         logger.warning("ROUTING_TABLE_NAME not set, skipping routing record")
         return
@@ -99,24 +98,20 @@ def record_outbound_message(
     now = int(time.time())
     expires_at = now + (7 * 86400)  # 7-day retention
 
-    item = {
-        "pk": f"TENANT#{tenant_id}#INCIDENT#{incident_id}",
-        "sk": f"MSG#{message_id}",
-        "tenant_id": tenant_id,
-        "incident_id": incident_id,
-        "message_id": message_id,
-        "channel": channel,
-        "recipient": recipient,
-        "status": status,
-        "created_at": now,
-        "expires_at": expires_at,
-    }
-    if task_token:
-        item["task_token"] = task_token
-
-    # Resume uses ENG# / OUTMSG#, not ACTIVE_TASK_TOKEN or MSG_CORRELATION#
-    # (OERF-116). The engagement send path never calls this function.
-    table.put_item(Item=item)
+    table.put_item(
+        Item={
+            "pk": f"TENANT#{tenant_id}#INCIDENT#{incident_id}",
+            "sk": f"MSG#{message_id}",
+            "tenant_id": tenant_id,
+            "incident_id": incident_id,
+            "message_id": message_id,
+            "channel": channel,
+            "recipient": recipient,
+            "status": status,
+            "created_at": now,
+            "expires_at": expires_at,
+        }
+    )
 
 
 def send_whatsapp(
@@ -328,7 +323,6 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         "recipient_email": "driver@example.com",
         "message": "Cold-chain alert: temperature exceeded limit.",
         "subject": "OERF Alert: Excursion Detected",
-        "task_token": "<stepfunctions-token>",
         "channel_priority": ["WHATSAPP", "SMS", "EMAIL"]
     }
     """
@@ -349,7 +343,6 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     recipient_email = event.get("recipient_email")
     message = event.get("message", "")
     subject = event.get("subject", "OERF Alert")
-    task_token = event.get("task_token")
     channel_priority = event.get("channel_priority", ["WHATSAPP", "SMS", "EMAIL"])
 
     result = {"success": False, "attempts": []}
@@ -389,7 +382,6 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 channel=ch_upper,
                 recipient=delivered_to or "",
                 status=res.get("status", "SENT"),
-                task_token=task_token,
             )
             break
 

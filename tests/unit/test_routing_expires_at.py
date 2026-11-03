@@ -115,7 +115,6 @@ def test_outbound_records_write_expires_at_for_seven_days(monkeypatch) -> None:
         "sms",
         "+910000000101",
         "SENT",
-        task_token="token-1",
     )
 
     stored = {(item["pk"], item["sk"]): item for item in table.put_items}
@@ -123,7 +122,7 @@ def test_outbound_records_write_expires_at_for_seven_days(monkeypatch) -> None:
     assert ("TENANT#t1#INCIDENT#inc-1", "ACTIVE_TASK_TOKEN") not in stored
     assert ("MSG_CORRELATION#msg-1", "TOKEN") not in stored
     assert message["created_at"] == _NOW
-    assert message["task_token"] == "token-1"
+    assert "task_token" not in message
     _assert_expires(message, _NOW + _WEEK)
 
 
