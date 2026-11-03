@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatClock, formatMinutes, formatTemperature } from "./utils/format.js";
+import { formatClock, formatMinutes, formatTenths, formatTemperature } from "./utils/format.js";
 
 test("minutes are whole numbers, or one decimal under ten", () => {
   assert.equal(formatMinutes(24), "24");
@@ -10,6 +10,12 @@ test("minutes are whole numbers, or one decimal under ten", () => {
   assert.equal(formatMinutes(8), "8.0");
   assert.equal(formatMinutes(9.96), "10");
   assert.equal(formatMinutes(null), null);
+});
+
+test("tenths keep one decimal for the allowance readout", () => {
+  assert.equal(formatTenths(33), "33.0");
+  assert.equal(formatTenths(22.44), "22.4");
+  assert.equal(formatTenths(null), null);
 });
 
 test("temperatures keep one decimal and the unit", () => {

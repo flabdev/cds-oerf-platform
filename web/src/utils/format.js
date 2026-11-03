@@ -11,6 +11,13 @@ export function formatMinutes(value) {
   return String(Math.round(tenths));
 }
 
+export function formatTenths(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  return (Math.round(value * 10) / 10).toFixed(1);
+}
+
 export function formatTemperature(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return null;
