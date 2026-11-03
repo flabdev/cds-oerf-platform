@@ -125,6 +125,7 @@ cdk diff \
   OerfDataStack-dev OerfComputeStack-dev OerfApiStack-dev OerfObservabilityStack-dev \
   -c stage=dev \
   -c account=906048429638 \
+  -c auth:managedLogin=true \
   -c agentcore:enabled=true \
   -c dashboard:enabled=true \
   -c desk:publish=true \
@@ -138,6 +139,7 @@ cdk deploy \
   OerfDataStack-dev OerfComputeStack-dev OerfApiStack-dev OerfObservabilityStack-dev \
   -c stage=dev \
   -c account=906048429638 \
+  -c auth:managedLogin=true \
   -c agentcore:enabled=true \
   -c dashboard:enabled=true \
   -c desk:publish=true \
@@ -211,7 +213,7 @@ Every dev `cdk synth`, `cdk diff`, and `cdk deploy` needs:
 -c stage=dev -c account=906048429638
 ```
 
-First full dev deploy (section 3) also passes `-c agentcore:enabled=true`, `-c dashboard:enabled=true`, `-c desk:publish=true`, `-c channels:live=false`, `-c whatsapp:phoneNumberId=<id>`, `-c whatsapp:sharedInboundTopicArn=<main inbound topic ARN>`, and `-c demo:seedDevices=true` once. `desk:publish=true` needs `web/dist` from `cd web && npm ci && npm run build`. Later dev deploys of the dashboard keep `-c desk:publish=true` and the shared inbound topic ARN. `OerfCiStack-dev` synth adds `-c ci:deployRoleStack=true` and `-c github:oidcProviderArn=<arn>`.
+First full dev deploy (section 3) also passes `-c auth:managedLogin=true`, `-c agentcore:enabled=true`, `-c dashboard:enabled=true`, `-c desk:publish=true`, `-c channels:live=false`, `-c whatsapp:phoneNumberId=<id>`, `-c whatsapp:sharedInboundTopicArn=<main inbound topic ARN>`, and `-c demo:seedDevices=true` once. `desk:publish=true` needs `web/dist` from `cd web && npm ci && npm run build`. Later dev deploys of the dashboard keep `-c auth:managedLogin=true`, `-c desk:publish=true`, and the shared inbound topic ARN. `OerfCiStack-dev` synth adds `-c ci:deployRoleStack=true` and `-c github:oidcProviderArn=<arn>`.
 
 ### 6. Common CLI failures
 

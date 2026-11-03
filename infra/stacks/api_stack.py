@@ -43,6 +43,10 @@ _DESK_PUBLISH_MEMORY_MIB = 1024
 _DESK_BUILD_MESSAGE = "build web/ first: cd web && npm ci && npm run build"
 # Repo root is two levels above this file (infra/stacks/api_stack.py).
 DESK_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
+# Checked-in branding export. Absent until someone saves it from the console.
+MANAGED_LOGIN_BRANDING = (
+    Path(__file__).resolve().parents[1] / "config" / "managed-login-branding.json"
+)
 _ACCESS_LOG = json.dumps(
     {
         "requestId": "$context.requestId",
@@ -249,11 +253,20 @@ class OerfApiStack(Stack):
         cadence.add_method("PUT", query_integration, **authorization)
 
         domain_prefix = stage.res(self.account)
+        # ManagedLoginVersion is "Update requires: No interruption". Domain and
+        # UserPoolId are Replacement, so this flag must not change either of them.
+        # The pool tier is already Essentials on OerfUserPool (also no interruption).
+        domain_version = {}
+        if _managed_login_enabled(self):
+            domain_version["managed_login_version"] = (
+                cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN
+            )
         self.hosted_domain = cognito.UserPoolDomain(
             self,
             "DashboardHostedDomain",
             user_pool=data_stack.user_pool,
             cognito_domain=cognito.CognitoDomainOptions(domain_prefix=domain_prefix),
+            **domain_version,
         )
         self.user_pool_client = cognito.UserPoolClient(
             self,
@@ -274,6 +287,15 @@ class OerfApiStack(Stack):
             ),
         )
         self.user_pool_client.node.add_dependency(self.hosted_domain)
+        if _managed_login_enabled(self):
+            # The style references the client. It also waits for the domain so
+            # version 2 exists before Cognito accepts the branding resource.
+            branding = _managed_login_branding(
+                self,
+                user_pool_id=data_stack.user_pool.user_pool_id,
+                client_id=self.user_pool_client.user_pool_client_id,
+            )
+            branding.node.add_dependency(self.hosted_domain)
         # The WebSocket authorizer lives in OerfComputeStack, which this stack
         # depends on. Publishing the client id lets that function allow the
         # hosted-UI client without a reference back to this stack.
@@ -310,6 +332,82 @@ class OerfApiStack(Stack):
 
 def _desk_publish_enabled(scope: Construct) -> bool:
     return scope.node.try_get_context("desk:publish") == "true"
+
+
+def _managed_login_enabled(scope: Construct) -> bool:
+    return scope.node.try_get_context("auth:managedLogin") == "true"
+
+
+def _managed_login_branding(
+    stack: OerfApiStack,
+    *,
+    user_pool_id: str,
+    client_id: str,
+) -> cognito.CfnManagedLoginBranding:
+    """One style for the dashboard client.
+
+    ``UseCognitoProvidedValues: true`` is Cognito's default style. CloudFormation
+    requires that request to omit ``Settings`` and ``Assets``, so the logo cannot
+    ride along with the default. A checked-in export supplies both and turns the
+    default off.
+    """
+
+    settings, assets = _branding_document(MANAGED_LOGIN_BRANDING)
+    if settings is None:
+        return cognito.CfnManagedLoginBranding(
+            stack,
+            "DashboardManagedLoginBranding",
+            user_pool_id=user_pool_id,
+            client_id=client_id,
+            use_cognito_provided_values=True,
+        )
+    return cognito.CfnManagedLoginBranding(
+        stack,
+        "DashboardManagedLoginBranding",
+        user_pool_id=user_pool_id,
+        client_id=client_id,
+        use_cognito_provided_values=False,
+        settings=settings,
+        assets=assets,
+    )
+
+
+def _branding_document(path: Path) -> tuple[object | None, list | None]:
+    """Return ``(Settings, Assets)``. ``(None, None)`` when the file is absent."""
+
+    if not path.is_file():
+        return None, None
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict) or "Settings" not in document:
+        raise ValueError(
+            f"{path.name} must be a JSON object with Settings, and Assets when images were exported"
+        )
+    raw_assets = document.get("Assets")
+    if raw_assets is None:
+        return document["Settings"], None
+    if not isinstance(raw_assets, list):
+        raise ValueError(f"{path.name} Assets must be a list")
+    return document["Settings"], [_branding_asset(item) for item in raw_assets]
+
+
+def _branding_asset(item: object) -> cognito.CfnManagedLoginBranding.AssetTypeProperty:
+    if not isinstance(item, dict):
+        raise ValueError("each branding asset must be an object")
+    try:
+        category = item["Category"]
+        color_mode = item["ColorMode"]
+        extension = item["Extension"]
+    except KeyError as error:
+        raise ValueError(
+            "each branding asset needs Category, ColorMode, and Extension"
+        ) from error
+    return cognito.CfnManagedLoginBranding.AssetTypeProperty(
+        category=category,
+        color_mode=color_mode,
+        extension=extension,
+        bytes=item.get("Bytes"),
+        resource_id=item.get("ResourceId"),
+    )
 
 
 def require_desk_build(dist: Path) -> None:

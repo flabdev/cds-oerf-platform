@@ -336,6 +336,119 @@ def test_websocket_allow_list_matches_the_hosted_ui_client() -> None:
     assert variables["USER_POOL_CLIENT_ID"] != parameter["Properties"]["Value"]
 
 
+def test_managed_login_is_absent_unless_the_flag_is_set(template: Template) -> None:
+    domain = next(iter(template.find_resources("AWS::Cognito::UserPoolDomain").values()))
+    assert "ManagedLoginVersion" not in domain["Properties"]
+    assert template.find_resources("AWS::Cognito::ManagedLoginBranding") == {}
+
+
+def _dashboard_templates(context: dict[str, str]) -> tuple[Template, Template]:
+    app = cdk.App(context=context)
+    env = cdk.Environment(account=ACCOUNT, region=REGION)
+    stage = Stage("dev")
+    data = OerfDataStack(app, "OerfDataStack", stage=stage, env=env)
+    refs = cdk.Stack(app, "InboundRefs", env=env)
+    queue = sqs.Queue(refs, "InboundQueue")
+    api = OerfApiStack(
+        app,
+        "OerfApiStack",
+        data_stack=data,
+        inbound_queue=queue,
+        websocket_url=WEBSOCKET_URL,
+        stage=stage,
+        env=env,
+    )
+    return Template.from_stack(data), Template.from_stack(api)
+
+
+def _only(template: Template, resource_type: str) -> tuple[str, dict]:
+    found = template.find_resources(resource_type)
+    assert len(found) == 1, resource_type
+    return next(iter(found.items()))
+
+
+def test_managed_login_keeps_the_pool_domain_and_client() -> None:
+    off_data, off_api = _dashboard_templates({})
+    on_data, on_api = _dashboard_templates({"auth:managedLogin": "true"})
+
+    off_pool_id, off_pool = _only(off_data, "AWS::Cognito::UserPool")
+    on_pool_id, on_pool = _only(on_data, "AWS::Cognito::UserPool")
+    off_domain_id, off_domain = _only(off_api, "AWS::Cognito::UserPoolDomain")
+    on_domain_id, on_domain = _only(on_api, "AWS::Cognito::UserPoolDomain")
+    off_client_id, off_client = _only(off_api, "AWS::Cognito::UserPoolClient")
+    on_client_id, on_client = _only(on_api, "AWS::Cognito::UserPoolClient")
+
+    assert on_pool_id == off_pool_id
+    assert on_domain_id == off_domain_id
+    assert on_client_id == off_client_id
+    assert on_pool["Properties"] == off_pool["Properties"]
+    assert on_pool["Properties"]["UserPoolTier"] == "ESSENTIALS"
+    assert on_client["Properties"] == off_client["Properties"]
+    assert on_domain["Properties"]["Domain"] == off_domain["Properties"]["Domain"]
+    assert on_domain["Properties"]["UserPoolId"] == off_domain["Properties"]["UserPoolId"]
+    assert "ManagedLoginVersion" not in off_domain["Properties"]
+    assert on_domain["Properties"]["ManagedLoginVersion"] == 2
+
+    assert off_api.find_resources("AWS::Cognito::ManagedLoginBranding") == {}
+    branding_id, branding = _only(on_api, "AWS::Cognito::ManagedLoginBranding")
+    assert branding_id.startswith("DashboardManagedLoginBranding")
+    props = branding["Properties"]
+    assert props["UseCognitoProvidedValues"] is True
+    assert "Settings" not in props
+    assert "Assets" not in props
+    assert props["ClientId"] == {"Ref": on_client_id}
+    assert props["UserPoolId"] == on_domain["Properties"]["UserPoolId"]
+    assert {"Ref": on_domain_id} in branding["DependsOn"] or on_domain_id in branding["DependsOn"]
+
+
+def test_managed_login_branding_file_supplies_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    branding_file = tmp_path / "managed-login-branding.json"
+    branding_file.write_text(
+        json.dumps(
+            {
+                "Settings": {
+                    "componentClasses": {"form": {"lightMode": {"logo": {"enabled": True}}}}
+                },
+                "Assets": [
+                    {
+                        "Category": "FORM_LOGO",
+                        "ColorMode": "DYNAMIC",
+                        "Extension": "PNG",
+                        "Bytes": "aGVsbG8=",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(api_stack_module, "MANAGED_LOGIN_BRANDING", branding_file)
+    _data, api = _dashboard_templates({"auth:managedLogin": "true"})
+    _logical_id, branding = _only(api, "AWS::Cognito::ManagedLoginBranding")
+    props = branding["Properties"]
+    assert props["UseCognitoProvidedValues"] is False
+    assert props["Settings"]["componentClasses"]["form"]["lightMode"]["logo"]["enabled"] is True
+    assert props["Assets"] == [
+        {
+            "Category": "FORM_LOGO",
+            "ColorMode": "DYNAMIC",
+            "Extension": "PNG",
+            "Bytes": "aGVsbG8=",
+        }
+    ]
+
+
+def test_managed_login_branding_file_must_contain_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    branding_file = tmp_path / "managed-login-branding.json"
+    branding_file.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(api_stack_module, "MANAGED_LOGIN_BRANDING", branding_file)
+    with pytest.raises(ValueError, match="must be a JSON object with Settings"):
+        _dashboard_templates({"auth:managedLogin": "true"})
+
+
 def test_desk_publish_is_off_unless_the_flag_is_set(template: Template) -> None:
     assert template.find_resources("Custom::CDKBucketDeployment") == {}
     assert "DeskConfigUrl" not in template.find_outputs("*")

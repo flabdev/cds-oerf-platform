@@ -177,6 +177,7 @@ jobs:
           done
           {
             printf '%s\n' "stage=dev"
+            printf '%s\n' "auth:managedLogin=true"
             printf '%s\n' "account=${AWS_ACCOUNT_ID}"
             printf '%s\n' "agentcore:enabled=${AGENTCORE}"
             printf '%s\n' "dashboard:enabled=${DASHBOARD}"
