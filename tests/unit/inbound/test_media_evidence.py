@@ -88,9 +88,11 @@ def _store(social: _Social, s3) -> WhatsAppMediaEvidenceStore:
     return WhatsAppMediaEvidenceStore("evidence", social=social, s3=s3)
 
 
-def _prefix(tenant: str = "tenant-a", message_id: str = "incoming-1") -> str:
+def _prefix(
+    tenant: str = "tenant-a", message_id: str = "incoming-1", incident_id: str = "incident-1"
+) -> str:
     digest = hashlib.sha256(message_id.encode("utf-8")).hexdigest()
-    return f"tenants/{tenant}/inbound/{digest}/"
+    return f"tenants/{tenant}/inbound/{incident_id}/{digest}/"
 
 
 def test_allowed_image_is_stored_through_a_presigned_put(monkeypatch) -> None:
@@ -106,7 +108,9 @@ def test_allowed_image_is_stored_through_a_presigned_put(monkeypatch) -> None:
     )
     social.stubber.activate()
 
-    key = _store(social, _signer()).store("tenant-a", "incoming-1", MEDIA_ID, "image/gif")
+    key = _store(social, _signer()).store(
+        "tenant-a", "incident-1", "incoming-1", MEDIA_ID, "image/gif"
+    )
 
     assert key.startswith(_prefix())
     assert key.endswith(".jpg")
@@ -137,7 +141,7 @@ def test_disallowed_type_is_rejected_without_a_presign(monkeypatch, capsys) -> N
     s3 = _S3()
 
     with pytest.raises(MediaRejected):
-        _store(social, s3).store("tenant-a", "incoming-1", MEDIA_ID, "image/jpeg")
+        _store(social, s3).store("tenant-a", "incident-1", "incoming-1", MEDIA_ID, "image/jpeg")
 
     assert s3.calls == 0
     assert len(social.calls) == 1
@@ -158,7 +162,7 @@ def test_oversize_file_uses_the_env_cap(monkeypatch) -> None:
     s3 = _S3()
 
     with pytest.raises(MediaRejected):
-        _store(social, s3).store("tenant-a", "incoming-1", MEDIA_ID, None)
+        _store(social, s3).store("tenant-a", "incident-1", "incoming-1", MEDIA_ID, None)
 
     assert s3.calls == 0
     assert len(social.calls) == 1
@@ -176,7 +180,7 @@ def test_invalid_media_id_is_rejected_without_retry(monkeypatch, capsys) -> None
     social.stubber.activate()
 
     with pytest.raises(MediaRejected):
-        _store(social, _S3()).store("tenant-a", "incoming-1", MEDIA_ID, None)
+        _store(social, _S3()).store("tenant-a", "incident-1", "incoming-1", MEDIA_ID, None)
 
     assert len(social.calls) == 1
     assert MEDIA_ID not in capsys.readouterr().out
@@ -198,7 +202,7 @@ def test_throttled_or_server_error_raises_for_retry(monkeypatch, code: str, stat
     social.stubber.activate()
 
     with pytest.raises(ClientError):
-        _store(social, _S3()).store("tenant-a", "incoming-1", MEDIA_ID, None)
+        _store(social, _S3()).store("tenant-a", "incident-1", "incoming-1", MEDIA_ID, None)
 
     assert len(social.calls) == 1
 
@@ -209,7 +213,7 @@ def test_missing_phone_id_fails_closed(monkeypatch) -> None:
     s3 = _S3()
 
     with pytest.raises(MediaConfigError):
-        _store(social, s3).store("tenant-a", "incoming-1", MEDIA_ID, None)
+        _store(social, s3).store("tenant-a", "incident-1", "incoming-1", MEDIA_ID, None)
 
     assert social.calls == []
     assert s3.calls == 0

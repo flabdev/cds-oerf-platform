@@ -313,7 +313,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     An engagement rung stores its task token on ``ENG#`` and sends through
     ``send_rung``. The legacy payload below does not.
-    
+
     Expected event payload:
     {
         "tenant_id": "T1",
@@ -371,9 +371,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             result["delivered_channel"] = ch_upper
             result["message_id"] = res.get("message_id")
 
-            delivered_to = (
-                recipient_phone if ch_upper in ("WHATSAPP", "SMS") else recipient_email
-            )
+            delivered_to = recipient_phone if ch_upper in ("WHATSAPP", "SMS") else recipient_email
 
             record_outbound_message(
                 tenant_id=tenant_id,
@@ -429,6 +427,7 @@ class OutboundRequest(BaseModel):
     rcs_roles: tuple[str, ...] = ()
     inbound_rcs: bool = False
     session_text: bool = False
+    inline_text: bool = False
 
 
 class DeliveryAttempt(BaseModel):
@@ -486,13 +485,16 @@ def route_outbound(
         if channel == "rcs" and not _rcs_allowed(request):
             attempts.append(_attempt(request, channel, delivered=False, reason="rcs_unavailable"))
             continue
-        try:
-            body = render_message(messages, request.template_id, channel, request.facts)
-        except MissingTemplate:
-            attempts.append(_attempt(request, channel, delivered=False, reason="no_template"))
-            continue
-        except MissingFacts:
-            raise
+        if request.inline_text:
+            body = request.template_id
+        else:
+            try:
+                body = render_message(messages, request.template_id, channel, request.facts)
+            except MissingTemplate:
+                attempts.append(_attempt(request, channel, delivered=False, reason="no_template"))
+                continue
+            except MissingFacts:
+                raise
         if channel == "voice" and "WhatsApp" not in body:
             body = f"{body}{_VOICE_REPLY}"
         provider = providers.get(channel)
@@ -507,10 +509,10 @@ def route_outbound(
             continue
         parameters = (
             tuple(parameter_values(messages, request.template_id, channel, request.facts))
-            if channel == "whatsapp" and not request.session_text
+            if channel == "whatsapp" and not request.session_text and not request.inline_text
             else ()
         )
-        sent_template = "" if request.session_text else request.template_id
+        sent_template = "" if request.session_text or request.inline_text else request.template_id
         sent = provider.send(recipient, body, sent_template, parameters=parameters)
         attempts.append(
             _attempt(

@@ -59,14 +59,7 @@ STUB_COLD_CHAIN_TASKS = frozenset(
         "BeginDisposition",
     }
 )
-STUB_ENGAGEMENT_TASKS = frozenset(
-    {
-        "HandleCallback",
-        "ResetLadder",
-        "SendFinalQuestion",
-        "ApplyExhaustAction",
-    }
-)
+STUB_ENGAGEMENT_TASKS = frozenset()
 NOTICE_TASKS = frozenset({"NotifyContinue", "NotifyDivert"})
 
 
@@ -114,12 +107,23 @@ def test_real_and_stub_tasks_are_listed() -> None:
     engagement_stub = {
         name
         for name, state in engagement.items()
-        if state["Parameters"]["FunctionName"] == "__ENGAGEMENT_STUB_ARN__"
+        if state.get("Parameters", {}).get("FunctionName") == "__ENGAGEMENT_STUB_ARN__"
+    }
+    engagement_real = {
+        name
+        for name, state in engagement.items()
+        if state.get("Parameters", {}).get("FunctionName") in ASL_ENGAGE_PLACEHOLDERS
     }
 
     assert real == frozenset(REAL_PLACEHOLDERS)
     assert stub == STUB_COLD_CHAIN_TASKS
     assert engagement_stub == STUB_ENGAGEMENT_TASKS
+    assert {
+        "HandleCallback",
+        "ResetLadder",
+        "PrepareFinalQuestion",
+        "ApplyExhaustAction",
+    } <= engagement_real
     assert "EngageDriverDiagnosis" not in real
     assert "EngageDriverDiagnosis" not in stub
     assert cold["EngageDriverDiagnosis"]["Resource"].endswith("startExecution.sync:2")
@@ -197,9 +201,7 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
 
 
 def test_nested_engagement_is_a_token_waiting_state_machine_and_runs_before_assess() -> None:
-    definition = json.loads(
-        (ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8")
-    )
+    definition = json.loads((ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8"))
     states = definition["States"]
     parent_states = load_definition()["States"]
     parent = parent_states["EngageDriverDiagnosis"]
@@ -231,7 +233,19 @@ def test_nested_engagement_is_a_token_waiting_state_machine_and_runs_before_asse
     assert states["SendViaRouter"]["TimeoutSecondsPath"] == "$.cadence.timeout_seconds"
     assert states["SendViaRouter"]["ResultPath"] == "$.reply"
     assert states["Interpret"]["Next"] == "InterpretResult"
-    assert states["SendFinalQuestion"]["TimeoutSeconds"] == 86400
+    assert (
+        states["PrepareFinalQuestion"]["Parameters"]["Payload"]["step_name"]
+        == "EngagementFinalQuestion"
+    )
+    assert (
+        states["SendFinalQuestion"]["TimeoutSecondsPath"]
+        == "$.cadence.final_question_timeout_seconds"
+    )
+    assert (
+        states["SendFinalQuestion"]["Parameters"]["Payload"]["step_name"]
+        == "EngagementSendViaRouter"
+    )
+    assert states["SendFinalQuestion"]["Parameters"]["FunctionName"] == "__CHANNEL_ROUTER_ARN__"
     assert states["SendViaRouter"]["Resource"].endswith(".waitForTaskToken")
     assert states["InterpretResult"]["Choices"][0]["Next"] == "HandleCallback"
     assert states["SendViaRouter"]["Catch"][0]["Next"] == "AdvanceRung"
@@ -250,9 +264,7 @@ def test_nested_engagement_is_a_token_waiting_state_machine_and_runs_before_asse
 
 
 def test_every_nested_engagement_transition_points_to_a_declared_state() -> None:
-    definition = json.loads(
-        (ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8")
-    )
+    definition = json.loads((ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8"))
     states = definition["States"]
 
     for name, state in states.items():
@@ -335,23 +347,13 @@ def _placeholder_lambda_arn(name: str) -> str:
 def _definition_with_placeholder_arns(text: str, *, engagement: bool) -> str:
     if engagement:
         for placeholder, phase in ASL_ENGAGE_PLACEHOLDERS.items():
-            text = text.replace(
-                placeholder, _placeholder_lambda_arn(ENGAGE_FUNCTION_NAMES[phase])
-            )
-        text = text.replace(
-            "__ENGAGEMENT_STUB_ARN__",
-            _placeholder_lambda_arn("oerf-workflow-stub"),
-        )
-        text = text.replace(
-            "__CHANNEL_ROUTER_ARN__", _placeholder_lambda_arn(CHANNEL_ROUTER_NAME)
-        )
+            text = text.replace(placeholder, _placeholder_lambda_arn(ENGAGE_FUNCTION_NAMES[phase]))
+        text = text.replace("__CHANNEL_ROUTER_ARN__", _placeholder_lambda_arn(CHANNEL_ROUTER_NAME))
         return text
     for placeholder, phase in ASL_STEP_PLACEHOLDERS.items():
         text = text.replace(placeholder, _placeholder_lambda_arn(STEP_FUNCTION_NAMES[phase]))
     text = text.replace("__STUB_ARN__", _placeholder_lambda_arn("oerf-workflow-stub"))
-    text = text.replace(
-        "__CHANNEL_ROUTER_ARN__", _placeholder_lambda_arn(CHANNEL_ROUTER_NAME)
-    )
+    text = text.replace("__CHANNEL_ROUTER_ARN__", _placeholder_lambda_arn(CHANNEL_ROUTER_NAME))
     text = text.replace(
         "__ENGAGE_PARTY_ARN__",
         (
@@ -442,9 +444,7 @@ def _state_machine_role(env: dict[str, str]) -> str:
 def _validate_with_step_functions(definition: str, label: str) -> dict:
     if shutil.which("aws") is None:
         pytest.skip("AWS CLI is not on PATH; install aws to validate the state machines")
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".json", delete=False, encoding="utf-8"
-    ) as handle:
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as handle:
         handle.write(definition)
         definition_path = handle.name
     completed = _run_aws(
@@ -468,8 +468,8 @@ def _validate_with_step_functions(definition: str, label: str) -> dict:
     status = body.get("validationStatus", body.get("result"))
     diagnostics = body.get("diagnostics") or []
     errors = [item for item in diagnostics if item.get("severity") == "ERROR"]
-    assert status in {"VALID", "OK"} and not errors, (
-        f"{label} was {status}:\n" + json.dumps(body, indent=2)
+    assert status in {"VALID", "OK"} and not errors, f"{label} was {status}:\n" + json.dumps(
+        body, indent=2
     )
     return body
 
@@ -496,9 +496,7 @@ def _invoke_test_state(state: dict, payload: str) -> dict:
 
     if shutil.which("aws") is None:
         pytest.skip("AWS CLI is not on PATH; install aws to test the choice state")
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".json", delete=False, encoding="utf-8"
-    ) as handle:
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as handle:
         json.dump(state, handle)
         definition_path = handle.name
     env = _aws_env()
@@ -536,9 +534,7 @@ def test_cancel_after_open_without_the_field_takes_the_default() -> None:
 def test_interpret_result_without_a_response_takes_clarify() -> None:
     """A reply with no response object takes Clarify. It must not error."""
 
-    definition = json.loads(
-        (ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8")
-    )
+    definition = json.loads((ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8"))
     body = _invoke_test_state(
         definition["States"]["InterpretResult"],
         json.dumps({"reply": {"text": "Running"}}),
@@ -924,9 +920,7 @@ def test_missing_cancel_flag_still_reaches_closed() -> None:
 def test_unguarded_choice_on_a_missing_path_raises() -> None:
     state = {
         "Type": "Choice",
-        "Choices": [
-            {"Variable": "$.cancel_requested", "BooleanEquals": True, "Next": "Cancel"}
-        ],
+        "Choices": [{"Variable": "$.cancel_requested", "BooleanEquals": True, "Next": "Cancel"}],
         "Default": "GatherContext",
     }
 
@@ -941,9 +935,7 @@ def test_present_guard_on_a_missing_path_takes_the_default() -> None:
 
 
 def test_engagement_missing_paths_take_the_safe_branch() -> None:
-    definition = json.loads(
-        (ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8")
-    )
+    definition = json.loads((ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8"))
     states = definition["States"]
 
     # No exhausted flag, and a rung is still planned: keep waiting, do not exhaust.
@@ -951,9 +943,7 @@ def test_engagement_missing_paths_take_the_safe_branch() -> None:
     # No awaits_reply flag: wait for a person instead of sending one-way.
     assert evaluate_choice(states["AwaitReply?"], {"cadence": {}}) == "SendViaRouter"
     # A reply that never produced response: clarify, do not treat it as valid.
-    assert (
-        evaluate_choice(states["InterpretResult"], {"reply": {"text": "Running"}}) == "Clarify"
-    )
+    assert evaluate_choice(states["InterpretResult"], {"reply": {"text": "Running"}}) == "Clarify"
 
 
 def test_ph2841_engagement_happy_path_reaches_answered() -> None:
@@ -962,9 +952,7 @@ def test_ph2841_engagement_happy_path_reaches_answered() -> None:
     from oerf.platform.cadence.engage import handler as cadence_handler
     from oerf.platform.cadence.interpret import handler as interpret_handler
 
-    definition = json.loads(
-        (ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8")
-    )
+    definition = json.loads((ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8"))
     states = definition["States"]
     current = definition["StartAt"]
     data: dict = {

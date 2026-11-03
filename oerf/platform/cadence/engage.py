@@ -25,6 +25,7 @@ _KEEP = (
     "message",
     "to_role",
     "final_question",
+    "final_question_timeout_seconds",
     "deadline",
     "due_at",
 )
@@ -56,12 +57,15 @@ def compute_rung(workflow: dict[str, Any], now: datetime) -> dict[str, Any]:
     if policy is None:
         raise ValueError(f"no cadence policy {policy_id!r}")
     started = _started(workflow, now)
+    paused_raw = workflow.get("paused_until")
+    paused_until = _moment(paused_raw) if isinstance(paused_raw, str) and paused_raw else None
     decision = plan_next_rung(
         policy,
         _history(workflow),
         now,
         SendingCalendar(),
         engagement_started_at=started,
+        paused_until=paused_until,
     )
     updated = dict(workflow)
     updated["engagement_started_at"] = started.isoformat()

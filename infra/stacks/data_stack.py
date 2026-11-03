@@ -300,6 +300,11 @@ class OerfDataStack(Stack):
             ],
             removal_policy=RemovalPolicy.RETAIN,
         )
+        evidence_bucket_resource = self.evidence_bucket.node.default_child
+        evidence_bucket_resource.add_property_override(
+            "NotificationConfiguration.EventBridgeConfiguration.EventBridgeEnabled",
+            True,
+        )
 
         # ---------------------------------------------------------
         # S3: Report Bucket

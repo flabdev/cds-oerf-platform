@@ -64,6 +64,7 @@ def test_mock_reading_persists_to_canonical_incident_item(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(vision, "USE_MOCK_BEDROCK", True)
     monkeypatch.setattr(vision, "TENANT_TABLE_NAME", "")
+    monkeypatch.setattr(vision, "EVIDENCE_BUCKET_NAME", "evidence-bucket")
     monkeypatch.setattr(vision, "INCIDENT_TABLE_NAME", "incident-table")
     monkeypatch.setattr(vision, "get_dynamodb", lambda: _Dynamo())
 
@@ -384,4 +385,52 @@ def test_guardrail_config_is_sent_only_on_the_live_call(monkeypatch: pytest.Monk
         "guardrailIdentifier": "guardrail-1",
         "guardrailVersion": "1",
         "trace": "disabled",
+    }
+
+
+def test_eventbridge_object_created_event_uses_key_tenant_and_incident(monkeypatch) -> None:
+    stored: dict = {}
+
+    class _Table:
+        def update_item(self, **kwargs):
+            stored.update(kwargs)
+
+    class _Dynamo:
+        def Table(self, _name):
+            return _Table()
+
+    monkeypatch.setattr(vision, "USE_MOCK_BEDROCK", True)
+    monkeypatch.setattr(vision, "TENANT_TABLE_NAME", "")
+    monkeypatch.setattr(vision, "INCIDENT_TABLE_NAME", "incident-table")
+    monkeypatch.setattr(vision, "get_dynamodb", lambda: _Dynamo())
+    event = {
+        "source": "aws.s3",
+        "detail-type": "Object Created",
+        "detail": {
+            "bucket": {"name": "evidence-bucket"},
+            "object": {
+                "key": "tenants/t1/inbound/INC-42/7bf0a1/photo.jpg",
+            },
+        },
+    }
+
+    result = vision.handler(event, None)
+
+    assert result["success"] is True
+    assert stored["Key"] == {"pk": "TENANT#t1#INC#INC-42", "sk": "META"}
+
+
+def test_eventbridge_object_created_rejects_keys_outside_inbound_image_scope() -> None:
+    event = {
+        "source": "aws.s3",
+        "detail-type": "Object Created",
+        "detail": {
+            "bucket": {"name": "evidence-bucket"},
+            "object": {"key": "tenants/t1/reports/INC-42/report.pdf"},
+        },
+    }
+
+    assert vision.handler(event, None) == {
+        "success": False,
+        "error": "invalid_s3_evidence_event",
     }
