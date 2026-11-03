@@ -40,3 +40,6 @@ opencode.json
 # Local stage synth output. Not committed.
 cdk.out.*/
 .jsii-cache/
+
+# Local desk settings. Copy web/config.example.json here for Vite.
+web/public/config.json

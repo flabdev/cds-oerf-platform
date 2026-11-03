@@ -81,6 +81,15 @@ Replace the OIDC provider ARN if the account’s GitHub provider ARN differs.
 
 Docker must be running (`agentcore:enabled=true` builds the AgentCore image).
 
+Build the desk before `cdk diff`. One production build is used for every stage. CDK writes `/config.json` from this stage's outputs when `desk:publish=true`. Do not bake `VITE_*` into the dev build, and do not `aws s3 sync` the desk by hand for dev.
+
+```bash
+cd web
+npm ci
+npm run build
+cd ..
+```
+
 Put the dev WhatsApp phone-number id in SSM. This is the End User Messaging **phone-number id** (for example `phone-number-id-…`), not an E.164 phone number. Use a placeholder until a real id exists:
 
 ```bash
@@ -105,6 +114,7 @@ cdk diff \
   -c account=906048429638 \
   -c agentcore:enabled=true \
   -c dashboard:enabled=true \
+  -c desk:publish=true \
   -c channels:live=false \
   -c whatsapp:phoneNumberId="$PLACEHOLDER_PHONE_ID" \
   -c demo:seedDevices=true
@@ -116,12 +126,24 @@ cdk deploy \
   -c account=906048429638 \
   -c agentcore:enabled=true \
   -c dashboard:enabled=true \
+  -c desk:publish=true \
   -c channels:live=false \
   -c whatsapp:phoneNumberId="$PLACEHOLDER_PHONE_ID" \
   -c demo:seedDevices=true
 ```
 
-GitHub dev deploys use `OerfGitHubDeployRole-dev`, assume the oerfdev bootstrap roles, and run the same stack names with the same context keys except `demo:seedDevices` (off unless seeding again).
+After the deploy, open `<DashboardUrl>/config.json`. `DashboardUrl` is an output of `OerfApiStack-dev`. `apiUrl` and `userPoolClientId` should be non-empty. Do not paste the file into a ticket or a log. The hand-built `VITE_*` upload is not used for dev. Main keeps the previous desk until a main deploy passes `-c desk:publish=true`.
+
+```bash
+aws cloudformation describe-stacks \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfApiStack-dev \
+  --query "Stacks[0].Outputs[?OutputKey=='DashboardUrl'].OutputValue | [0]" \
+  --output text
+```
+
+GitHub dev deploys use `OerfGitHubDeployRole-dev`, assume the oerfdev bootstrap roles, and run the same stack names with the same context keys except `demo:seedDevices` (off unless seeding again). When the dashboard input is true, that workflow also builds `web/` and passes `desk:publish=true`.
 
 ### 4. IAM simulation (dev deploy role)
 
@@ -172,7 +194,7 @@ Every dev `cdk synth`, `cdk diff`, and `cdk deploy` needs:
 -c stage=dev -c account=906048429638
 ```
 
-First full dev deploy (section 3) also passes `-c agentcore:enabled=true`, `-c dashboard:enabled=true`, `-c channels:live=false`, `-c whatsapp:phoneNumberId=<id>`, and `-c demo:seedDevices=true` once. `OerfCiStack-dev` synth adds `-c ci:deployRoleStack=true` and `-c github:oidcProviderArn=<arn>`.
+First full dev deploy (section 3) also passes `-c agentcore:enabled=true`, `-c dashboard:enabled=true`, `-c desk:publish=true`, `-c channels:live=false`, `-c whatsapp:phoneNumberId=<id>`, and `-c demo:seedDevices=true` once. `desk:publish=true` needs `web/dist` from `cd web && npm ci && npm run build`. Later dev deploys of the dashboard keep `-c desk:publish=true`. `OerfCiStack-dev` synth adds `-c ci:deployRoleStack=true` and `-c github:oidcProviderArn=<arn>`.
 
 ### 6. Common CLI failures
 

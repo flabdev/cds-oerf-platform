@@ -1,6 +1,7 @@
 """Template assertions for the dashboard API stack. No AWS calls."""
 
 import json
+from pathlib import Path
 
 import aws_cdk as cdk
 import pytest
@@ -8,7 +9,8 @@ from aws_cdk import aws_cloudfront as cloudfront, aws_sqs as sqs
 from aws_cdk.assertions import Template
 
 from infra.naming import Stage
-from infra.stacks.api_stack import OerfApiStack
+from infra.stacks import api_stack as api_stack_module
+from infra.stacks.api_stack import OerfApiStack, require_desk_build
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
 from infra.ws_clients import DASHBOARD_CLIENT_PARAMETER
@@ -332,6 +334,107 @@ def test_websocket_allow_list_matches_the_hosted_ui_client() -> None:
     assert variables["DASHBOARD_CLIENT_PARAMETER"] == DASHBOARD_CLIENT_PARAMETER
     assert variables["ALLOWED_CLIENT_IDS"] == variables["USER_POOL_CLIENT_ID"]
     assert variables["USER_POOL_CLIENT_ID"] != parameter["Properties"]["Value"]
+
+
+def test_desk_publish_is_off_unless_the_flag_is_set(template: Template) -> None:
+    assert template.find_resources("Custom::CDKBucketDeployment") == {}
+    assert "DeskConfigUrl" not in template.find_outputs("*")
+
+
+def test_desk_publish_requires_the_vite_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api_stack_module, "DESK_DIST", tmp_path / "missing")
+    with pytest.raises(ValueError, match=r"build web/ first: cd web && npm ci && npm run build"):
+        _published_template()
+
+
+def test_desk_publish_uploads_the_build_and_writes_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dist = tmp_path / "dist"
+    _write_dist(dist)
+    monkeypatch.setattr(api_stack_module, "DESK_DIST", dist)
+    published = _published_template()
+    assert "DeskConfigUrl" in published.find_outputs("*")
+    deployments = published.find_resources("Custom::CDKBucketDeployment")
+    assert len(deployments) == 3
+    rendered = json.dumps(deployments)
+    assert '"Prune": true' in rendered or '"Prune": "true"' in rendered
+    assert "config.json" in rendered
+    assert "assets/*" in rendered
+    assert "no-cache" in rendered
+    assert "immutable" in rendered
+    assert "/*" in rendered
+    functions = published.find_resources("AWS::Lambda::Function")
+    memory = [
+        props["Properties"].get("MemorySize")
+        for props in functions.values()
+        if props["Properties"].get("MemorySize") == 1024
+    ]
+    assert memory and set(memory) == {1024}
+    _assert_desk_writer_can_put_without_kms(published)
+
+
+def test_desk_publish_retains_uploaded_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dist = tmp_path / "dist"
+    _write_dist(dist)
+    monkeypatch.setattr(api_stack_module, "DESK_DIST", dist)
+    deployments = _published_template().find_resources("Custom::CDKBucketDeployment")
+    assert len(deployments) == 3
+    for logical_id, resource in deployments.items():
+        assert resource["Properties"]["RetainOnDelete"] is True, logical_id
+
+
+def _published_template() -> Template:
+    app = cdk.App(context={"desk:publish": "true"})
+    env = cdk.Environment(account=ACCOUNT, region=REGION)
+    data = OerfDataStack(app, "OerfDataStack", stage=Stage("main"), env=env)
+    refs = cdk.Stack(app, "InboundRefs", env=env)
+    queue = sqs.Queue(refs, "InboundQueue")
+    stack = OerfApiStack(
+        app,
+        "OerfApiStack",
+        data_stack=data,
+        inbound_queue=queue,
+        websocket_url=WEBSOCKET_URL,
+        stage=Stage("main"),
+        env=env,
+    )
+    return Template.from_stack(stack)
+
+
+def _write_dist(dist: Path) -> None:
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>desk</title>\n", encoding="utf-8")
+    (dist / "assets" / "app.js").write_text("console.log('ok')\n", encoding="utf-8")
+
+
+def _assert_desk_writer_can_put_without_kms(template: Template) -> None:
+    actions: list[str] = []
+    for policy in template.find_resources("AWS::IAM::Policy").values():
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            if statement.get("Effect") == "Deny":
+                continue
+            raw = statement.get("Action", [])
+            names = [raw] if isinstance(raw, str) else list(raw)
+            actions.extend(names)
+    assert any(name.startswith("s3:PutObject") for name in actions)
+    assert any(name.startswith("s3:DeleteObject") for name in actions)
+    assert "cloudfront:CreateInvalidation" in actions
+    assert not any(name.startswith("kms:") for name in actions)
+    buckets = template.find_resources("AWS::S3::Bucket")
+    encryption = next(iter(buckets.values()))["Properties"]["BucketEncryption"]
+    assert encryption["ServerSideEncryptionConfiguration"][0]["ServerSideEncryptionByDefault"] == {
+        "SSEAlgorithm": "AES256"
+    }
+
+
+def test_require_desk_build_names_the_missing_vite_build(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="build web/ first"):
+        require_desk_build(tmp_path)
 
 
 def _authorizer_env(template: Template) -> dict[str, object]:

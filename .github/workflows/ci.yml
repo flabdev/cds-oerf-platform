@@ -10,7 +10,9 @@ name: CI
 # -c account=000000000000 so ambient credentials cannot replace the placeholder.
 # --lookups false makes no AWS API calls. The AgentCore synth stages the image
 # asset only. The image is built on deploy, not here.
-# Web runs npm ci and node --test in web/.
+# Web runs npm ci, node --test, the production build, and a check that the
+# built JavaScript has no stage hosts or client ids. The Python job builds
+# web/ once more so it can synth stage=dev with desk:publish=true.
 #
 # The job token can read the repo and nothing else. It does not request OIDC or AWS
 # credentials. Manual deploy stays in deploy.yml.
@@ -97,6 +99,26 @@ jobs:
       - name: CDK synth dev CI deploy role
         run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=dev -c ci:deployRoleStack=true -c github:oidcProviderArn=arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com
 
+      # desk:publish reads web/dist. The synths above leave the flag off, so
+      # they do not need this build. Node 24 is web/.nvmrc.
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the desk
+        working-directory: web
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          npm run check:build
+
+      - name: CDK synth dev with desk publish
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=dev -c dashboard:enabled=true -c desk:publish=true
+
   web:
     name: Web
     runs-on: ubuntu-latest
@@ -114,7 +136,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -123,3 +145,9 @@ jobs:
 
       - name: Test
         run: node --test
+
+      - name: Build
+        run: npm run build
+
+      - name: Check the build has no stage values
+        run: npm run check:build

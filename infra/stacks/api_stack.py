@@ -7,6 +7,7 @@ stack's WebSocket endpoint. Stack registration lives in ``infra/app.py``.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from aws_cdk import (
     CfnOutput,
@@ -21,6 +22,7 @@ from aws_cdk import (
     aws_lambda as lambda_,
     aws_logs as logs,
     aws_s3 as s3,
+    aws_s3_deployment as s3deploy,
     aws_sqs as sqs,
     aws_ssm as ssm,
 )
@@ -33,6 +35,14 @@ from infra.stacks.data_stack import OerfDataStack
 
 _DEFAULT_THROTTLE_RATE = 20
 _DEFAULT_THROTTLE_BURST = 40
+# The deployment Lambda shells out to the AWS CLI. 1024 MiB is that
+# construct's own default; the desk build is small, and a smaller size has
+# failed the CLI on a cold start. Every desk deployment passes the same value
+# because they share one function.
+_DESK_PUBLISH_MEMORY_MIB = 1024
+_DESK_BUILD_MESSAGE = "build web/ first: cd web && npm ci && npm run build"
+# Repo root is two levels above this file (infra/stacks/api_stack.py).
+DESK_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 _ACCESS_LOG = json.dumps(
     {
         "requestId": "$context.requestId",
@@ -283,6 +293,130 @@ class OerfApiStack(Stack):
         CfnOutput(self, "DashboardUrl", value=dashboard_origin)
         CfnOutput(self, "RestApiUrl", value=self.rest_api.url)
         CfnOutput(self, "WebSocketUrl", value=websocket_url)
+        # Off unless both dashboard:enabled (this stack exists) and desk:publish.
+        # Main templates stay as they are when the flag is omitted.
+        if _desk_publish_enabled(self):
+            _publish_desk(
+                self,
+                data_stack=data_stack,
+                websocket_url=websocket_url,
+                domain_prefix=domain_prefix,
+                dashboard_origin=dashboard_origin,
+            )
         pin_source_account(self)
         if not stage.is_main:
             qualify_dev_names(self)
+
+
+def _desk_publish_enabled(scope: Construct) -> bool:
+    return scope.node.try_get_context("desk:publish") == "true"
+
+
+def require_desk_build(dist: Path) -> None:
+    """Stop synth until ``web/dist`` has a Vite build."""
+
+    ready = (dist / "index.html").is_file() and (dist / "assets").is_dir()
+    if not ready:
+        raise ValueError(_DESK_BUILD_MESSAGE)
+
+
+def _publish_desk(
+    stack: OerfApiStack,
+    *,
+    data_stack: OerfDataStack,
+    websocket_url: str,
+    domain_prefix: str,
+    dashboard_origin: str,
+) -> None:
+    """Upload ``web/dist`` and write ``config.json`` from this stack.
+
+    Hashed files under ``assets/`` are pruned only inside that prefix, so the
+    prune cannot delete ``config.json`` or ``index.html``. The page deployment
+    prunes other root objects and excludes ``config.json`` and ``assets/*``.
+    The config deployment does not prune. It runs last and invalidates ``/*``
+    after both uploads, so CloudFront does not keep a missing ``config.json``.
+    ``retain_on_delete`` keeps the objects when a later deploy omits the flag.
+    """
+
+    require_desk_build(DESK_DIST)
+    log_group = logs.LogGroup(
+        stack,
+        "DeskPublishLogGroup",
+        retention=logs.RetentionDays.ONE_MONTH,
+        removal_policy=RemovalPolicy.DESTROY,
+    )
+    shared = {
+        "destination_bucket": stack.dashboard_bucket,
+        "memory_limit": _DESK_PUBLISH_MEMORY_MIB,
+        "log_group": log_group,
+        # A later deploy without desk:publish removes these resources.
+        # Retaining leaves index.html, assets, and config.json in the bucket.
+        "retain_on_delete": True,
+    }
+    immutable = [
+        s3deploy.CacheControl.set_public(),
+        s3deploy.CacheControl.max_age(Duration.days(365)),
+        s3deploy.CacheControl.immutable(),
+    ]
+    no_cache = [s3deploy.CacheControl.no_cache()]
+    assets = s3deploy.BucketDeployment(
+        stack,
+        "DeskAssetsDeployment",
+        sources=[s3deploy.Source.asset(str(DESK_DIST / "assets"))],
+        destination_key_prefix="assets",
+        cache_control=immutable,
+        prune=True,
+        exclude=["config.json"],
+        **shared,
+    )
+    # distribution grants cloudfront:CreateInvalidation and
+    # cloudfront:GetInvalidation on Resource *. CDK does not scope it.
+    # See iam-exceptions.md. The assets deployment does not take one.
+    pages = s3deploy.BucketDeployment(
+        stack,
+        "DeskPagesDeployment",
+        sources=[
+            s3deploy.Source.asset(
+                str(DESK_DIST),
+                exclude=["config.json", "assets", "assets/**"],
+            )
+        ],
+        cache_control=no_cache,
+        prune=True,
+        # Sync filters, not the asset exclude. These keys stay when prune runs.
+        exclude=["config.json", "assets/*"],
+        distribution=stack.distribution,
+        distribution_paths=["/*"],
+        **shared,
+    )
+    # Host only. The CognitoDomain output is this host with an https:// prefix.
+    # userPoolClientId is UserPoolClientId, the client the WebSocket authorizer
+    # allows via the dashboard SSM parameter.
+    config = s3deploy.BucketDeployment(
+        stack,
+        "DeskConfigDeployment",
+        sources=[
+            s3deploy.Source.json_data(
+                "config.json",
+                {
+                    "apiUrl": stack.rest_api.url,
+                    "cognitoDomain": (
+                        f"{domain_prefix}.auth.{stack.region}.amazoncognito.com"
+                    ),
+                    "userPoolClientId": stack.user_pool_client.user_pool_client_id,
+                    "wsUrl": websocket_url,
+                    "region": stack.region,
+                    "userPoolId": data_stack.user_pool.user_pool_id,
+                },
+            )
+        ],
+        content_type="application/json",
+        cache_control=no_cache,
+        prune=False,
+        distribution=stack.distribution,
+        distribution_paths=["/*"],
+        **shared,
+    )
+    config.node.add_dependency(assets)
+    config.node.add_dependency(pages)
+    CfnOutput(stack, "DeskConfigUrl", value=f"{dashboard_origin}/config.json")
