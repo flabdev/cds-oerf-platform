@@ -137,6 +137,10 @@ jobs:
           waba_id="$(resolve "${WABA_ID}" "${WABA_ID_VAR}")"
           phone_number_id="$(resolve "${PHONE_NUMBER_ID}" "${PHONE_NUMBER_ID_VAR}")"
           alarm_email="$(resolve "${ALARM_EMAIL}" "${ALARM_EMAIL_VAR}")"
+          if [[ "${CHANNELS_LIVE}" == "true" && -z "${phone_number_id}" ]]; then
+            echo "::error::channels_live requires phone_number_id or repository variable WA_PHONE_NUMBER_ID so WhatsApp IAM is scoped."
+            exit 1
+          fi
           for value in "${waba_id}" "${phone_number_id}" "${alarm_email}"; do
             if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
               echo "::error::waba_id, phone_number_id, and alarm_email must be a single line."

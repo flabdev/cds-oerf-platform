@@ -150,7 +150,7 @@ Decisions are indexed in [docs/adr/README.md](adr/README.md). The wire contract 
 | WhatsApp | End User Messaging Social, sent only by the channel router. Mocked unless `channels:live` is true. The event destination is created when a WhatsApp Business account id is set. |
 | Acknowledgement and decision notice | The router sends them as one-way WhatsApp messages after a valid reply and after Act. |
 | Inbound resume and cancel | Live. Resume is `SendTaskSuccess`. Cancel is `StopExecution` on the cold-chain execution, then `CANCELLED` and the lock is released. |
-| SMS | Mocked unless channels are live. A live send is `sns:Publish` from the router. The diagram's dashed SMS rung is that escalation path. |
+| SMS | Mocked unless channels are live. A live send is `sns:Publish` from the router (OERF-116; not Pinpoint). The diagram's dashed SMS rung is that escalation path. |
 | Email | The router can send with SESv2 when email is not mocked and a source address is set. A custom sending domain is not configured. |
 | Voice | The cadence can name a voice rung. The router does not place a call. The text tells the person to reply on WhatsApp. |
 | Evidence | Inbound stores media with `GetWhatsAppMessageMedia`. The analyzer calls Nova Lite and a guardrail when Bedrock is not mocked (`channels:live`). Otherwise it is mocked. |

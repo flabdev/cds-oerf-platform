@@ -88,9 +88,8 @@ def record_outbound_message(
     channel: str,
     recipient: str,
     status: str,
-    task_token: str | None = None,
 ) -> None:
-    """Record outbound message in RoutingTable for audit and callback correlation."""
+    """Write a legacy MSG# audit row. Resume tokens live on ENG# / OUTMSG#."""
     if not ROUTING_TABLE_NAME:
         logger.warning("ROUTING_TABLE_NAME not set, skipping routing record")
         return
@@ -99,50 +98,20 @@ def record_outbound_message(
     now = int(time.time())
     expires_at = now + (7 * 86400)  # 7-day retention
 
-    item = {
-        "pk": f"TENANT#{tenant_id}#INCIDENT#{incident_id}",
-        "sk": f"MSG#{message_id}",
-        "tenant_id": tenant_id,
-        "incident_id": incident_id,
-        "message_id": message_id,
-        "channel": channel,
-        "recipient": recipient,
-        "status": status,
-        "created_at": now,
-        "expires_at": expires_at,
-    }
-    if task_token:
-        item["task_token"] = task_token
-
-        # Store active task token under the canonical ACTIVE_TASK_TOKEN key
-        # so that action_handler can retrieve it to resume Step Functions
-        table.put_item(
-            Item={
-                "pk": f"TENANT#{tenant_id}#INCIDENT#{incident_id}",
-                "sk": "ACTIVE_TASK_TOKEN",
-                "task_token": task_token,
-                "incident_id": incident_id,
-                "tenant_id": tenant_id,
-                "channel": channel,
-                "message_id": message_id,
-                "created_at": now,
-                "expires_at": expires_at,
-            }
-        )
-
-        # Also store reverse lookup by message_id for inbound webhooks
-        table.put_item(
-            Item={
-                "pk": f"MSG_CORRELATION#{message_id}",
-                "sk": "TOKEN",
-                "task_token": task_token,
-                "incident_id": incident_id,
-                "tenant_id": tenant_id,
-                "expires_at": expires_at,
-            }
-        )
-
-    table.put_item(Item=item)
+    table.put_item(
+        Item={
+            "pk": f"TENANT#{tenant_id}#INCIDENT#{incident_id}",
+            "sk": f"MSG#{message_id}",
+            "tenant_id": tenant_id,
+            "incident_id": incident_id,
+            "message_id": message_id,
+            "channel": channel,
+            "recipient": recipient,
+            "status": status,
+            "created_at": now,
+            "expires_at": expires_at,
+        }
+    )
 
 
 def send_whatsapp(
@@ -281,7 +250,10 @@ def _whatsapp_payload(
 
 
 def send_sms(recipient: str, message: str) -> dict[str, Any]:
-    """Send SMS message via Amazon SNS or simulate if explicitly configured."""
+    """Send SMS via Amazon SNS, or simulate when USE_MOCK_SMS is true.
+
+    SMS stays on SNS (OERF-116). Pinpoint origination is not configured here.
+    """
     msg_id = f"sms-{uuid.uuid4().hex[:12]}"
     if USE_MOCK_SMS:
         log(logger, logging.INFO, "send_simulated", channel="SMS", outcome="simulated")
@@ -351,7 +323,6 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         "recipient_email": "driver@example.com",
         "message": "Cold-chain alert: temperature exceeded limit.",
         "subject": "OERF Alert: Excursion Detected",
-        "task_token": "<stepfunctions-token>",
         "channel_priority": ["WHATSAPP", "SMS", "EMAIL"]
     }
     """
@@ -372,7 +343,6 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     recipient_email = event.get("recipient_email")
     message = event.get("message", "")
     subject = event.get("subject", "OERF Alert")
-    task_token = event.get("task_token")
     channel_priority = event.get("channel_priority", ["WHATSAPP", "SMS", "EMAIL"])
 
     result = {"success": False, "attempts": []}
@@ -412,7 +382,6 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 channel=ch_upper,
                 recipient=delivered_to or "",
                 status=res.get("status", "SENT"),
-                task_token=task_token,
             )
             break
 

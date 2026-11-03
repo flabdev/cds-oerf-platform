@@ -20,7 +20,9 @@ Sends need one place for opt-in, template mapping, dedupe, and the outbound mess
 
 `USE_MOCK_WHATSAPP`, `USE_MOCK_SMS`, and `USE_MOCK_EMAIL` default to true. They are false only when context `channels:live` is true. A mocked send still records the outbound id so a scripted reply can resume the workflow.
 
-Live SMS uses `sns:Publish` on the router role. An early note named `pinpoint-sms-voice-v2`. That client is not in the router. SMS stays mocked until channels are live.
+Live SMS uses `sns:Publish` on the router role. An early note named `pinpoint-sms-voice-v2`. OERF-116 keeps SNS: there is no Pinpoint origination identity in this account, and `sns:Publish` to a phone number has no resource ARN either way. SMS stays mocked until `channels:live` is true.
+
+The engagement send path stores the Step Functions task token on `ENG#` and correlates replies on `OUTMSG#`. `ACTIVE_TASK_TOKEN` and `MSG_CORRELATION#` are not written and have no reader. Legacy `MSG#` audit rows have no `task_token`. Inbound resumes from `ENG#`. The dashboard action handler does not read a task token.
 
 Live email uses SESv2 and `SES_SOURCE_EMAIL` on the router. A custom sending domain is not configured here. The report generator does not send email. An early IAM note granted that function `ses:SendEmail`. The deployed report role writes the report bucket only.
 
