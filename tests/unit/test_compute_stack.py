@@ -1369,3 +1369,137 @@ def test_synth_without_cdk_default_account(tmp_path: Path) -> None:
     for name in ("OerfDataStack.template.json", "OerfComputeStack.template.json"):
         assert message in (tmp_path / name).read_text()
     assert not (tmp_path / "OerfApiStack.template.json").exists()
+
+
+_SHARED_INBOUND_TOPIC = f"arn:aws:sns:{REGION}:{ACCOUNT}:main-inbound"
+
+
+def _synthesize_stage(stage_name: str, context: dict | None = None) -> Template:
+    app = cdk.App(context=context)
+    env = cdk.Environment(account=ACCOUNT, region=REGION)
+    stage = Stage(stage_name)
+    data = OerfDataStack(app, stage.stack("OerfDataStack"), stage=stage, env=env)
+    stack = OerfComputeStack(
+        app,
+        stage.stack("OerfComputeStack"),
+        data_stack=data,
+        stage=stage,
+        env=env,
+    )
+    return Template.from_stack(stack)
+
+
+def _subscription(template: Template) -> dict:
+    found = template.find_resources("AWS::SNS::Subscription")
+    assert len(found) == 1, "inbound queue must have one SNS subscription"
+    logical_id, resource = next(iter(found.items()))
+    return {"id": logical_id, **resource}
+
+
+def _subscription_settings(props: dict) -> dict:
+    """The fields main leaves at the SQS-subscription defaults."""
+
+    return {
+        "Protocol": props.get("Protocol"),
+        "RawMessageDelivery": props.get("RawMessageDelivery", False),
+        "FilterPolicy": props.get("FilterPolicy"),
+        "RedrivePolicy": props.get("RedrivePolicy"),
+    }
+
+
+def _sns_send_statements(template: Template) -> list[dict]:
+    found = []
+    for policy in template.find_resources("AWS::SQS::QueuePolicy").values():
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            principal = statement.get("Principal", {})
+            service = principal.get("Service") if isinstance(principal, dict) else None
+            services = [service] if isinstance(service, str) else list(service or [])
+            if "sns.amazonaws.com" in services and statement.get("Effect") == "Allow":
+                found.append(statement)
+    return found
+
+
+def test_dev_subscribes_its_queue_to_the_shared_inbound_topic(template: Template) -> None:
+    """Dev with the ARN matches main's subscription and allows that topic only."""
+
+    saved = _without_synth_env()
+    try:
+        plain = _synthesize_stage("dev")
+        shared = _synthesize_stage(
+            "dev", {"whatsapp:sharedInboundTopicArn": _SHARED_INBOUND_TOPIC}
+        )
+    finally:
+        _restore_env(saved)
+
+    main_props = _subscription(template)["Properties"]
+    plain_resource = _subscription(plain)
+    shared_resource = _subscription(shared)
+    plain_props = plain_resource["Properties"]
+    shared_props = shared_resource["Properties"]
+
+    assert _subscription_settings(main_props) == {
+        "Protocol": "sqs",
+        "RawMessageDelivery": False,
+        "FilterPolicy": None,
+        "RedrivePolicy": None,
+    }
+    assert _subscription_settings(plain_props) == _subscription_settings(main_props)
+    assert _subscription_settings(shared_props) == _subscription_settings(main_props)
+    assert plain_props["TopicArn"]["Ref"].startswith("InboundTopic")
+    assert shared_props["TopicArn"] == _SHARED_INBOUND_TOPIC
+    assert shared_props["Endpoint"]["Fn::GetAtt"][0].startswith("InboundQueue")
+    depends = shared_resource.get("DependsOn", [])
+    depends = [depends] if isinstance(depends, str) else list(depends)
+    assert any("InboundQueuePolicy" in item for item in depends)
+
+    assert set(plain.find_resources("AWS::SQS::Queue")) == set(
+        shared.find_resources("AWS::SQS::Queue")
+    )
+    assert set(plain.find_resources("AWS::Lambda::EventSourceMapping")) == set(
+        shared.find_resources("AWS::Lambda::EventSourceMapping")
+    )
+    assert _SHARED_INBOUND_TOPIC not in json.dumps(plain.to_json())
+
+    allows = _sns_send_statements(shared)
+    assert len(allows) == 1
+    statement = allows[0]
+    assert statement["Action"] == "sqs:SendMessage"
+    assert statement["Condition"]["ArnEquals"]["aws:SourceArn"] == _SHARED_INBOUND_TOPIC
+    assert statement["Condition"]["StringEquals"]["aws:SourceAccount"] == ACCOUNT
+    policies = shared.find_resources("AWS::SQS::QueuePolicy")
+    assert any(
+        _denies_insecure_transport(item)
+        for policy in policies.values()
+        for item in policy["Properties"]["PolicyDocument"]["Statement"]
+    )
+    assert len(shared.find_resources("AWS::SNS::Topic")) == 1
+
+
+def test_main_and_a_bad_shared_inbound_arn_fail_synthesis() -> None:
+    saved = _without_synth_env()
+    try:
+        with pytest.raises(ValueError, match="stage=main"):
+            _synthesize_stage(
+                "main",
+                {"whatsapp:sharedInboundTopicArn": _SHARED_INBOUND_TOPIC},
+            )
+        with pytest.raises(ValueError, match="account and region"):
+            _synthesize_stage(
+                "dev",
+                {
+                    "whatsapp:sharedInboundTopicArn": (
+                        f"arn:aws:sns:us-west-2:{ACCOUNT}:main-inbound"
+                    )
+                },
+            )
+        with pytest.raises(ValueError, match="account and region"):
+            _synthesize_stage(
+                "dev",
+                {
+                    "whatsapp:sharedInboundTopicArn": (
+                        "arn:aws:sns:us-east-1:000000000000:main-inbound"
+                    )
+                },
+            )
+    finally:
+        _restore_env(saved)

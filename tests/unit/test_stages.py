@@ -134,6 +134,53 @@ def test_dev_rejects_whatsapp_waba_id(tmp_path: Path) -> None:
     assert "stage=dev" in (result.stderr + result.stdout)
 
 
+_SHARED_INBOUND = f"arn:aws:sns:{REGION}:{ACCOUNT}:main-inbound"
+
+
+def test_main_rejects_shared_inbound_topic(tmp_path: Path) -> None:
+    context = dict(_SET_A)
+    context["whatsapp:sharedInboundTopicArn"] = _SHARED_INBOUND
+    result = _run(tmp_path, context)
+    assert result.returncode != 0
+    text = result.stderr + result.stdout
+    assert "whatsapp:sharedInboundTopicArn" in text
+    assert "stage=main" in text
+
+
+def test_shared_inbound_topic_rejects_another_account_or_region(tmp_path: Path) -> None:
+    wrong_account = _run(
+        tmp_path / "account",
+        {
+            "account": ACCOUNT,
+            "stage": "dev",
+            "whatsapp:sharedInboundTopicArn": (
+                f"arn:aws:sns:{REGION}:111111111111:main-inbound"
+            ),
+        },
+    )
+    wrong_region = _run(
+        tmp_path / "region",
+        {
+            "account": ACCOUNT,
+            "stage": "dev",
+            "whatsapp:sharedInboundTopicArn": (
+                f"arn:aws:sns:eu-west-1:{ACCOUNT}:main-inbound"
+            ),
+        },
+    )
+    not_sns = _run(
+        tmp_path / "sqs",
+        {
+            "account": ACCOUNT,
+            "stage": "dev",
+            "whatsapp:sharedInboundTopicArn": f"arn:aws:sqs:{REGION}:{ACCOUNT}:main-inbound",
+        },
+    )
+    for result in (wrong_account, wrong_region, not_sns):
+        assert result.returncode != 0
+        assert "whatsapp:sharedInboundTopicArn" in (result.stderr + result.stdout)
+
+
 def test_main_and_dev_names_do_not_overlap_and_dev_skips_singletons(tmp_path: Path) -> None:
     main_dir = tmp_path / "main"
     dev_dir = tmp_path / "dev"

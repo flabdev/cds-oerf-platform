@@ -136,6 +136,8 @@ def whatsapp_event_body(body: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(sender, str) or not isinstance(message_id, str):
         raise NormalizationError("whatsapp message needs from and id")
     text = _whatsapp_text(message)
+    if text is None:
+        text = _whatsapp_caption(message)
     received_at = _whatsapp_time(message, event)
     canonical = {
         "channel": "whatsapp",
@@ -144,7 +146,7 @@ def whatsapp_event_body(body: dict[str, Any]) -> dict[str, Any] | None:
         "received_at": received_at,
         "text": text,
         "type": "text",
-        "media": [],
+        "media": _whatsapp_media(message),
     }
     context = message.get("context")
     quoted = context.get("id") if isinstance(context, dict) else None
@@ -233,6 +235,43 @@ def _webhook_entry(body: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(webhook, dict):
         return None
     return webhook
+
+
+_MEDIA_BLOCKS = ("image", "audio", "document", "video", "sticker")
+
+
+def _whatsapp_media(message: dict[str, Any]) -> list[dict[str, str]]:
+    """Provider media ids from a webhook message. Text messages return nothing."""
+
+    items: list[dict[str, str]] = []
+    for key in _MEDIA_BLOCKS:
+        block = message.get(key)
+        if not isinstance(block, dict):
+            continue
+        media_id = block.get("id")
+        if not isinstance(media_id, str) or not media_id.strip():
+            continue
+        item = {"id": media_id.strip()}
+        mime = block.get("mime_type")
+        if not isinstance(mime, str) or not mime.strip():
+            mime = block.get("mimeType")
+        if isinstance(mime, str) and mime.strip():
+            item["mime_type"] = mime.strip()
+        items.append(item)
+    return items
+
+
+def _whatsapp_caption(message: dict[str, Any]) -> str | None:
+    """Caption on an image, document, or video when the message has no other text."""
+
+    for key in ("image", "document", "video"):
+        block = message.get(key)
+        if not isinstance(block, dict):
+            continue
+        caption = block.get("caption")
+        if isinstance(caption, str) and caption.strip():
+            return caption.strip()
+    return None
 
 
 def _whatsapp_text(message: dict[str, Any]) -> str | None:

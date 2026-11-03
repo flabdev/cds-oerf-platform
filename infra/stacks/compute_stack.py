@@ -8,6 +8,7 @@ One role, one 30-day log group, and active tracing per function.
 from __future__ import annotations
 
 import os
+import re
 
 from aws_cdk import (
     CfnOutput,
@@ -76,6 +77,42 @@ def _context_enabled(scope: Construct, key: str, *, default: bool) -> bool:
     return str(raw).strip().lower() not in {"false", "0", "no"}
 
 
+# Standard SNS topic ARN in this partition. A FIFO name is still one topic name.
+_SNS_TOPIC_ARN = re.compile(
+    r"^arn:aws:sns:(?P<region>[a-z0-9-]+):(?P<account>\d{12}):(?P<name>[A-Za-z0-9_.-]{1,256})$"
+)
+
+
+def _shared_inbound_topic_arn(scope: Construct, stage: Stage) -> str | None:
+    """Main's inbound topic, imported by dev. Unset keeps this stage's own topic.
+
+    The WABA event destination stays on main. Dev subscribes its queue to that
+    topic instead of calling ``PutWhatsAppBusinessAccountEventDestinations``.
+    """
+
+    raw = _context_str(scope, "whatsapp:sharedInboundTopicArn").strip()
+    if not raw:
+        return None
+    if stage.is_main:
+        raise ValueError(
+            "whatsapp:sharedInboundTopicArn cannot be set for stage=main. "
+            "Main owns the WhatsApp event destination. "
+            "Pass the ARN only with stage=dev."
+        )
+    stack = Stack.of(scope)
+    match = _SNS_TOPIC_ARN.fullmatch(raw)
+    if (
+        match is None
+        or match.group("region") != stack.region
+        or match.group("account") != stack.account
+    ):
+        raise ValueError(
+            "whatsapp:sharedInboundTopicArn must be an SNS topic ARN "
+            "in this stack's account and region."
+        )
+    return raw
+
+
 def _context_str(scope: Construct, key: str, default: str = "") -> str:
     """Read a string CDK context value. Missing context returns ``default``."""
     raw = scope.node.try_get_context(key)
@@ -131,6 +168,9 @@ class OerfComputeStack(Stack):
                 "Synthesize dev without whatsapp:wabaId. Sending still uses "
                 "whatsapp:phoneNumberId."
             )
+        # Fail before the rest of the stack. An empty value leaves every
+        # template identical to a synth that never heard of the key.
+        shared_inbound_topic_arn = _shared_inbound_topic_arn(self, stage)
         phone_param = stage.ssm("whatsapp/phone-number-id")
         demo_numbers_param = stage.ssm("demo-numbers/*")
         dashboard_client_param = stage.ssm("ws-allowed-clients/dashboard")
@@ -548,7 +588,19 @@ class OerfComputeStack(Stack):
                 queue=self.inbound_dlq,
             ),
         )
-        self.inbound_topic.add_subscription(subscriptions.SqsSubscription(self.inbound_queue))
+        # SqsSubscription() with no extra properties is main's subscription:
+        # raw delivery off, no filter policy, no subscription redrive. The
+        # queue redrive (maxReceiveCount 3) is a property of the queue.
+        # When the shared ARN is set, the queue subscribes only to that topic.
+        # The dev topic stays, with nothing publishing to it and no queue
+        # grant, so a later publish there cannot deliver a second copy. The
+        # queue logical id and the Lambda event source stay on InboundQueue.
+        if shared_inbound_topic_arn is None:
+            self.inbound_topic.add_subscription(subscriptions.SqsSubscription(self.inbound_queue))
+        else:
+            sns.Topic.from_topic_arn(
+                self, "SharedInboundTopic", shared_inbound_topic_arn
+            ).add_subscription(subscriptions.SqsSubscription(self.inbound_queue))
         if waba_id:
             WabaEventDestination(
                 self,

@@ -37,7 +37,20 @@ aws sts get-caller-identity --profile Fission-OERF --region us-east-1
 
 Every `aws` command below repeats `--profile Fission-OERF --region us-east-1` so it stays correct even when the exports are not set. `cdk` uses the exported profile and region.
 
-Do not pass `whatsapp:wabaId` for dev. Dev does not create the WABA event destination.
+Do not pass `whatsapp:wabaId` for dev. Dev does not create the WABA event destination. Dev receives the same inbound events by subscribing its queue to main's inbound topic.
+
+Find that topic ARN with a read-only call. The logical id starts with `InboundTopic`. The physical id is the topic ARN. Do not print it into a ticket.
+
+```bash
+aws cloudformation list-stack-resources \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfComputeStack \
+  --query "StackResourceSummaries[?ResourceType=='AWS::SNS::Topic' && starts_with(LogicalResourceId, 'InboundTopic')].PhysicalResourceId" \
+  --output text
+```
+
+Set that value as the GitHub environment variable `SHARED_INBOUND_TOPIC_ARN` on the `dev` environment. The deploy workflow passes `-c whatsapp:sharedInboundTopicArn=...` when the variable is non-empty. A laptop deploy passes the same flag. Leave the flag off only when the ARN is not known yet; dev then keeps a queue subscription to its own topic, and nothing publishes there.
 
 ### 1. Bootstrap `CDKToolkit-dev`
 
@@ -104,7 +117,7 @@ aws ssm put-parameter \
   --overwrite
 ```
 
-Pass the same id as CDK context so IAM resources scope correctly at synth time. On the **first** deploy only, add `-c demo:seedDevices=true`. Later deploys omit that flag.
+Pass the same id as CDK context so IAM resources scope correctly at synth time. On the **first** deploy only, add `-c demo:seedDevices=true`. Later deploys omit that flag. Set `SHARED_INBOUND_TOPIC_ARN` from the `list-stack-resources` command above before `cdk diff`.
 
 ```bash
 cdk diff \
@@ -117,6 +130,7 @@ cdk diff \
   -c desk:publish=true \
   -c channels:live=false \
   -c whatsapp:phoneNumberId="$PLACEHOLDER_PHONE_ID" \
+  -c whatsapp:sharedInboundTopicArn="$SHARED_INBOUND_TOPIC_ARN" \
   -c demo:seedDevices=true
 
 cdk deploy \
@@ -129,6 +143,7 @@ cdk deploy \
   -c desk:publish=true \
   -c channels:live=false \
   -c whatsapp:phoneNumberId="$PLACEHOLDER_PHONE_ID" \
+  -c whatsapp:sharedInboundTopicArn="$SHARED_INBOUND_TOPIC_ARN" \
   -c demo:seedDevices=true
 ```
 
@@ -194,7 +209,7 @@ Every dev `cdk synth`, `cdk diff`, and `cdk deploy` needs:
 -c stage=dev -c account=906048429638
 ```
 
-First full dev deploy (section 3) also passes `-c agentcore:enabled=true`, `-c dashboard:enabled=true`, `-c desk:publish=true`, `-c channels:live=false`, `-c whatsapp:phoneNumberId=<id>`, and `-c demo:seedDevices=true` once. `desk:publish=true` needs `web/dist` from `cd web && npm ci && npm run build`. Later dev deploys of the dashboard keep `-c desk:publish=true`. `OerfCiStack-dev` synth adds `-c ci:deployRoleStack=true` and `-c github:oidcProviderArn=<arn>`.
+First full dev deploy (section 3) also passes `-c agentcore:enabled=true`, `-c dashboard:enabled=true`, `-c desk:publish=true`, `-c channels:live=false`, `-c whatsapp:phoneNumberId=<id>`, `-c whatsapp:sharedInboundTopicArn=<main inbound topic ARN>`, and `-c demo:seedDevices=true` once. `desk:publish=true` needs `web/dist` from `cd web && npm ci && npm run build`. Later dev deploys of the dashboard keep `-c desk:publish=true` and the shared inbound topic ARN. `OerfCiStack-dev` synth adds `-c ci:deployRoleStack=true` and `-c github:oidcProviderArn=<arn>`.
 
 ### 6. Common CLI failures
 
