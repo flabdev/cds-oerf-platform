@@ -50,6 +50,7 @@ _DEFAULT_INGEST_CONCURRENCY = 5
 _WA_PHONE_NUMBER_ID_PARAM = "/oerf/whatsapp/phone-number-id"
 _DEFAULT_MODEL_ID = "amazon.nova-lite-v1:0"
 
+
 def _context_enabled(scope: Construct, key: str, *, default: bool) -> bool:
     """Read a boolean CDK context value. Missing context returns ``default``."""
     raw = scope.node.try_get_context(key)
@@ -236,10 +237,7 @@ class OerfComputeStack(Stack):
                         f"arn:aws:ssm:{self.region}:{self.account}:parameter"
                         "/oerf/whatsapp/phone-number-id"
                     ),
-                    (
-                        f"arn:aws:ssm:{self.region}:{self.account}:parameter"
-                        "/oerf/demo-numbers/*"
-                    ),
+                    (f"arn:aws:ssm:{self.region}:{self.account}:parameter/oerf/demo-numbers/*"),
                 ],
             )
         )
@@ -265,20 +263,41 @@ class OerfComputeStack(Stack):
             timeout=Duration.seconds(60),
             environment={
                 "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
+                "TENANT_TABLE_NAME": data_stack.tenant_table.table_name,
+                "EVIDENCE_BUCKET_NAME": data_stack.evidence_bucket.bucket_name,
                 "BEDROCK_MODEL_ID": bedrock_model_id,
                 "USE_MOCK_BEDROCK": bedrock_mock,
                 "GUARDRAIL_ID": self.guardrail.guardrail_id,
                 "GUARDRAIL_VERSION": self.guardrail.guardrail_version,
             },
         )
+        # EventBridge avoids an S3 bucket -> compute Lambda cross-stack reference.
+        # Only incident-scoped inbound images match; analyzer outputs go to DynamoDB.
         data_stack.evidence_bucket.grant_read(self.evidence_analyzer_fn)
+        evidence_rule = events.Rule(
+            self,
+            "EvidenceObjectCreatedRule",
+            event_pattern=events.EventPattern(
+                source=["aws.s3"],
+                detail_type=["Object Created"],
+                detail={
+                    "bucket": {"name": [data_stack.evidence_bucket.bucket_name]},
+                    "object": {
+                        "key": [
+                            {"wildcard": "tenants/*/inbound/*/*/*.jpg"},
+                            {"wildcard": "tenants/*/inbound/*/*/*.png"},
+                            {"wildcard": "tenants/*/inbound/*/*/*.webp"},
+                        ]
+                    },
+                },
+            ),
+        )
+        evidence_rule.add_target(targets.LambdaFunction(self.evidence_analyzer_fn))
         data_stack.incident_table.grant_read_write_data(self.evidence_analyzer_fn)
         self.evidence_analyzer_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["bedrock:InvokeModel"],
-                resources=[
-                    f"arn:aws:bedrock:{self.region}::foundation-model/{bedrock_model_id}"
-                ],
+                resources=[f"arn:aws:bedrock:{self.region}::foundation-model/{bedrock_model_id}"],
             )
         )
         self.evidence_analyzer_fn.add_to_role_policy(
@@ -469,9 +488,7 @@ class OerfComputeStack(Stack):
                         {
                             "dynamodb": {
                                 "Keys": {
-                                    "pk": {
-                                        "S": lambda_.FilterRule.begins_with("TENANT#")
-                                    },
+                                    "pk": {"S": lambda_.FilterRule.begins_with("TENANT#")},
                                     "sk": {"S": lambda_.FilterRule.is_equal("META")},
                                 }
                             }
@@ -577,9 +594,7 @@ class OerfComputeStack(Stack):
         # ADR-019. StopExecution applies to an execution ARN, not the state
         # machine. The handler derives that ARN from STATE_MACHINE_ARN and the
         # execution name ingest used for StartExecution.
-        data_stack.cold_chain_state_machine.grant_execution(
-            self.inbound_fn, "states:StopExecution"
-        )
+        data_stack.cold_chain_state_machine.grant_execution(self.inbound_fn, "states:StopExecution")
         self.inbound_fn.add_event_source(
             event_sources.SqsEventSource(
                 self.inbound_queue,
@@ -854,6 +869,15 @@ class OerfComputeStack(Stack):
             "CadenceFunction",
             function_name="oerf-engage-cadence",
             handler="oerf.platform.cadence.engage.handler",
+            code=code,
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            environment={"LOG_LEVEL": "INFO"},
+        )
+        self._function(
+            "EngageLifecycleFunction",
+            function_name="oerf-engage-lifecycle",
+            handler="oerf.platform.cadence.engagement_lifecycle.handler",
             code=code,
             timeout=Duration.seconds(30),
             memory_size=256,

@@ -217,6 +217,30 @@ def test_a_live_send_stores_the_api_id_and_the_wamid() -> None:
     assert quoted is not None and quoted.engagement_id == "eng-1"
 
 
+def test_inline_whatsapp_text_uses_the_router_without_template_rendering() -> None:
+    registry, engagements = _open()
+    whatsapp = FakeProvider("whatsapp")
+    request = _request().model_copy(
+        update={
+            "template_id": "One final question?",
+            "facts": {},
+            "inline_text": True,
+            "channels": ("whatsapp",),
+        }
+    )
+
+    result = route_outbound(
+        request,
+        registry=registry,
+        engagements=engagements,
+        providers={"whatsapp": whatsapp},
+        messages=MESSAGES,
+    )
+
+    assert result.delivered is True
+    assert whatsapp.calls[0] == ("+910000000101", "One final question?", "")
+
+
 def test_live_whatsapp_template_keeps_parameter_order() -> None:
     from oerf.platform.channels.router import _whatsapp_payload
 
@@ -261,9 +285,7 @@ def test_provider_sdks_are_only_called_from_the_router() -> None:
 
 def _open(*, opt_in: bool = True):
     registry = MemoryPhoneRegistry()
-    registry.register_contact(
-        "t1", "C-T1-DRV", "driver", "+910000000101", opt_in=opt_in
-    )
+    registry.register_contact("t1", "C-T1-DRV", "driver", "+910000000101", opt_in=opt_in)
     engagements = MemoryEngagementStore(clock=lambda: datetime(2026, 10, 20, 10, 16, tzinfo=UTC))
     engagements.open_engagement(
         "t1",

@@ -88,6 +88,7 @@ def _request(workflow: dict[str, Any], ports: Any) -> tuple[OutboundRequest, int
             contact_id=contact_id.strip(),
             recipient=recipient,
             channels=(channel,),
+            inline_text=bool(cadence.get("inline_text", False)),
         ),
         rung,
         datetime.fromisoformat(deadline.replace("Z", "+00:00")),
