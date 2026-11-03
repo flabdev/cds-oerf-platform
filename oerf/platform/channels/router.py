@@ -114,34 +114,8 @@ def record_outbound_message(
     if task_token:
         item["task_token"] = task_token
 
-        # Store active task token under the canonical ACTIVE_TASK_TOKEN key
-        # so that action_handler can retrieve it to resume Step Functions
-        table.put_item(
-            Item={
-                "pk": f"TENANT#{tenant_id}#INCIDENT#{incident_id}",
-                "sk": "ACTIVE_TASK_TOKEN",
-                "task_token": task_token,
-                "incident_id": incident_id,
-                "tenant_id": tenant_id,
-                "channel": channel,
-                "message_id": message_id,
-                "created_at": now,
-                "expires_at": expires_at,
-            }
-        )
-
-        # Also store reverse lookup by message_id for inbound webhooks
-        table.put_item(
-            Item={
-                "pk": f"MSG_CORRELATION#{message_id}",
-                "sk": "TOKEN",
-                "task_token": task_token,
-                "incident_id": incident_id,
-                "tenant_id": tenant_id,
-                "expires_at": expires_at,
-            }
-        )
-
+    # Resume uses ENG# / OUTMSG#, not ACTIVE_TASK_TOKEN or MSG_CORRELATION#
+    # (OERF-116). The engagement send path never calls this function.
     table.put_item(Item=item)
 
 
@@ -281,7 +255,10 @@ def _whatsapp_payload(
 
 
 def send_sms(recipient: str, message: str) -> dict[str, Any]:
-    """Send SMS message via Amazon SNS or simulate if explicitly configured."""
+    """Send SMS via Amazon SNS, or simulate when USE_MOCK_SMS is true.
+
+    SMS stays on SNS (OERF-116). Pinpoint origination is not configured here.
+    """
     msg_id = f"sms-{uuid.uuid4().hex[:12]}"
     if USE_MOCK_SMS:
         log(logger, logging.INFO, "send_simulated", channel="SMS", outcome="simulated")

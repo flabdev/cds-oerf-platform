@@ -57,7 +57,7 @@ A table's encryption mode can change 4 times per 24 hours, then once per 6 hours
 
 A normal `OerfComputeStack` deploy does not write those rows. Pass CDK context `demo:seedDevices=true` to add `oerf-device-seed` and the custom resource `DemoDeviceSeed` (`SeedVersion` `1`). The code default is off, so `cdk synth` and CI stay unseeded. On GitHub, **Deploy CDK Infrastructure** defaults `seed_demo_devices` to false. Tick it for the first demo deploy or after a reset. Delete of the resource does not remove the rows.
 
-Unit tests do not prove the deployed table. After a deploy with `demo:seedDevices=true`, confirm `RF-7781` resolves to tenant `t1` and shipment `PH-2841`, and that an id that is not in the seed files does not resolve.
+Unit tests do not prove the deployed table. After a deploy with `demo:seedDevices=true` and `python -m scripts.seed_runtime --profile <profile> --tenant t1 --yes`, run `python -m scripts.verify_seed --profile <profile> --tenant t1`. That command confirms every seed `DEVICE#` row (including `RF-7781` → `t1` / `PH-2841`) and that each `CONTACT#` row has the seeded `opt_in`. A missing row prints the id and exits 1.
 
 ## Demo incident trigger
 

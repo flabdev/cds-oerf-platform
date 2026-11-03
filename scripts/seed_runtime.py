@@ -33,7 +33,7 @@ from typing import Any
 
 from oerf.platform.agent.context import DOMAIN
 from oerf.platform.channels.address import demo_number_name
-from oerf.platform.storage.dynamo import canonical_e164, contact_sk, key, phone_pk, s
+from oerf.platform.storage.dynamo import canonical_e164, contact_sk, key, phone_pk, s, text
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 from oerf.platform.tenancy.publisher import ConfigPublisher
 from sim.seed.load import load_seed
@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     import boto3
 
     session = boto3.Session(profile_name=args.profile, region_name=REGION)
-    table_name, routing_table = _table_names(session, args.stack)
+    table_name, routing_table = table_names(session, args.stack)
     client = session.client("dynamodb", region_name=REGION)
     counts = seed_runtime(
         client, table_name, tenant_id, apply=args.yes, routing_table=routing_table
@@ -162,6 +162,28 @@ def main(argv: list[str] | None = None) -> int:
         for role, count in roles.items():
             print(f"{verb} {tenant_id} live-contacts {role} {count}")
     return 0
+
+
+def verify_opt_in_contacts(client: Any, table_name: str, tenant_id: str) -> list[str]:
+    """Return contact ids whose ``opt_in`` row is missing or not ``true``.
+
+    Empty means ``scripts.seed_runtime`` has written the opted-in contacts.
+    """
+
+    if tenant_id not in DEMO_TENANTS:
+        raise ValueError(f"unknown tenant {tenant_id!r}")
+    missing: list[str] = []
+    for row in load_seed(tenant_id)["contacts"]:
+        contact_id = str(row["contact_id"])
+        loaded = client.get_item(
+            TableName=table_name,
+            Key=key(f"TENANT#{tenant_id}", f"CONTACT#{contact_id}"),
+        )
+        item = loaded.get("Item")
+        wanted = "true" if row.get("opt_in") is True else "false"
+        if not item or text(item["opt_in"]) != wanted:
+            missing.append(contact_id)
+    return missing
 
 
 def _meta_item(tenant: dict[str, Any]) -> dict[str, Any]:
@@ -471,7 +493,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _table_names(session: Any, stack: str) -> tuple[str, str]:
+def table_names(session: Any, stack: str) -> tuple[str, str]:
     response = session.client("cloudformation", region_name=REGION).describe_stacks(StackName=stack)
     outputs = {
         item.get("OutputKey"): str(item.get("OutputValue") or "").strip()

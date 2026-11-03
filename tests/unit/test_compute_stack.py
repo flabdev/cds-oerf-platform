@@ -987,6 +987,15 @@ def test_channel_mocks_default_true_and_whatsapp_is_unscoped_without_a_phone_id(
     ]
 
 
+def test_channels_live_requires_a_phone_number_id() -> None:
+    saved = _without_synth_env()
+    try:
+        with pytest.raises(ValueError, match="whatsapp:phoneNumberId"):
+            synthesize(context={"channels:live": "true"})
+    finally:
+        _restore_env(saved)
+
+
 def test_channels_live_disables_mocks_and_scopes_whatsapp_to_the_phone_number() -> None:
     phone_id = "phone-number-id-01234567890123456789012345678901"
     phone_arn = (

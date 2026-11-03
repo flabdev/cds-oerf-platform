@@ -16,7 +16,15 @@ from oerf.platform.tenancy.config_resolver import get_config
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 from oerf.platform.tenancy.facilities import DynamoFacilityCatalog
 from scripts.demo_reply import _address
-from scripts.seed_runtime import SYNTHETIC_E164, main, seed_live_contacts, seed_runtime, tenants_for
+from scripts.seed_runtime import (
+    SYNTHETIC_E164,
+    main,
+    seed_live_contacts,
+    seed_runtime,
+    tenants_for,
+    verify_opt_in_contacts,
+)
+from scripts.verify_seed import verify_seed
 from tests.unit.support.fake_dynamo import FakeDynamoClient
 
 TABLE = "tenant"
@@ -178,6 +186,12 @@ def test_main_dry_run_prints_counts(
 def test_mocked_driver_address_matches_the_router() -> None:
     client = FakeDynamoClient()
     seed_runtime(client, TABLE, "t1", apply=True, routing_table="routing")
+    assert verify_opt_in_contacts(client, TABLE, "t1") == []
+    assert verify_opt_in_contacts(FakeDynamoClient(), TABLE, "t1")
+    from oerf.platform.channels.devices import seed_demo_devices
+
+    seed_demo_devices(client, "routing")
+    assert verify_seed(client, TABLE, "routing", "t1") == []
     registry = DynamoPhoneRegistry(client, "routing", TABLE)
 
     contact = registry.get_contact("t1", "C-T1-DRV")

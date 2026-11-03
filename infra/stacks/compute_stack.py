@@ -140,8 +140,15 @@ class OerfComputeStack(Stack):
         # ---------------------------------------------------------
         ses_source_email = os.environ.get("SES_SOURCE_EMAIL", "")
         # Live channel sends only when context channels:live is true.
-        channel_mock = "false" if _context_enabled(self, "channels:live", default=False) else "true"
-        whatsapp_phone_number_id = _context_str(self, "whatsapp:phoneNumberId")
+        channels_live = _context_enabled(self, "channels:live", default=False)
+        channel_mock = "false" if channels_live else "true"
+        whatsapp_phone_number_id = _context_str(self, "whatsapp:phoneNumberId").strip()
+        if channels_live and not whatsapp_phone_number_id:
+            raise ValueError(
+                "channels:live requires whatsapp:phoneNumberId so "
+                "social-messaging:SendWhatsAppMessage and "
+                "GetWhatsAppMessageMedia are scoped to that phone-number-id ARN"
+            )
         self.channel_router_fn = self._function(
             "ChannelRouterFunction",
             function_name="oerf-channel-router",
@@ -192,8 +199,9 @@ class OerfComputeStack(Stack):
                     ],
                 )
             )
-        # sns:Publish to a phone number has no resource ARN. SMS should move
-        # to pinpoint-sms-voice-v2 under OERF-116 (Mudita).
+        # sns:Publish to a phone number has no resource ARN. SMS stays on SNS
+        # (OERF-116): Pinpoint origination is not in this account, and the
+        # engagement path is mocked until channels:live. See ADR-008.
         self.channel_router_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["sns:Publish"],
@@ -207,8 +215,8 @@ class OerfComputeStack(Stack):
                 phone_number_arn(self.region, self.account, whatsapp_phone_number_id)
             ]
         else:
-            # whatsapp:phoneNumberId is unset, so no phone-number-id ARN exists
-            # at synth. See docs/security/iam-exceptions.md.
+            # Mocked synth has no phone-number-id ARN. Live synth is rejected
+            # above. See docs/security/iam-exceptions.md.
             whatsapp_resources = ["*"]
         self.channel_router_fn.add_to_role_policy(
             iam.PolicyStatement(

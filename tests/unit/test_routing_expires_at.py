@@ -120,14 +120,11 @@ def test_outbound_records_write_expires_at_for_seven_days(monkeypatch) -> None:
 
     stored = {(item["pk"], item["sk"]): item for item in table.put_items}
     message = stored[("TENANT#t1#INCIDENT#inc-1", "MSG#msg-1")]
-    active = stored[("TENANT#t1#INCIDENT#inc-1", "ACTIVE_TASK_TOKEN")]
-    correlation = stored[("MSG_CORRELATION#msg-1", "TOKEN")]
+    assert ("TENANT#t1#INCIDENT#inc-1", "ACTIVE_TASK_TOKEN") not in stored
+    assert ("MSG_CORRELATION#msg-1", "TOKEN") not in stored
     assert message["created_at"] == _NOW
     assert message["task_token"] == "token-1"
-    assert active["task_token"] == "token-1"
-    assert correlation["task_token"] == "token-1"
-    for item in (message, active, correlation):
-        _assert_expires(item, _NOW + _WEEK)
+    _assert_expires(message, _NOW + _WEEK)
 
 
 def test_no_dynamodb_item_writes_an_attribute_named_ttl() -> None:
