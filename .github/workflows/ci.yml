@@ -5,7 +5,8 @@ name: CI
 # Python installs the package with the dev extra, then runs ruff, pytest with the aws
 # marker excluded, pytest -m security as its own step, and CDK synths for stage=main
 # (default, dashboard, WhatsApp WABA id, AgentCore) and stage=dev (the same set
-# except the WABA id, which dev rejects). Every synth passes
+# except the WABA id, which dev rejects, plus the laptop-only CI role stack).
+# Every synth passes
 # -c account=000000000000 so ambient credentials cannot replace the placeholder.
 # --lookups false makes no AWS API calls. The AgentCore synth stages the image
 # asset only. The image is built on deploy, not here.
@@ -90,6 +91,11 @@ jobs:
 
       - name: CDK synth dev with AgentCore
         run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=dev -c agentcore:enabled=true
+
+      # OerfCiStack-dev is not part of a normal dev synth. This fake provider
+      # ARN only checks that the stack synthesizes. GitHub does not deploy it.
+      - name: CDK synth dev CI deploy role
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=dev -c ci:deployRoleStack=true -c github:oidcProviderArn=arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com
 
   web:
     name: Web

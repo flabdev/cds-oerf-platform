@@ -164,3 +164,299 @@ def test_main_and_dev_names_do_not_overlap_and_dev_skips_singletons(tmp_path: Pa
     assert "oerf-dev-waba-event-destination" not in dev_blob
     assert "WabaId" not in dev_blob
     assert "AWS::ApiGateway::Account" not in dev_blob
+    assert "OerfCiStack-dev" not in dev_templates
+    _assert_bootstrap_qualifier(main_templates, "hnb659fds")
+    _assert_bootstrap_qualifier(dev_templates, "oerfdev")
+
+
+_OIDC_ARN = "arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com"
+_DEV_SUBJECTS = [
+    "repo:flabdev/cds-oerf-platform:environment:dev",
+    "repo:flabdev@25605151/cds-oerf-platform@1408373494:environment:dev",
+]
+_TOOLKIT_WRITE_DENY = frozenset(
+    {
+        "cloudformation:CreateChangeSet",
+        "cloudformation:ExecuteChangeSet",
+        "cloudformation:DeleteChangeSet",
+        "cloudformation:CreateStack",
+        "cloudformation:UpdateStack",
+        "cloudformation:DeleteStack",
+        "cloudformation:SetStackPolicy",
+        "cloudformation:UpdateTerminationProtection",
+        "cloudformation:CreateStackRefactor",
+        "cloudformation:ExecuteStackRefactor",
+        "cloudformation:ContinueUpdateRollback",
+        "cloudformation:CancelUpdateStack",
+        "cloudformation:RollbackStack",
+    }
+)
+_BOOTSTRAP_ROLE_NAMES = (
+    "deploy-role",
+    "file-publishing-role",
+    "image-publishing-role",
+    "lookup-role",
+)
+_ACCOUNT_WIDE_CFN = frozenset(
+    {
+        "cloudformation:DescribeStacks",
+        "cloudformation:ListStacks",
+        "cloudformation:ValidateTemplate",
+        "cloudformation:GetTemplateSummary",
+    }
+)
+
+
+def _assert_bootstrap_qualifier(templates: dict[str, dict], qualifier: str) -> None:
+    marker = f"/cdk-bootstrap/{qualifier}/version"
+    other = "hnb659fds" if qualifier == "oerfdev" else "oerfdev"
+    for name, template in templates.items():
+        default = template["Parameters"]["BootstrapVersion"]["Default"]
+        assert default == marker, name
+        blob = json.dumps(template)
+        assert f"cdk-{other}-" not in blob, name
+
+
+def test_dev_ci_role_stack_is_opt_in(tmp_path: Path) -> None:
+    plain = _run(tmp_path / "plain", {"account": ACCOUNT, "stage": "dev"})
+    assert plain.returncode == 0, plain.stderr or plain.stdout
+    assert "OerfCiStack-dev" not in _templates(tmp_path / "plain")
+
+    missing = _run(
+        tmp_path / "missing",
+        {"account": ACCOUNT, "stage": "dev", "ci:deployRoleStack": "true"},
+    )
+    assert missing.returncode != 0
+    assert "github:oidcProviderArn" in (missing.stderr + missing.stdout)
+
+    present = _run(
+        tmp_path / "present",
+        {
+            "account": ACCOUNT,
+            "stage": "dev",
+            "ci:deployRoleStack": "true",
+            "github:oidcProviderArn": _OIDC_ARN,
+        },
+    )
+    assert present.returncode == 0, present.stderr or present.stdout
+    templates = _templates(tmp_path / "present")
+    assert "OerfCiStack-dev" in templates
+    _assert_ci_role(templates["OerfCiStack-dev"])
+    _assert_bootstrap_qualifier({"OerfCiStack-dev": templates["OerfCiStack-dev"]}, "oerfdev")
+
+
+def _assert_ci_role(template: dict) -> None:
+    roles = [
+        resource
+        for resource in template["Resources"].values()
+        if resource["Type"] == "AWS::IAM::Role"
+        and resource["Properties"].get("RoleName") == "OerfGitHubDeployRole-dev"
+    ]
+    assert len(roles) == 1
+    role = roles[0]["Properties"]
+    assert role["MaxSessionDuration"] == 3600
+    statement = role["AssumeRolePolicyDocument"]["Statement"]
+    assert len(statement) == 1
+    trust = statement[0]
+    assert trust["Action"] == "sts:AssumeRoleWithWebIdentity"
+    assert trust["Principal"]["Federated"] == _OIDC_ARN
+    conditions = trust["Condition"]["StringEquals"]
+    assert conditions["token.actions.githubusercontent.com:aud"] == "sts.amazonaws.com"
+    assert conditions["token.actions.githubusercontent.com:sub"] == _DEV_SUBJECTS
+    assert list(trust["Condition"]) == ["StringEquals"]
+
+    policies = [
+        resource["Properties"]
+        for resource in template["Resources"].values()
+        if resource["Type"] == "AWS::IAM::Policy"
+    ]
+    assert len(policies) == 1
+    grants = policies[0]["PolicyDocument"]["Statement"]
+    assert len(grants) == 1
+    actions = grants[0]["Action"]
+    assert set(actions) == {"sts:AssumeRole", "sts:TagSession"}
+    expected = {
+        f"arn:aws:iam::{ACCOUNT}:role/cdk-oerfdev-{name}-{ACCOUNT}-{REGION}"
+        for name in _BOOTSTRAP_ROLE_NAMES
+    }
+    assert set(grants[0]["Resource"]) == expected
+    assert "Custom::AWSCDKOpenIdConnectProvider" not in json.dumps(template)
+    assert "AWS::IAM::OIDCProvider" not in json.dumps(template)
+
+
+def test_dev_bootstrap_limits_cloudformation_to_dev_stacks() -> None:
+    template = _load_bootstrap_role()
+    statements = template["Resources"]["DeploymentActionRole"]["Properties"]["Policies"][0][
+        "PolicyDocument"
+    ]["Statement"]
+    by_sid = {item["Sid"]: item for item in statements if "Sid" in item}
+    deploy = by_sid["DeployPermissions"]
+    resources = [_sub_value(item) for item in deploy["Resource"]]
+    assert any(item.endswith(":stack/*-dev/*") for item in resources)
+    assert any(":changeSet/*/*-dev*" in item for item in resources)
+    assert not any("CDKToolkit-dev" in item for item in resources)
+    for action in deploy["Action"]:
+        assert action.startswith("cloudformation:")
+
+    reads = by_sid["CloudFormationAccountReads"]
+    assert reads["Resource"] == "*"
+    assert set(reads["Action"]) == _ACCOUNT_WIDE_CFN
+
+    denied = by_sid["DenyOerfCiStack"]
+    assert denied["Effect"] == "Deny"
+    assert denied["Action"] == "cloudformation:*"
+    denied_resources = [_sub_value(item) for item in denied["Resource"]]
+    assert any(item.endswith(":stack/OerfCiStack-dev/*") for item in denied_resources)
+    assert any(":changeSet/*/OerfCiStack-dev*" in item for item in denied_resources)
+    toolkit = by_sid["DenyToolkitWrites"]
+    assert toolkit["Effect"] == "Deny"
+    assert set(toolkit["Action"]) == _TOOLKIT_WRITE_DENY
+    toolkit_resources = [_sub_value(item) for item in toolkit["Resource"]]
+    assert any(item.endswith(":stack/CDKToolkit-dev/*") for item in toolkit_resources)
+    assert any(":changeSet/*/CDKToolkit-dev*" in item for item in toolkit_resources)
+
+    scoped = [
+        action
+        for item in statements
+        if item.get("Effect", "Allow") == "Allow"
+        for action in _as_list(item.get("Action"))
+        if action.startswith("cloudformation:") and action not in _ACCOUNT_WIDE_CFN
+    ]
+    assert scoped
+    for item in statements:
+        if item.get("Effect", "Allow") != "Allow":
+            continue
+        for action in _as_list(item.get("Action")):
+            if not action.startswith("cloudformation:") or action in _ACCOUNT_WIDE_CFN:
+                continue
+            for resource in _as_list(item["Resource"]):
+                text = _sub_value(resource)
+                assert text != "*"
+                assert ":stack/*-dev/*" in text or ":changeSet/" in text
+                assert "CDKToolkit-dev" not in text
+
+    blob = (REPO_ROOT / "infra" / "bootstrap" / "dev-bootstrap.yaml").read_text()
+    assert "cdk-${Qualifier}-assets-${AWS::AccountId}-${AWS::Region}" in blob
+    assert "cdk-${Qualifier}-container-assets-${AWS::AccountId}-${AWS::Region}" in blob
+    assert "AWSCloudFormationReadOnlyAccess" not in blob
+    pass_role = next(
+        item for item in statements if _as_list(item.get("Action")) == ["iam:PassRole"]
+    )
+    assert _sub_value(pass_role["Resource"]) == "${CloudFormationExecutionRole.Arn}"
+
+
+def _sub_value(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and "Fn::Sub" in value:
+        sub = value["Fn::Sub"]
+        assert isinstance(sub, str)
+        return sub
+    raise AssertionError(value)
+
+
+def _as_list(value: object) -> list:
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _load_bootstrap_role() -> dict:
+    text = (REPO_ROOT / "infra" / "bootstrap" / "dev-bootstrap.yaml").read_text()
+    start = text.index("  DeploymentActionRole:\n")
+    end = text.index("  CloudFormationExecutionRole:\n")
+    parsed = _parse_yaml_block(text[start:end])
+    assert isinstance(parsed, dict)
+    return {"Resources": parsed}
+
+
+def _parse_yaml_block(text: str) -> object:
+    """Parse the block-style bootstrap role. The file has no flow collections there."""
+
+    lines = [
+        line
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    value, index = _parse_at(lines, 0, _indent(lines[0]))
+    assert index == len(lines)
+    return value
+
+
+def _parse_at(lines: list[str], index: int, indent: int) -> tuple[object, int]:
+    if index >= len(lines) or _indent(lines[index]) < indent:
+        return None, index
+    if lines[index].lstrip().startswith("- "):
+        items: list[object] = []
+        while (
+            index < len(lines)
+            and _indent(lines[index]) == indent
+            and lines[index].lstrip().startswith("- ")
+        ):
+            content = lines[index].lstrip()[2:]
+            index += 1
+            item, index = _parse_list_item(content, lines, index, indent)
+            items.append(item)
+        return items, index
+    mapping: dict[str, object] = {}
+    while (
+        index < len(lines)
+        and _indent(lines[index]) == indent
+        and not lines[index].lstrip().startswith("- ")
+    ):
+        key, rest = _split_key(lines[index].lstrip())
+        index += 1
+        value, index = _parse_value(rest, lines, index, indent + 2)
+        mapping[key] = value
+    return mapping, index
+
+
+def _parse_list_item(
+    content: str, lines: list[str], index: int, indent: int
+) -> tuple[object, int]:
+    child = indent + 2
+    if ": " not in content and not content.endswith(":"):
+        return _scalar(content), index
+    key, rest = _split_key(content)
+    value, index = _parse_value(rest, lines, index, child + 2)
+    mapping = {key: value}
+    while (
+        index < len(lines)
+        and _indent(lines[index]) == child
+        and not lines[index].lstrip().startswith("- ")
+    ):
+        next_key, next_rest = _split_key(lines[index].lstrip())
+        index += 1
+        next_value, index = _parse_value(next_rest, lines, index, child + 2)
+        mapping[next_key] = next_value
+    return mapping, index
+
+
+def _parse_value(
+    rest: str, lines: list[str], index: int, child_indent: int
+) -> tuple[object, int]:
+    if rest == "":
+        if index < len(lines) and _indent(lines[index]) >= child_indent:
+            return _parse_at(lines, index, _indent(lines[index]))
+        return None, index
+    return _scalar(rest), index
+
+
+def _split_key(text: str) -> tuple[str, str]:
+    if ": " in text:
+        key, rest = text.split(": ", 1)
+    elif text.endswith(":"):
+        key, rest = text[:-1], ""
+    else:
+        raise ValueError(text)
+    return _scalar(key) if isinstance(_scalar(key), str) else key, rest.strip()
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _scalar(text: str) -> object:
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        return text[1:-1]
+    return text

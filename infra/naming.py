@@ -41,6 +41,13 @@ class Stage:
     def is_main(self) -> bool:
         return self.name == "main"
 
+    def dev_bootstrap_qualifier(self) -> str:
+        """Bootstrap qualifier for dev. Main keeps the CLI default and must not call this."""
+
+        if self.is_main:
+            raise ValueError("main uses the default CDK bootstrap qualifier hnb659fds")
+        return "oerfdev"
+
     def stack(self, base: str) -> str:
         """CloudFormation stack name. Main keeps ``base``."""
 
