@@ -52,7 +52,7 @@ EXPECTED_FUNCTIONS = {
     },
     "oerf-report-generator": {
         "handler": "oerf.platform.report.generator.handler",
-        "env": {"REPORT_BUCKET_NAME", "INCIDENT_TABLE_NAME"},
+        "env": {"REPORT_BUCKET_NAME", "INCIDENT_TABLE_NAME", "REPORT_PDF_BACKEND"},
     },
     "oerf-ws-handler": {
         "handler": "oerf.platform.api.ws_handler.handler",
@@ -956,6 +956,9 @@ def test_authorizer_has_no_cognito_iam_and_report_has_no_ses(template: Template)
     assert not any(action.startswith("cognito-idp:") for action in iam_actions)
     assert "ses:SendEmail" not in role_actions(template, "oerf-report-generator")
     assert "ses:SendEmail" not in role_actions(template, "oerf-channel-router")
+    report_env = functions_by_name(template)["oerf-report-generator"]["Environment"]["Variables"]
+    assert report_env["REPORT_PDF_BACKEND"] == "none"
+    assert "SES_SOURCE_EMAIL" not in report_env
     router = role_actions(template, "oerf-channel-router")
     assert "sns:Publish" in router
     assert "social-messaging:SendWhatsAppMessage" in router

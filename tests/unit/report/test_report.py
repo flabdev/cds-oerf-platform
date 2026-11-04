@@ -92,6 +92,22 @@ def test_pdf_backend_uses_the_rendered_bytes(monkeypatch) -> None:
     assert receipt.sha256 == hashlib.sha256(b"%PDF-1.4 ph2841").hexdigest()
 
 
+def test_handler_publishes_html_even_when_pdf_backend_is_set(monkeypatch) -> None:
+    store = MemoryReportStore()
+    table = _Table(_stored_incident())
+    monkeypatch.setenv("REPORT_PDF_BACKEND", "weasyprint")
+    monkeypatch.setattr("oerf.platform.report.service._render_pdf", lambda _html: b"%PDF-1.4")
+    monkeypatch.setattr("oerf.platform.report.generator._store", lambda: store)
+    monkeypatch.setattr("oerf.platform.report.generator.INCIDENT_TABLE_NAME", "incidents")
+    monkeypatch.setattr("oerf.platform.report.generator.get_dynamodb", lambda: table)
+
+    result = handler({"tenant_id": "t1", "incident_id": "INC-9"}, None)
+
+    assert result["success"] is True
+    assert result["report_key"] == "reports/t1/INC-9/v1.html"
+    assert store.objects[result["report_key"]].startswith(b"<!DOCTYPE html")
+
+
 def test_pdf_backend_without_a_renderer_still_publishes_html(monkeypatch) -> None:
     from oerf.platform.report import service
 
