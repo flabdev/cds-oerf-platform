@@ -230,6 +230,24 @@ class DynamoIncidentStore:
         )
         return [_timeline(item) for item in response.get("Items", [])]
 
+    def readings(self, tenant_id: str, incident_id: str) -> list[dict[str, Any]]:
+        """Return temperature readings ordered by their DynamoDB sort key."""
+        incident = self.get(tenant_id, incident_id)
+        response = self._client.query(
+            TableName=self._table,
+            KeyConditionExpression="#pk = :pk AND begins_with(#sk, :prefix)",
+            ExpressionAttributeNames={"#pk": "pk", "#sk": "sk"},
+            ExpressionAttributeValues={":pk": s(incident.pk), ":prefix": s("READ#")},
+        )
+        return [
+            {
+                "ts": text(item["ts"]),
+                "temperature_c": float(item["temperature_c"]["N"]),
+                "sk": text(item["sk"]),
+            }
+            for item in response.get("Items", [])
+        ]
+
     def record_reading(
         self,
         tenant_id: str,

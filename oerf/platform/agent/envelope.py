@@ -70,6 +70,8 @@ STEPS = frozenset(
         SECURE_FACILITY,
         ACT,
         VERIFY,
+        "RecordContainment",
+        "BeginDisposition",
         HANDLE_REOPEN,
         GENERATE_REPORT,
         QA,

@@ -44,6 +44,8 @@ STAGE_BY_STEP: dict[str, str] = {
     "SecureFacility": "SECURING_FACILITY",
     "Act": "IN_TRANSIT",
     "Verify": "VERIFYING",
+    "RecordContainment": "CONTAINED",
+    "BeginDisposition": "AWAITING_DISPOSITION",
     "HandleReopen": "REOPENED",
     "GenerateReport": "AWAITING_DISPOSITION",
     "QA": "AWAITING_DISPOSITION",
@@ -93,7 +95,11 @@ STEP_POSITIONS: dict[str, StepPosition] = {
     "Act": StepPosition(
         frozenset({"ASSESSING", "AWAITING_APPROVAL", "SECURING_FACILITY"}), "IN_TRANSIT"
     ),
-    "Verify": StepPosition(frozenset({"IN_TRANSIT", "VERIFYING", "REOPENED"}), "CONTAINED"),
+    "Verify": StepPosition(
+        frozenset({"IN_TRANSIT", "VERIFYING", "REOPENED"}), "VERIFYING"
+    ),
+    "RecordContainment": StepPosition(frozenset({"VERIFYING"}), "CONTAINED"),
+    "BeginDisposition": StepPosition(frozenset({"CONTAINED"}), "AWAITING_DISPOSITION"),
     "HandleReopen": StepPosition(frozenset({"VERIFYING", "CONTAINED", "REOPENED"}), "REOPENED"),
     "GenerateReport": StepPosition(
         frozenset({"CONTAINED", "AWAITING_DISPOSITION"}), "AWAITING_DISPOSITION"
@@ -119,6 +125,8 @@ _DOWNSTREAM: dict[str, frozenset[str]] = {
         {"IN_TRANSIT", "VERIFYING", "CONTAINED", "REOPENED", "AWAITING_DISPOSITION", "CLOSED"}
     ),
     "Verify": frozenset({"CONTAINED", "REOPENED", "AWAITING_DISPOSITION", "CLOSED"}),
+    "RecordContainment": frozenset({"CONTAINED", "AWAITING_DISPOSITION", "CLOSED"}),
+    "BeginDisposition": frozenset({"AWAITING_DISPOSITION", "CLOSED"}),
     "QA": frozenset({"AWAITING_DISPOSITION", "CLOSED"}),
     "Close": frozenset({"CLOSED"}),
 }
