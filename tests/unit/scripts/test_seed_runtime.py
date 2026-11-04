@@ -44,7 +44,7 @@ def test_seed_round_trip_matches_the_workflow_readers() -> None:
         "meta": 1,
         "shipments": 1,
         "facilities": 2,
-        "contacts": 5,
+        "contacts": 7,
         "phones": 0,
         "config": 1,
     }
@@ -158,8 +158,8 @@ def test_dry_run_reads_and_does_not_write() -> None:
         "meta": 1,
         "shipments": 1,
         "facilities": 2,
-        "contacts": 5,
-        "phones": 5,
+        "contacts": 7,
+        "phones": 7,
         "config": 1,
     }
     assert client.reads > 0
@@ -177,8 +177,8 @@ def test_main_dry_run_prints_counts(
     assert "would change t1 meta 1" in out
     assert "would change t1 shipments 1" in out
     assert "would change t1 facilities 2" in out
-    assert "would change t1 contacts 5" in out
-    assert "would change t1 phones 5" in out
+    assert "would change t1 contacts 7" in out
+    assert "would change t1 phones 7" in out
     assert "would change t1 config 1" in out
     assert client.reads > 0
 
@@ -370,7 +370,7 @@ def test_live_contacts_flag_prints_role_and_count_only(
     assert main(["--profile", "Fission-OERF", "--tenant", "t1", "--live-contacts"]) == 0
 
     out = capsys.readouterr().out
-    assert "would change t1 phones 5" in out
+    assert "would change t1 phones 7" in out
     assert "would change t1 live-contacts driver 1" in out
     assert "would change t1 live-contacts facility 2" in out
     assert client.writes == 0

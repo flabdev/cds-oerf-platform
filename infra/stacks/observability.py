@@ -123,6 +123,17 @@ class OerfObservabilityStack(Stack):
         delivery_alarm = self._alarm("ChannelDeliveryFailures", delivery_failures)
         delivery_alarm.add_alarm_action(action)
         self.alarms.append(delivery_alarm)
+        ingest = next((fn for fn in functions if fn.node.id == "IngestFunction"), None)
+        ingest_p95 = None
+        if ingest is not None:
+            ingest_p95 = ingest.metric_duration(statistic="p95", period=_PERIOD)
+            ingest_alarm = self._alarm(
+                "IngestReadingToIncidentP95",
+                ingest_p95,
+                threshold=3000,
+            )
+            ingest_alarm.add_alarm_action(action)
+            self.alarms.append(ingest_alarm)
         by_channel = cloudwatch.MathExpression(
             expression=(
                 "SEARCH('{OERF/Channels,channel} "
@@ -140,6 +151,11 @@ class OerfObservabilityStack(Stack):
             cloudwatch.GraphWidget(title="Channel delivery failures", left=[delivery_failures]),
             cloudwatch.GraphWidget(
                 title="Channel delivery failures by channel", left=[by_channel]
+            ),
+            *(
+                [cloudwatch.GraphWidget(title="Ingest duration p95", left=[ingest_p95])]
+                if ingest_p95 is not None
+                else []
             ),
         )
 
@@ -182,12 +198,18 @@ class OerfObservabilityStack(Stack):
             period=_PERIOD,
         )
 
-    def _alarm(self, construct_id: str, metric: cloudwatch.IMetric) -> cloudwatch.Alarm:
+    def _alarm(
+        self,
+        construct_id: str,
+        metric: cloudwatch.IMetric,
+        *,
+        threshold: int = 0,
+    ) -> cloudwatch.Alarm:
         return cloudwatch.Alarm(
             self,
             construct_id,
             metric=metric,
-            threshold=0,
+            threshold=threshold,
             comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
             evaluation_periods=1,
             treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,

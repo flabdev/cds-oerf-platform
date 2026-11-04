@@ -79,6 +79,14 @@ def test_t1_seed_contains_shipment_roles_and_facilities() -> None:
     assert shipment["eta_min_at_excursion"] == 46
     roles = {contact["party_role"] for contact in seed["contacts"]}
     assert {"driver", "ops_manager", "qa", "facility"} <= roles
+    drivers = [contact for contact in seed["contacts"] if contact["party_role"] == "driver"]
+    assert {contact["contact_id"] for contact in drivers} == {
+        "C-T1-DRV",
+        "C-T1-DRV-ANANDA",
+        "C-T1-DRV-VIVEK",
+    }
+    assert {contact["label"] for contact in drivers} == {"Mudita", "Ananda", "Vivek"}
+    assert all("${PHONE_" in str(contact["whatsapp"]) for contact in drivers)
     facilities = {facility["facility_id"] for facility in seed["facilities"]}
     assert facilities == {"FAC-A", "FAC-B"}
     facility_a = next(item for item in seed["facilities"] if item["facility_id"] == "FAC-A")

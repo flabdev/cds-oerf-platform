@@ -72,6 +72,35 @@ def test_streak_is_scoped_and_expires(kind: str) -> None:
     assert TTL == timedelta(minutes=10)
 
 
+@pytest.mark.parametrize("kind", ["memory", "dynamo"])
+def test_first_breach_reading_is_kept_until_the_streak_clears(kind: str) -> None:
+    now = {"at": datetime(2026, 10, 20, 10, 0, tzinfo=UTC)}
+    store = _store(kind, lambda: now["at"])
+    first = {
+        "event_id": "evt-1",
+        "timestamp": "2026-10-20T10:00:00Z",
+        "temperature_c": 9.0,
+        "sequence": 7,
+    }
+    second = {
+        "event_id": "evt-2",
+        "timestamp": "2026-10-20T10:01:00Z",
+        "temperature_c": 9.5,
+        "sequence": 8,
+    }
+
+    store.record_breach(
+        tenant_id="t1", shipment_id="PH-1", device_id="RF-1", reading=first
+    )
+    store.record_breach(
+        tenant_id="t1", shipment_id="PH-1", device_id="RF-1", reading=second
+    )
+
+    assert store.first_reading(tenant_id="t1", shipment_id="PH-1", device_id="RF-1") == first
+    store.clear(tenant_id="t1", shipment_id="PH-1", device_id="RF-1")
+    assert store.first_reading(tenant_id="t1", shipment_id="PH-1", device_id="RF-1") is None
+
+
 def _store(kind: str, clock):
     if kind == "memory":
         return MemoryDebounce(clock=clock)

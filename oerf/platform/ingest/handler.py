@@ -277,12 +277,19 @@ def handler(
             timestamp=reading.ts.isoformat(),
         )
         reason = breach_reason(reading_event, config, profile_id=profile_id)
+        snapshot = {
+            "event_id": event_id,
+            "timestamp": iso_z(reading.ts),
+            "temperature_c": reading.temperature_c,
+            "sequence": reading.seq,
+        }
         streak = observe(
             ports.debounce,
             tenant_id=tenant_id,
             shipment_id=shipment_id,
             device_id=reading.device_id,
             in_breach=reason is not None,
+            reading=snapshot if reason is not None else None,
         )
         decision = evaluate_trigger(
             reading_event,
@@ -307,6 +314,20 @@ def handler(
             config_snapshot=config.model_dump(mode="json"),
             product_profile_id=profile_id,
         )
+        first = ports.debounce.first_reading(
+            tenant_id=tenant_id,
+            shipment_id=shipment_id,
+            device_id=reading.device_id,
+        )
+        if first is not None and first.get("event_id") != event_id:
+            ports.incidents.record_reading(
+                tenant_id,
+                shipment_id,
+                event_id=str(first["event_id"]),
+                timestamp=str(first["timestamp"]),
+                temperature_c=float(first["temperature_c"]),
+                sequence=int(first["sequence"]),
+            )
         _record_reading(ports, tenant_id, shipment_id, reading, event_id)
         execution_name = _execution_name(tenant_id, incident.incident_id)
         if ports.incidents.get(tenant_id, incident.incident_id).state != "OPEN":

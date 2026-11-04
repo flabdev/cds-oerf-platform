@@ -87,7 +87,7 @@ def built():
 def test_alarms_cover_every_dlq_machine_and_lambda(built) -> None:
     template, functions, queues, machines, names = built
     assert _NAMED_FUNCTIONS <= names
-    expected = len(queues) + (2 * len(machines)) + len(functions) + 1
+    expected = len(queues) + (2 * len(machines)) + len(functions) + 2
     alarms = template.find_resources("AWS::CloudWatch::Alarm")
     assert len(alarms) == expected
     metrics = [
@@ -126,7 +126,12 @@ def test_alarms_cover_every_dlq_machine_and_lambda(built) -> None:
     topic = next(iter(template.find_resources("AWS::SNS::Topic")))
     for alarm in alarms.values():
         props = alarm["Properties"]
-        assert props["Threshold"] == 0
+        metric_name = props.get("MetricName")
+        if metric_name == "Duration":
+            assert props["Threshold"] == 3000
+            assert props["ExtendedStatistic"] == "p95"
+        else:
+            assert props["Threshold"] == 0
         assert props["ComparisonOperator"] == "GreaterThanThreshold"
         assert props["TreatMissingData"] == "notBreaching"
         assert props["EvaluationPeriods"] == 1
@@ -141,6 +146,7 @@ def test_alarms_cover_every_dlq_machine_and_lambda(built) -> None:
         "ExecutionsTimedOut",
         "Errors",
         "DeliveryFailures",
+        "Duration",
     ):
         assert name in body
 

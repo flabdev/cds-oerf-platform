@@ -1,0 +1,15 @@
+title = "cds-oerf-platform"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fixtures, seed tokens, and IAM docs that mention example ARNs"
+paths = [
+  '''tests/''',
+  '''sim/seed/''',
+  '''docs/''',
+]
+regexes = [
+  '''\$\{PHONE_[A-Z0-9_]+\}''',
+]

@@ -61,6 +61,11 @@ jobs:
       - name: Security tests
         run: pytest -q -m security
 
+      - name: Gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz | tar -xz gitleaks
+          ./gitleaks detect --no-git --source . --config .gitleaks.toml --exit-code 1
+
       # aws-cdk-lib is the library. The cdk command is the CLI, same install as deploy.yml.
       - name: Install CDK CLI
         run: npm install -g aws-cdk@2.1145.0
