@@ -1,9 +1,9 @@
-"""Evaluate the Bedrock vision path against the labeled OERF photo corpus.
+"""Evaluate the Bedrock vision path against a labeled OERF photo corpus.
 
-Run ``python -m scripts.eval_photo_evidence`` after preparing photos with
-``python tests/ai-evals/photos/render.py``. Generated flat-color placeholder
-fixtures are rejected unless ``--allow-generated-fixtures`` is supplied; their
-results are explicitly marked as development-only, never model-quality evidence.
+See ``tests/ai-evals/photos/README.md`` for real-photo setup and the synthetic
+smoke-test workflow. Generated flat-color placeholders are rejected unless
+``--allow-generated-fixtures`` is supplied; their results are development-only,
+never model-quality evidence.
 """
 
 from __future__ import annotations
