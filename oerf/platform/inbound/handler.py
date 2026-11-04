@@ -347,10 +347,11 @@ _client: Any = None
 def build_dependencies() -> InboundDependencies:
     """Build runtime adapters lazily from the OERF-301 environment contract.
 
-    ``TODO(OERF-301)``: the inbound function needs ``INCIDENT_TABLE_NAME``,
-    ``ROUTING_TABLE_NAME`` and ``TENANT_TABLE_NAME`` plus read/write access to
-    the incident and routing tables. Missing configuration fails the invocation
-    rather than acknowledging records that were never processed.
+    The inbound function receives ``INCIDENT_TABLE_NAME``,
+    ``ROUTING_TABLE_NAME`` and ``TENANT_TABLE_NAME`` from the compute stack,
+    with read/write access to the incident and routing tables. Missing
+    configuration fails the invocation rather than acknowledging records that
+    were never processed.
     """
     global _client
     if not ROUTING_TABLE_NAME or not INCIDENT_TABLE_NAME or not TENANT_TABLE_NAME:
