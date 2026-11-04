@@ -134,7 +134,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         generated_at,
         readings=_rows(table, pk, "READ#"),
     )
-    receipt = publish_report(document, _store())
+    receipt = publish_report(document, _store(), pdf_backend="none")
     s3_uri = f"s3://{REPORT_BUCKET_NAME}/{receipt.s3_key}" if REPORT_BUCKET_NAME else ""
     log(
         logger,

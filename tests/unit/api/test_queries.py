@@ -312,6 +312,60 @@ def test_sqs_message_uses_the_idempotency_id_and_omits_the_task_token() -> None:
     assert "task_token" not in body
 
 
+def test_pick_option_queues_the_canonical_incident_identity() -> None:
+    services = DashboardServices(
+        queries=MemoryIncidentQuery(
+            [
+                {
+                    "tenant_id": "t1",
+                    "incident_id": "INC-1",
+                    "state": "ASSESSING",
+                    "shipment_id": "PH-1",
+                }
+            ]
+        ),
+        queue=MemoryActionQueue(),
+    )
+
+    queued = dispatch(
+        "POST",
+        "/incidents/INC-1/actions",
+        Principal("t1", "ops_user", "user-1", True),
+        {
+            "action": "pick_option",
+            "action_id": "act-pick",
+            "engagement_id": "ENG-03",
+            "option_id": "FACILITY_A",
+        },
+        services,
+        idempotency_key="act-pick",
+    )
+    again = dispatch(
+        "POST",
+        "/incidents/INC-1/actions",
+        Principal("t1", "ops_user", "user-1", True),
+        {
+            "action": "pick_option",
+            "action_id": "act-pick",
+            "engagement_id": "ENG-03",
+            "option_id": "FACILITY_A",
+        },
+        services,
+        idempotency_key="act-pick",
+    )
+    message = services.queue.messages[0]
+
+    assert queued == (202, {"action_id": "act-pick", "status": "queued"})
+    assert again[1]["action_id"] == "act-pick"
+    assert len(services.queue.messages) == 1
+    assert message["action"] == "pick_option"
+    assert message["option_id"] == "FACILITY_A"
+    assert message["tenant_id"] == "t1"
+    assert message["incident_id"] == "INC-1"
+    assert incident_pk(message["tenant_id"], message["incident_id"]) == "TENANT#t1#INC#INC-1"
+    assert "task_token" not in message
+
+
 def _incident(
     client: FakeDynamoClient,
     tenant_id: str,
