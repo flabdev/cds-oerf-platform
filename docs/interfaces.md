@@ -225,7 +225,7 @@ Ingest loads `PK=DEVICE#{device_id}`, `SK=META` on the routing table. That item'
 
 ### 4.2 Lifecycle
 
-Owner: Ananda (OERF-308) as the stream consumer. No EventBridge consumer is registered. OERF-301 does not add a lifecycle rule until a consumer is named here.
+Owner: Ananda (OERF-308). The incident-table DynamoDB stream is consumed by `oerf-stream-broadcaster` and delivered to WebSocket subscribers. No EventBridge consumer or lifecycle rule is registered. The JSON below is the canonical lifecycle-event shape for any future EventBridge publisher; it is not the stream broadcaster's WebSocket envelope.
 
 ```json
 {
@@ -662,7 +662,7 @@ Mudita's other ticket numbers in this table are ownership for coordination. They
 | 6 | WebSocket scopes are incident (full sanitized event) and tenant list (summary only). No `ALL`. | Ananda 308, Mudita 302 |
 | 7 | Simulator `Detail` keeps `tenant_id` and `shipment_id`. Ingest uses `DEVICE#{id}` and drops the event when `detail.tenant_id` disagrees. | OERF-118 and ingest |
 | 8 | GSI1 by status is how `GET /incidents` lists. Partition `TENANT#{tid}#STATUS#{state}`. | data-stack, 302 |
-| 9 | Lifecycle source `oerf.incident`, detail-type `IncidentStateChanged`, detail as in section 4.2. Consumer is the stream path. No EventBridge consumer. | Ananda, 308 |
+| 9 | Lifecycle shape uses source `oerf.incident`, detail-type `IncidentStateChanged`, and the detail in section 4.2. The incident-table stream drives WebSocket broadcasts; no EventBridge consumer or lifecycle rule is registered. | Ananda, 308 |
 | 10 | Page 20 sections 3–4 need no WhatsApp template. The outside list is empty (section 11). | Ananda, WhatsApp infra |
 | 11 | OERF-201–207 owner names stay blank until Ananda fills them. | Ananda |
 
