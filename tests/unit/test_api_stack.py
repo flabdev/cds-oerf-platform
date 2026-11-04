@@ -4,7 +4,7 @@ import json
 
 import aws_cdk as cdk
 import pytest
-from aws_cdk import aws_cloudfront as cloudfront, aws_sqs as sqs
+from aws_cdk import aws_sqs as sqs
 from aws_cdk.assertions import Template
 
 from infra.stacks.api_stack import OerfApiStack
@@ -121,9 +121,18 @@ def test_distribution_uses_the_security_headers_policy(template: Template) -> No
         "DefaultCacheBehavior"
     ]
     assert behavior["ViewerProtocolPolicy"] == "redirect-to-https"
-    assert (
-        behavior["ResponseHeadersPolicyId"]
-        == cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS.response_headers_policy_id
+    policies = template.find_resources("AWS::CloudFront::ResponseHeadersPolicy")
+    assert len(policies) == 1
+    csp = next(iter(policies.values()))["Properties"]["ResponseHeadersPolicyConfig"][
+        "SecurityHeadersConfig"
+    ]["ContentSecurityPolicy"]["ContentSecurityPolicy"]
+    assert "default-src 'none'" in csp
+    assert "script-src 'self'" in csp
+    assert "https://*.amazoncognito.com" in csp
+    assert "wss://*.execute-api.us-east-1.amazonaws.com" in csp
+    policy_id = behavior["ResponseHeadersPolicyId"]
+    assert "Ref" in policy_id or any(
+        policy_id == {"Ref": logical} for logical in policies
     )
 
 

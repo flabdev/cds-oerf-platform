@@ -43,8 +43,9 @@ signs. The handler does not download the bytes and does not read a Meta
 token. A missing phone id fails closed. Throttling and a 5xx are retried.
 A disallowed type, an oversize file, or an invalid media id is acknowledged
 without a callback for that media item. A missing or ambiguous address match
-is acknowledged without resuming. The ``JOIN`` sandbox path remains separate
-from this provider reply handler.
+is acknowledged without resuming. Exact ``JOIN`` is handled before
+correlation: a number that is not on a non-sandbox tenant opens an ``sbx``
+session. A production number is rejected without leaking its tenant.
 """
 
 from __future__ import annotations
@@ -54,8 +55,8 @@ import json
 import logging
 import os
 import uuid
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, NoReturn, Protocol
 
@@ -88,6 +89,7 @@ from oerf.platform.incidents.repository import (
     StaleIncidentUpdate,
 )
 from oerf.platform.observability.logging import get_logger, log
+from oerf.platform.sandbox.join import DynamoSandboxStore, SandboxStore, handle_sandbox_message
 
 logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
@@ -338,6 +340,8 @@ class InboundDependencies:
     incidents: IncidentStore | None = None
     executions: ExecutionStop | None = None
     state_machine_arn: str = ""
+    sandbox: SandboxStore | None = None
+    clock: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
 
 
 _dependencies: InboundDependencies | None = None
@@ -369,6 +373,7 @@ def build_dependencies() -> InboundDependencies:
         incidents=DynamoIncidentStore(_client, INCIDENT_TABLE_NAME, tenant_table=TENANT_TABLE_NAME),
         executions=stepfunctions,
         state_machine_arn=os.environ.get("STATE_MACHINE_ARN", ""),
+        sandbox=DynamoSandboxStore(_client, ROUTING_TABLE_NAME, TENANT_TABLE_NAME),
     )
 
 
@@ -449,6 +454,22 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
         return "duplicate"
     if dependencies.registry is None:
         raise RuntimeError("provider inbound requires a sender registry")
+    if dependencies.sandbox is not None:
+        joined = handle_sandbox_message(
+            message,
+            registry=dependencies.registry,
+            store=dependencies.sandbox,
+            now=dependencies.clock(),
+        )
+        if joined.outcome != "ignored":
+            log(
+                logger,
+                logging.INFO,
+                "Handled sandbox JOIN",
+                outcome=f"sandbox_{joined.outcome}",
+                count=1,
+            )
+            return f"sandbox_{joined.outcome}"
     reply = handle_reply(
         message.text,
         context_id,
