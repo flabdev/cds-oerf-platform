@@ -257,10 +257,13 @@ _ACCOUNT_WIDE_CFN = frozenset(
 def _assert_bootstrap_qualifier(templates: dict[str, dict], qualifier: str) -> None:
     marker = f"/cdk-bootstrap/{qualifier}/version"
     other = "hnb659fds" if qualifier == "oerfdev" else "oerfdev"
+    # A deny of the other qualifier's roles names that prefix on purpose.
+    # Strip only that deny pattern so an allow of the other qualifier still fails.
+    denied = f":role/cdk-{other}-*"
     for name, template in templates.items():
         default = template["Parameters"]["BootstrapVersion"]["Default"]
         assert default == marker, name
-        blob = json.dumps(template)
+        blob = json.dumps(template).replace(denied, ":role/denied-other-bootstrap")
         assert f"cdk-{other}-" not in blob, name
 
 

@@ -9,6 +9,14 @@ writes on ``CDKToolkit-dev``.
 from aws_cdk import CfnOutput, Duration, Stack, aws_iam as iam
 from constructs import Construct
 
+from infra.dev_boundary import (
+    BOUNDARY_POLICY_NAME,
+    EXEC_DENY_POLICY_NAME,
+    EXEC_POLICY_NAME,
+    boundary_policy,
+    execution_deny_policy,
+    execution_policy,
+)
 from infra.naming import Stage, qualify_dev_names
 
 _GITHUB_DOMAIN = "token.actions.githubusercontent.com"
@@ -65,8 +73,38 @@ class OerfCiStack(Stack):
                 ],
             )
         )
+        _dev_boundary_policies(self)
         CfnOutput(self, "GitHubDeployRoleArn", value=role.role_arn)
         qualify_dev_names(self)
+
+
+def _dev_boundary_policies(stack: Stack) -> None:
+    """Fixed-name policies the dev bootstrap attaches. Not applied to this stack's role."""
+
+    exec_policy = iam.CfnManagedPolicy(
+        stack,
+        "DevCfnExecPolicy",
+        managed_policy_name=EXEC_POLICY_NAME,
+        description="CloudFormation execution allows for the oerfdev dev stage",
+        policy_document=execution_policy(stack.account, stack.region),
+    )
+    exec_denies = iam.CfnManagedPolicy(
+        stack,
+        "DevCfnExecDenies",
+        managed_policy_name=EXEC_DENY_POLICY_NAME,
+        description="CloudFormation execution denies for the oerfdev dev stage",
+        policy_document=execution_deny_policy(stack.account),
+    )
+    boundary = iam.CfnManagedPolicy(
+        stack,
+        "DevWorkloadBoundary",
+        managed_policy_name=BOUNDARY_POLICY_NAME,
+        description="Permissions boundary for dev workload roles and the execution role",
+        policy_document=boundary_policy(stack.account, stack.region),
+    )
+    CfnOutput(stack, "DevCfnExecPolicyArn", value=exec_policy.ref)
+    CfnOutput(stack, "DevCfnExecDeniesArn", value=exec_denies.ref)
+    CfnOutput(stack, "DevWorkloadBoundaryArn", value=boundary.ref)
 
 
 _BOOTSTRAP_ROLES = (

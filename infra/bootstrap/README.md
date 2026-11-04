@@ -11,7 +11,7 @@ What changed from that stock template:
 - An explicit deny blocks every `cloudformation:*` action on `stack/OerfCiStack-dev/*` and its change sets. A second deny blocks CloudFormation writes on `stack/CDKToolkit-dev/*` and its change sets. `*-dev` would otherwise include the toolkit stack. Ananda changes `CDKToolkit-dev` and `OerfCiStack-dev` only from his laptop.
 - `AWSCloudFormationReadOnlyAccess` is not attached. It would have allowed reads of every stack, including main.
 - `iam:PassRole` is still only `${CloudFormationExecutionRole}`. With qualifier `oerfdev` that is `cdk-oerfdev-cfn-exec-role-<account>-<region>`.
-- The execution role still takes `CloudFormationExecutionPolicies`. Empty, and with no trusted accounts, that is `AdministratorAccess`. A permissions boundary is not attached.
+- The execution role is `cdk-oerfdev-cfn-exec-role-<account>-<region>`. After `OerfCiStack-dev` has created `OerfDevCfnExecPolicy`, `OerfDevCfnExecDenies`, and `OerfDevWorkloadBoundary`, re-bootstrap so this role uses both execution policies and that permissions boundary (section 2b). The template parameters are `CloudFormationExecutionPolicies` (a comma-separated list) and `InputPermissionsBoundary`. A first bootstrap, before those policies exist, still passes `AdministratorAccess` and does not set a boundary. Do not leave that in place.
 
 Bootstrap it only as stack `CDKToolkit-dev` with `--qualifier oerfdev` and no `--trust`. Do not apply this file to `CDKToolkit`.
 
@@ -90,6 +90,97 @@ aws cloudformation deploy \
 
 Replace the OIDC provider ARN if the account’s GitHub provider ARN differs.
 
+This stack also creates `OerfDevCfnExecPolicy`, `OerfDevCfnExecDenies`, and `OerfDevWorkloadBoundary`. The allows and the denies are two policies because the per-service dev name patterns do not fit in one. Deploy the stack before the re-bootstrap below. The dev application stacks do not create these policies. They only name the boundary.
+
+### 2b. Re-bootstrap and check the boundary
+
+The policies from section 2 must exist first. This updates `CDKToolkit-dev` only. It does not change main’s `CDKToolkit`. The template already has `CloudFormationExecutionPolicies` and `InputPermissionsBoundary`; this command sets them. `--custom-permissions-boundary` is the policy name. The template attaches that boundary to the CloudFormation execution role only. The deploy, file-publishing, image-publishing, and lookup roles are unchanged and do not get it.
+
+```bash
+cdk bootstrap aws://906048429638/us-east-1 \
+  --profile Fission-OERF \
+  --toolkit-stack-name CDKToolkit-dev \
+  --qualifier oerfdev \
+  --template infra/bootstrap/dev-bootstrap.yaml \
+  --cloudformation-execution-policies arn:aws:iam::906048429638:policy/OerfDevCfnExecPolicy,arn:aws:iam::906048429638:policy/OerfDevCfnExecDenies \
+  --custom-permissions-boundary OerfDevWorkloadBoundary \
+  -c stage=dev \
+  -c account=906048429638
+```
+
+After any later change to those policies, deploy `OerfCiStack-dev` again (section 2), then re-run this bootstrap, then the check. A failed dev application deploy rolls back that stack and does not change main.
+
+The check is read-only (`iam:SimulatePrincipalPolicy` and `iam:SimulateCustomPolicy` only). Run it after this re-bootstrap and again after the dev application deploy. It exits non-zero on any FAIL.
+
+The channel-router role ARN is the `Role` of `oerf-dev-channel-router`. The phone-number id is the SSM parameter below. The topic ARN is the main inbound topic from the start of this section. Do not paste the results into a ticket; the script prints PASS or FAIL only.
+
+```bash
+ROUTER_ROLE=$(aws lambda get-function-configuration \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --function-name oerf-dev-channel-router \
+  --query Role \
+  --output text)
+
+PHONE_ID=$(aws ssm get-parameter \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --name /oerf/dev/whatsapp/phone-number-id \
+  --query Parameter.Value \
+  --output text)
+
+POOL_ID=$(aws cloudformation describe-stacks \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfDataStack \
+  --query "Stacks[0].Outputs[?OutputKey=='CognitoUserPoolId'].OutputValue | [0]" \
+  --output text)
+
+DIST_ID=$(aws cloudformation list-stack-resources \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfApiStack \
+  --query "StackResourceSummaries[?ResourceType=='AWS::CloudFront::Distribution'].PhysicalResourceId | [0]" \
+  --output text)
+
+REST_API_ID=$(aws cloudformation list-stack-resources \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfApiStack \
+  --query "StackResourceSummaries[?ResourceType=='AWS::ApiGateway::RestApi'].PhysicalResourceId | [0]" \
+  --output text)
+
+DEV_RUNTIME_ARN=$(aws cloudformation describe-stacks \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfComputeStack-dev \
+  --query "Stacks[0].Outputs[?OutputKey=='AgentRuntimeArn'].OutputValue | [0]" \
+  --output text)
+
+MAIN_RUNTIME_ARN=$(aws cloudformation describe-stacks \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfComputeStack \
+  --query "Stacks[0].Outputs[?OutputKey=='AgentRuntimeArn'].OutputValue | [0]" \
+  --output text)
+
+.venv311/bin/python -m scripts.check_dev_boundary \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --account 906048429638 \
+  --router-role-arn "$ROUTER_ROLE" \
+  --phone-number-id "$PHONE_ID" \
+  --inbound-topic-arn "$SHARED_INBOUND_TOPIC_ARN" \
+  --user-pool-arn "arn:aws:cognito-idp:us-east-1:906048429638:userpool/${POOL_ID}" \
+  --distribution-arn "arn:aws:cloudfront::906048429638:distribution/${DIST_ID}" \
+  --rest-api-id "$REST_API_ID" \
+  --caller-role-arn arn:aws:iam::906048429638:role/oerf-dev-agent-caller \
+  --dev-runtime-arn "$DEV_RUNTIME_ARN" \
+  --main-runtime-arn "$MAIN_RUNTIME_ARN"
+```
+
+`SHARED_INBOUND_TOPIC_ARN` is the main topic from the `list-stack-resources` command at the top of this section. If `oerf-dev-channel-router` does not exist yet, deploy the four application stacks (section 3) first, then run the check.
+
 ### 3. First dev deploy (four app stacks)
 
 Docker must be running (`agentcore:enabled=true` builds the AgentCore image).
@@ -133,7 +224,13 @@ cdk diff \
   -c whatsapp:phoneNumberId="$PLACEHOLDER_PHONE_ID" \
   -c whatsapp:sharedInboundTopicArn="$SHARED_INBOUND_TOPIC_ARN" \
   -c demo:seedDevices=true
+```
 
+If these four stacks already exist, the diff from this change should add `PermissionsBoundary` on existing `AWS::IAM::Role` resources and `oerf:stage=dev` on taggable resources. CloudFormation updates both in place and does not replace the role. A replacement of a role, function, or table is not part of this change. The managed policies live in `OerfCiStack-dev`, which this diff does not deploy.
+
+`CreateRestApi` and `CreateApi` send `oerf:stage=dev` on the create call, so the first dev deploy does not call `/tags`. Changing tags on an existing dev API is denied. A later change to those tags rolls that dev stack back and does not change main. Deleting `OerfApiStack-dev` cannot delete the CloudFront origin access control: `UpdateOriginAccessControl` and `DeleteOriginAccessControl` are denied. After the stack rolls back or the other resources are gone, delete that control with the laptop admin credentials.
+
+```bash
 cdk deploy \
   --profile Fission-OERF \
   OerfDataStack-dev OerfComputeStack-dev OerfApiStack-dev OerfObservabilityStack-dev \

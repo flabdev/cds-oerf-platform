@@ -4,6 +4,7 @@ import os
 
 import aws_cdk as cdk
 
+from infra.dev_boundary import apply_to_stack, tag_dev_stack
 from infra.naming import Stage
 from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.ci_stack import OerfCiStack
@@ -154,6 +155,11 @@ stacks.append(
         **_dev_synthesizer(stage),
     )
 )
+
+if not stage.is_main:
+    for stack in stacks:
+        tag_dev_stack(stack)
+        apply_to_stack(stack)
 
 if ci_stack is not None:
     stacks.append(ci_stack)
