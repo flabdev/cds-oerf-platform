@@ -400,6 +400,7 @@ class OerfComputeStack(Stack):
             environment={
                 "REPORT_BUCKET_NAME": data_stack.report_bucket.bucket_name,
                 "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
+                "REPORT_PDF_BACKEND": "none",
             },
         )
         data_stack.report_bucket.grant_read_write(self.report_generator_fn)

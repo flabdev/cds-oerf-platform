@@ -321,6 +321,7 @@ def _action(
     if services.queue is None:
         return 503, {"error": "queue_unavailable"}
     action_id = parsed["action_id"]
+    # tenant_id + incident_id is the canonical incident key TENANT#{tid}#INC#{iid}.
     message = {
         "tenant_id": principal.tenant_id,
         "incident_id": incident_id,

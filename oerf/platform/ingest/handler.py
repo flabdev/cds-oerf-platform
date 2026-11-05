@@ -16,10 +16,13 @@ read-only.
 While the shipment lock is present, each accepted reading is one ``READ#``
 row, written by ``IncidentStore.record_reading``.
 
-``TODO(OERF-301)``: no DynamoDB TTL is configured on any table, so the
-``expires_at`` attribute on dedupe and debounce items does not delete them yet.
-Device rows are written by ``oerf.platform.channels.devices.register_device``.
-Ingest only reads them and still drops an unknown device.
+DynamoDB TTL is enabled on the incident and routing tables for ``expires_at``
+rows. Ingest dedupe and debounce rows expire from the incident table; the
+platform and tenant tables intentionally have no TTL (tenant ``SBXSESSION`` rows
+remain queryable after their nominal expiry). See ``docs/interfaces.md`` section
+6.1 for the retention contract. Device rows are written by
+``oerf.platform.channels.devices.register_device``. Ingest only reads them and
+still drops an unknown device.
 """
 
 from __future__ import annotations
