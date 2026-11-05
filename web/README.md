@@ -2,7 +2,7 @@
 
 The dashboard is a local React page for the Operational Exception Resolution Framework. It shows cold-chain incidents, the ranked recovery options for a shipment that is being assessed, and the actions a desk user can queue.
 
-Without Cognito settings, the page reads the sample list in `src/App.jsx`. Refreshing the browser restores that list. With `VITE_API_URL`, `VITE_COGNITO_DOMAIN`, and `VITE_USER_POOL_CLIENT_ID` set, Sign in opens the Cognito hosted page and the desk loads `GET /incidents` with the id token. The WebSocket uses the access token. Actions are posted to the API. The contract is in `docs/interfaces.md`.
+Without Cognito settings, the page reads the sample list in `src/App.jsx`. Refreshing the browser restores that list. With `apiUrl`, `cognitoDomain`, and `userPoolClientId` in `/config.json`, Sign in opens the Cognito hosted page and the desk loads `GET /incidents` with the id token. The WebSocket uses the access token. Actions are posted to the API. The contract is in `docs/interfaces.md`.
 
 ## Setup
 
@@ -61,17 +61,21 @@ The three buttons at the bottom of the shipment pane queue the same actions.
 
 ## Live sign-in
 
-Set these before `npm run dev` when the API stack has been deployed. The domain, client id, and API URL are the `CognitoDomain`, `UserPoolClientId`, and `RestApiUrl` outputs. `VITE_WS_URL` is the `WebSocketApiUrl` output of `OerfComputeStack`.
+The production build loads `/config.json` before it renders. That file is not part of the build. CDK writes it on deploy when `desk:publish=true`. A production build with a missing or invalid `config.json` shows an error screen and does not open the sample desk. Copy `config.example.json` to `public/config.json` (gitignored) for local values. The shape is `apiUrl`, `cognitoDomain` (host only, no `https://`), `userPoolClientId`, `wsUrl`, and optionally `region` and `userPoolId`.
+
+`apiUrl`, `cognitoDomain`, and `userPoolClientId` are the `RestApiUrl`, `CognitoDomain` (host only), and `UserPoolClientId` outputs. `wsUrl` is the `WebSocketApiUrl` output of the compute stack.
+
+If `public/config.json` is missing and `npm run dev` is running, the page uses these instead:
 
 ```powershell
 $env:VITE_API_URL = "https://example.execute-api.us-east-1.amazonaws.com/prod"
-$env:VITE_COGNITO_DOMAIN = "oerf-123456789012.auth.us-east-1.amazoncognito.com"
+$env:VITE_COGNITO_DOMAIN = "oerf-example.auth.us-east-1.amazoncognito.com"
 $env:VITE_USER_POOL_CLIENT_ID = "client-id"
 $env:VITE_WS_URL = "wss://example.execute-api.us-east-1.amazonaws.com/prod"
 npm run dev
 ```
 
-`npm run dev` proxies `/api` to `VITE_API_URL`, so the browser calls `http://localhost:5173/api/incidents` and does not need REST CORS. Keep `VITE_API_URL` as `RestApiUrl`. Cognito and the WebSocket still use the hosted domain and `VITE_WS_URL`. A production `npm run build` calls `RestApiUrl` directly.
+`npm run dev` proxies `/api` to the `apiUrl` in `public/config.json`, or to `VITE_API_URL` when that file is absent, so the browser calls `http://localhost:5173/api/incidents` and does not need REST CORS. Cognito and the WebSocket still use the hosted domain and `wsUrl`. A production build calls `apiUrl` from `/config.json`. Do not pass stage URLs into `npm run build`.
 
 The hosted page redirects back to `http://localhost:5173` or `http://127.0.0.1:5173`. Those two callbacks are registered on the dashboard user-pool client, along with the CloudFront site URL. Use one of those origins and do not mix them after Sign in. Leave the variables unset to keep the sample desk.
 
@@ -99,7 +103,9 @@ A blank `name` uses the role label. Guest is the signed-out label.
 | File | Role |
 | --- | --- |
 | `index.html` | Page shell. Loads the Inter font. |
-| `src/main.jsx` | Reads the query string and mounts the app. |
+| `src/main.jsx` | Loads `/config.json`, then reads the query string and mounts the app. |
+| `src/config.js` | Fetches and checks `/config.json`. Vite dev can fall back to `VITE_*`. |
+| `config.example.json` | Placeholder `/config.json`. Copy it to `public/config.json` for local dev. |
 | `src/App.jsx` | Layout, sample incidents, and the three desk screens. |
 | `src/model.js` | Display name, list states, action request shape, and the allowance note. |
 | `src/styles.css` | Layout and color. |

@@ -4,7 +4,10 @@ import os
 
 import aws_cdk as cdk
 
+from infra.dev_boundary import apply_to_stack, tag_dev_stack
+from infra.naming import Stage
 from infra.stacks.api_stack import OerfApiStack
+from infra.stacks.ci_stack import OerfCiStack
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
 from infra.stacks.observability import OerfObservabilityStack, lambda_functions
@@ -35,6 +38,28 @@ def _reject_placeholder_deploy(stack: cdk.Stack) -> None:
     )
 
 
+def _dev_synthesizer(stage: Stage) -> dict[str, cdk.DefaultStackSynthesizer]:
+    """Dev stacks publish through the oerfdev bootstrap. Main omits this.
+
+    ``DefaultStackSynthesizer`` reads ``/cdk-bootstrap/oerfdev/version``.
+    Passing a synthesizer for main would change the asset bucket name.
+    """
+
+    if stage.is_main:
+        return {}
+    return {
+        "synthesizer": cdk.DefaultStackSynthesizer(
+            qualifier=stage.dev_bootstrap_qualifier(),
+        )
+    }
+
+
+def _ci_role_stack(app: cdk.App, stage: Stage) -> bool:
+    """The GitHub role stack is deployed from a laptop, not by GitHub."""
+
+    return (not stage.is_main) and app.node.try_get_context("ci:deployRoleStack") == "true"
+
+
 def _resolve_account(app: cdk.App) -> str:
     """Context ``account`` wins over ``CDK_DEFAULT_ACCOUNT``.
 
@@ -59,18 +84,36 @@ region = (
 )
 
 cdk_env = cdk.Environment(account=account, region=region)
+stage = Stage.from_context(app.node.try_get_context("stage"))
+
+# Fail before the other stacks bundle assets. A normal dev synth does not
+# read github:oidcProviderArn.
+if _ci_role_stack(app, stage):
+    ci_stack = OerfCiStack(
+        app,
+        stage.stack("OerfCiStack"),
+        stage=stage,
+        env=cdk_env,
+        **_dev_synthesizer(stage),
+    )
+else:
+    ci_stack = None
 
 data_stack = OerfDataStack(
     app,
-    "OerfDataStack",
+    stage.stack("OerfDataStack"),
+    stage=stage,
     env=cdk_env,
+    **_dev_synthesizer(stage),
 )
 
 compute_stack = OerfComputeStack(
     app,
-    "OerfComputeStack",
+    stage.stack("OerfComputeStack"),
     data_stack=data_stack,
+    stage=stage,
     env=cdk_env,
+    **_dev_synthesizer(stage),
 )
 
 stacks = [data_stack, compute_stack]
@@ -81,11 +124,13 @@ if _dashboard_enabled(app):
     # dashboard publishes that stack's WebSocket endpoint.
     api_stack = OerfApiStack(
         app,
-        "OerfApiStack",
+        stage.stack("OerfApiStack"),
         data_stack=data_stack,
         inbound_queue=compute_stack.inbound_queue,
         websocket_url=compute_stack.ws_stage.url,
+        stage=stage,
         env=cdk_env,
+        **_dev_synthesizer(stage),
     )
     stacks.append(api_stack)
     scopes.append(api_stack)
@@ -93,7 +138,7 @@ if _dashboard_enabled(app):
 stacks.append(
     OerfObservabilityStack(
         app,
-        "OerfObservabilityStack",
+        stage.stack("OerfObservabilityStack"),
         functions=lambda_functions(*scopes),
         dead_letter_queues=[
             compute_stack.inbound_dlq,
@@ -105,9 +150,19 @@ stacks.append(
             data_stack.engage_party_state_machine,
         ],
         channel_router_log_group=compute_stack.channel_router_fn.log_group,
+        stage=stage,
         env=cdk_env,
+        **_dev_synthesizer(stage),
     )
 )
+
+if not stage.is_main:
+    for stack in stacks:
+        tag_dev_stack(stack)
+        apply_to_stack(stack)
+
+if ci_stack is not None:
+    stacks.append(ci_stack)
 
 if account == SYNTH_PLACEHOLDER_ACCOUNT:
     for stack in stacks:

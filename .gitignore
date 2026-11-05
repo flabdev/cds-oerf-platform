@@ -37,3 +37,10 @@ node_modules/
 .codevector.json
 opencode.json
 .cline/providers.json
+# Local stage synth output. Not committed.
+cdk.out.*/
+.jsii-cache/
+.jsii-cache-ssm/
+
+# Local desk settings. Copy web/config.example.json here for Vite.
+web/public/config.json

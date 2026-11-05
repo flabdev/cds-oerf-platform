@@ -19,10 +19,21 @@ REGION = "us-east-1"
 
 
 def run_app(outdir: Path, **env_overrides: str) -> subprocess.CompletedProcess:
-    """Run ``python -m infra.app`` with a controlled environment."""
+    """Run ``python -m infra.app`` with a controlled environment.
+
+    Context always includes ``stage=main`` unless the caller already set ``stage``.
+    """
     env = {
         key: value for key, value in os.environ.items() if key != "CDK_DEFAULT_ACCOUNT"
     }
+    context: dict[str, object] = {}
+    raw_context = env_overrides.get("CDK_CONTEXT_JSON")
+    if raw_context:
+        loaded = json.loads(raw_context)
+        if isinstance(loaded, dict):
+            context.update(loaded)
+    context.setdefault("stage", "main")
+    env_overrides = {**env_overrides, "CDK_CONTEXT_JSON": json.dumps(context)}
     env.update(
         {
             "CDK_OUTDIR": str(outdir),
@@ -43,12 +54,15 @@ def run_app(outdir: Path, **env_overrides: str) -> subprocess.CompletedProcess:
 def framework_error_alarms(outdir: Path) -> list[str]:
     """Logical ids of errors alarms on Provider framework-onEvent functions."""
 
-    template = json.loads((outdir / "OerfObservabilityStack.template.json").read_text())
-    return [
-        logical_id
-        for logical_id in template["Resources"]
-        if "frameworkonEventErrors" in logical_id
-    ]
+    found = []
+    for path in outdir.glob("*.template.json"):
+        template = json.loads(path.read_text())
+        found.extend(
+            logical_id
+            for logical_id in template.get("Resources", {})
+            if "frameworkonEventErrors" in logical_id
+        )
+    return found
 
 
 def stack_names(outdir: Path) -> set[str]:
@@ -153,7 +167,8 @@ def test_waba_app_gives_each_lambda_one_errors_alarm(tmp_path):
     ]
     errors = [
         resource["Properties"]
-        for resource in templates["OerfObservabilityStack"]["Resources"].values()
+        for template in templates.values()
+        for resource in template["Resources"].values()
         if resource["Type"] == "AWS::CloudWatch::Alarm"
         and resource["Properties"].get("MetricName") == "Errors"
     ]
@@ -162,9 +177,12 @@ def test_waba_app_gives_each_lambda_one_errors_alarm(tmp_path):
     assert len(dimensions) == len(set(dimensions))
     framework = [
         logical_id
-        for logical_id in templates["OerfObservabilityStack"]["Resources"]
+        for template in templates.values()
+        for logical_id in template["Resources"]
         if "frameworkonEventErrors" in logical_id
     ]
+    rendered = json.dumps(templates["OerfObservabilityStack"])
+    assert "WabaEventDestination" not in rendered
     # Tenant-attribute and WABA providers each get one alarm. Device seed is off.
     assert len(framework) == 2
 
