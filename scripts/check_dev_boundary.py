@@ -187,9 +187,12 @@ GUARDRAIL_EXEC_CHECKS: list[tuple[str, str, bool]] = [
 
 # Evidence analyzer and the Interpret path (AgentCore execution role).
 # No tag context. Also run against the boundary with Allow *.
+# ApplyGuardrail authorizes on guardrail/* without a version suffix; version
+# is a request field. IAM simulation with ``...:guardrail/id:1`` is not a
+# real resource ARN (see Bedrock guardrails-deploy and guardrail* in the
+# service authorization reference).
 APPLY_CHECKS: list[tuple[str, str, bool]] = [
     ("bedrock:ApplyGuardrail", "{dev_guardrail_arn}", True),
-    ("bedrock:ApplyGuardrail", "{dev_guardrail_arn}:1", True),
     ("bedrock:ApplyGuardrail", "{main_guardrail_arn}", False),
     ("bedrock:ApplyGuardrail", "{profile_arn}", True),
     ("bedrock:ApplyGuardrail", "{profile_west_arn}", True),
