@@ -104,6 +104,18 @@ EXEC_CHECKS: list[tuple[str, str, bool, bool]] = [
         False,
         False,
     ),
+    (
+        "ssm:GetParameters",
+        "arn:aws:ssm:{region}:{account}:parameter/cdk-bootstrap/oerfdev/version",
+        True,
+        False,
+    ),
+    (
+        "ssm:GetParameters",
+        "arn:aws:ssm:{region}:{account}:parameter/cdk-bootstrap/hnb659fds/version",
+        False,
+        False,
+    ),
 ]
 
 # action, resource template, expect allowed by the boundary

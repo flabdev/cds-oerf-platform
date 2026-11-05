@@ -22,6 +22,7 @@ from infra.dev_boundary import (
     STAR_ACTION_REASONS,
     _glob,
     apply_to_stack,
+    bootstrap_ssm_parameter_arn,
     dev_name_patterns,
     nonwhitespace_size,
     runtime_violations,
@@ -169,6 +170,23 @@ def main_seed(tmp_path_factory: pytest.TempPathFactory) -> dict[str, dict]:
     return _run(tmp_path_factory.mktemp("main-seed"), _MAIN_SEED)
 
 
+def test_bootstrap_ssm_version_is_allowed_and_main_qualifier_is_not() -> None:
+    from infra.dev_boundary import boundary_permits, intersection_allows
+
+    dev_version = (
+        f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/cdk-bootstrap/oerfdev/version"
+    )
+    main_version = (
+        f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/cdk-bootstrap/hnb659fds/version"
+    )
+    for action in ("ssm:GetParameter", "ssm:GetParameters"):
+        assert intersection_allows(action, dev_version, ACCOUNT, REGION)
+        assert boundary_permits(action, dev_version, ACCOUNT, REGION)
+        assert not intersection_allows(action, main_version, ACCOUNT, REGION)
+        assert not boundary_permits(action, main_version, ACCOUNT, REGION)
+    assert bootstrap_ssm_parameter_arn(ACCOUNT, REGION).endswith("/oerfdev/*")
+
+
 def test_policy_documents_fit_the_managed_policy_quota() -> None:
     from infra.dev_boundary import boundary_policy, execution_deny_policy, execution_policy
 
@@ -298,6 +316,9 @@ def test_ci_stack_policies_and_github_role_untouched() -> None:
     exec_doc = policies[EXEC_POLICY_NAME]["Properties"]["PolicyDocument"]
     deny_doc = policies[EXEC_DENY_POLICY_NAME]["Properties"]["PolicyDocument"]
     boundary_doc = policies[BOUNDARY_POLICY_NAME]["Properties"]["PolicyDocument"]
+    bootstrap = bootstrap_ssm_parameter_arn(ACCOUNT, REGION)
+    assert "ReadDevBootstrapVersion" in json.dumps(exec_doc)
+    assert bootstrap in json.dumps(boundary_doc)
     _assert_role_mutation_conditions(exec_doc)
     _assert_required_denies(deny_doc)
     _assert_required_denies(boundary_doc)
@@ -349,6 +370,22 @@ def test_dev_resources_carry_the_stage_tag(dev_off, dev_on, dev_min) -> None:
             if resource["Type"] in created and _has_stage_tag(resource.get("Properties", {})):
                 created[resource["Type"]] = True
     assert created == {"AWS::ApiGateway::RestApi": True, "AWS::ApiGatewayV2::Api": True}
+
+
+def test_dev_templates_only_resolve_bootstrap_version_from_ssm(dev_off) -> None:
+    """CloudFormation reads bootstrap version as the execution role during deploy."""
+
+    expected = "/cdk-bootstrap/oerfdev/version"
+    for name, template in dev_off.items():
+        if not name.endswith("-dev") or name == "OerfCiStack-dev":
+            continue
+        for param in template.get("Parameters", {}).values():
+            if param.get("Type") != "AWS::SSM::Parameter::Value<String>":
+                continue
+            assert param.get("Default") == expected, name
+        blob = json.dumps(template)
+        assert "resolve:ssm:" not in blob, name
+        assert "/cdk-bootstrap/hnb659fds/" not in blob, name
 
 
 def test_main_names_do_not_match_dev_patterns(main_a, main_b, main_seed) -> None:

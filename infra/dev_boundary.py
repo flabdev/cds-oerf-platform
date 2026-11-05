@@ -40,6 +40,7 @@ _MANAGED_POLICY_LIMIT = 6144
 # StringEqualsIfExists: a missing key still matches, and a different value
 # does not. StringEquals on the two APIs that send the key fails closed.
 _BOUNDARY_KEY = "iam:PermissionsBoundary"
+_DEV_BOOTSTRAP_QUALIFIER = "oerfdev"
 _ROLE_CREATE_ACTIONS = ["iam:CreateRole", "iam:PutRolePermissionsBoundary"]
 _ROLE_MUTATION_ACTIONS = [
     "iam:PutRolePolicy",
@@ -189,6 +190,11 @@ def execution_policy(account: str, region: str) -> dict[str, Any]:
             _allow("DevS3", "s3:*", "arn:aws:s3:::*-dev-*"),
             _allow("AssetRead", ["s3:Get*", "s3:List*"], _asset_bucket_arns(account, region)),
             _allow("MainTopic", _MAIN_TOPIC_ALLOWED, _main_topic(account, region)),
+            _allow(
+                "ReadDevBootstrapVersion",
+                ["ssm:GetParameter", "ssm:GetParameters"],
+                _bootstrap_ssm_parameter_arn(account, region),
+            ),
             _allow(
                 "Unscoped",
                 _EXEC_STAR_ACTIONS,
@@ -517,6 +523,7 @@ def _not_resources(account: str, region: str) -> list[str]:
         "arn:aws:bedrock:*:*:guardrail-profile/*",
         _arn("bedrock-agentcore", region, account, "workload-identity-directory/*"),
         _arn("social-messaging", region, account, "phone-number-id/*"),
+        _bootstrap_ssm_parameter_arn(account, region),
     ]
 
 
@@ -607,6 +614,19 @@ def _tag_denies() -> list[dict[str, Any]]:
 
 def _arn(service: str, region: str, account: str, resource: str) -> str:
     return f"arn:aws:{service}:{region}:{account}:{resource}"
+
+
+def bootstrap_ssm_parameter_arn(account: str, region: str) -> str:
+    """SSM ARN for ``/cdk-bootstrap/oerfdev/*``. CloudFormation reads ``version``."""
+
+    return _bootstrap_ssm_parameter_arn(account, region)
+
+
+def _bootstrap_ssm_parameter_arn(account: str, region: str) -> str:
+    return (
+        f"arn:aws:ssm:{region}:{account}:parameter/cdk-bootstrap/"
+        f"{_DEV_BOOTSTRAP_QUALIFIER}/*"
+    )
 
 
 def _exec_denies(account: str) -> list[dict[str, Any]]:

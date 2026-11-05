@@ -110,6 +110,37 @@ cdk bootstrap aws://906048429638/us-east-1 \
 
 After any later change to those policies, deploy `OerfCiStack-dev` again (section 2), then re-run this bootstrap, then the check. A failed dev application deploy rolls back that stack and does not change main.
 
+### First rollout and tag changes
+
+The first application deploy under the locked-down execution role needs a short transition. CloudFormation resolves each dev template’s `BootstrapVersion` parameter (`AWS::SSM::Parameter::Value<String>`, default `/cdk-bootstrap/oerfdev/version`) as **the execution role**, not the deploy role. `OerfDevCfnExecPolicy` allows `ssm:GetParameter` and `ssm:GetParameters` only on `arn:aws:ssm:<region>:<account>:parameter/cdk-bootstrap/oerfdev/*`. Redeploy `OerfCiStack-dev` after that policy change before relying on the steps below.
+
+1. **Re-bootstrap once with `AdministratorAccess`** on the execution role (section 2b command, but pass `arn:aws:iam::aws:policy/AdministratorAccess` and omit `--custom-permissions-boundary`). Deploy the four dev app stacks with every context value set: `whatsapp:phoneNumberId`, `whatsapp:sharedInboundTopicArn`, and `alarms:email` where you use alarms. This is the transition deploy that adds `PermissionsBoundary` and `oerf:stage=dev` on taggable resources.
+
+2. **Check the execution role boundary.** Re-bootstrap with the OERF policies may print `Removing existing permissions boundary` and still leave the old boundary on `cdk-oerfdev-cfn-exec-role-<account>-<region>`. Confirm with:
+
+```bash
+EXEC_ROLE=cdk-oerfdev-cfn-exec-role-906048429638-us-east-1
+aws iam get-role --profile Fission-OERF --role-name "$EXEC_ROLE" \
+  --query Role.PermissionsBoundary
+```
+
+If a boundary ARN is still present when you expect none (or the wrong one), clear it with laptop admin credentials:
+
+```bash
+aws iam delete-role-permissions-boundary --profile Fission-OERF --role-name "$EXEC_ROLE"
+```
+
+3. **Re-bootstrap with the OERF policies** (section 2b: both `OerfDevCfnExecPolicy` and `OerfDevCfnExecDenies`, plus `OerfDevWorkloadBoundary`). The bootstrap template attaches the boundary only when the role is created or updated through that stack; it does **not** always re-attach the boundary after a manual delete. Check again with `get-role`. If `PermissionsBoundary` is missing, attach it:
+
+```bash
+aws iam put-role-permissions-boundary --profile Fission-OERF --role-name "$EXEC_ROLE" \
+  --permissions-boundary arn:aws:iam::906048429638:policy/OerfDevWorkloadBoundary
+```
+
+4. **Verify change sets.** With the same context as section 3, `cdk diff -v` against the four dev stacks must create change sets without `ssm:GetParameters` (or similar) errors on `parameter/cdk-bootstrap/oerfdev/version`. Expect in-place updates only (`PermissionsBoundary`, tags); no replacements of roles, functions, or tables from this change alone.
+
+Changing tags on an existing dev API through API Gateway’s `/tags` path is denied after the OERF policies are in place; a tag-only update rolls that dev stack back and does not change main. Deleting `OerfApiStack-dev` does not delete its CloudFront origin access control; remove that control with laptop admin credentials if the stack delete leaves it behind.
+
 The check is read-only (`iam:SimulatePrincipalPolicy` and `iam:SimulateCustomPolicy` only). Run it after this re-bootstrap and again after the dev application deploy. It exits non-zero on any FAIL.
 
 The channel-router role ARN is the `Role` of `oerf-dev-channel-router`. The phone-number id is the SSM parameter below. The topic ARN is the main inbound topic from the start of this section. Do not paste the results into a ticket; the script prints PASS or FAIL only.
