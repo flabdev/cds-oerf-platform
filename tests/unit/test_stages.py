@@ -217,6 +217,7 @@ def test_main_and_dev_names_do_not_overlap_and_dev_skips_singletons(tmp_path: Pa
 
 
 _OIDC_ARN = "arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com"
+_DEV_GUARDRAIL = f"arn:aws:bedrock:{REGION}:000000000000:guardrail/b7nun5huxbii"
 _DEV_SUBJECTS = [
     "repo:flabdev/cds-oerf-platform:environment:dev",
     "repo:flabdev@25605151/cds-oerf-platform@1408373494:environment:dev",
@@ -279,6 +280,18 @@ def test_dev_ci_role_stack_is_opt_in(tmp_path: Path) -> None:
     assert missing.returncode != 0
     assert "github:oidcProviderArn" in (missing.stderr + missing.stdout)
 
+    missing_guardrail = _run(
+        tmp_path / "guardrail",
+        {
+            "account": ACCOUNT,
+            "stage": "dev",
+            "ci:deployRoleStack": "true",
+            "github:oidcProviderArn": _OIDC_ARN,
+        },
+    )
+    assert missing_guardrail.returncode != 0
+    assert "dev:guardrailArn" in (missing_guardrail.stderr + missing_guardrail.stdout)
+
     present = _run(
         tmp_path / "present",
         {
@@ -286,6 +299,7 @@ def test_dev_ci_role_stack_is_opt_in(tmp_path: Path) -> None:
             "stage": "dev",
             "ci:deployRoleStack": "true",
             "github:oidcProviderArn": _OIDC_ARN,
+            "dev:guardrailArn": _DEV_GUARDRAIL,
         },
     )
     assert present.returncode == 0, present.stderr or present.stdout
