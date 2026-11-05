@@ -170,6 +170,18 @@ def main_seed(tmp_path_factory: pytest.TempPathFactory) -> dict[str, dict]:
     return _run(tmp_path_factory.mktemp("main-seed"), _MAIN_SEED)
 
 
+def test_lambda_env_kms_encrypt_is_allowed_with_lambda_alias() -> None:
+    from infra.dev_boundary import intersection_allows
+
+    key = f"arn:aws:kms:{REGION}:{ACCOUNT}:key/c6e35e71-9663-43c8-af88-c21ee1b42b0a"
+    context = {
+        "kms:ResourceAliases": "alias/aws/lambda",
+        "kms:ViaService": f"lambda.{REGION}.amazonaws.com",
+    }
+    assert intersection_allows("kms:Encrypt", key, ACCOUNT, REGION, context)
+    assert not intersection_allows("kms:Encrypt", key, ACCOUNT, REGION, {})
+
+
 def test_bootstrap_ssm_version_is_allowed_and_main_qualifier_is_not() -> None:
     from infra.dev_boundary import boundary_permits, intersection_allows
 

@@ -65,6 +65,7 @@ _BROAD_MANAGED_POLICIES = [
 _SHARED_EVENTS_RULE = "StepFunctionsGetEventsForStepFunctionsExecutionRule"
 _MAIN_INBOUND_TOPIC_SUFFIX = "OerfComputeStack-InboundTopic*"
 _ASSET_KEY_ALIAS = "alias/cdk-oerfdev-assets-key"
+_LAMBDA_ENV_KEY_ALIAS = "alias/aws/lambda"
 
 # Resource "*" actions. The reason is the IAM or CloudFormation limitation.
 STAR_ACTION_REASONS: dict[str, str] = {
@@ -98,6 +99,9 @@ STAR_ACTION_REASONS: dict[str, str] = {
     ),
     "kms:DescribeKey": (
         "Asset-bucket key id is generated. The execution policy requires the oerfdev alias."
+    ),
+    "kms:Encrypt": (
+        "Lambda environment variables use the AWS/Lambda key; the key id is generated."
     ),
 }
 
@@ -201,6 +205,7 @@ def execution_policy(account: str, region: str) -> dict[str, Any]:
                 "*",
             ),
             _kms_allow(account, region),
+            _lambda_kms_allow(account, region),
             _allow(
                 "CreateDevRoleWithBoundary",
                 _ROLE_CREATE_ACTIONS,
@@ -811,6 +816,21 @@ def _kms_allow(account: str, region: str) -> dict[str, Any]:
         "Condition": {
             "ForAnyValue:StringEquals": {"kms:ResourceAliases": _ASSET_KEY_ALIAS},
             "StringEquals": {"kms:ViaService": f"s3.{region}.amazonaws.com"},
+        },
+    }
+
+
+def _lambda_kms_allow(account: str, region: str) -> dict[str, Any]:
+    """Encrypt Lambda environment variables with the account AWS/Lambda key."""
+
+    return {
+        "Sid": "EncryptLambdaEnvKey",
+        "Effect": "Allow",
+        "Action": ["kms:Encrypt", "kms:DescribeKey"],
+        "Resource": f"arn:aws:kms:{region}:{account}:key/*",
+        "Condition": {
+            "ForAnyValue:StringEquals": {"kms:ResourceAliases": _LAMBDA_ENV_KEY_ALIAS},
+            "StringEquals": {"kms:ViaService": f"lambda.{region}.amazonaws.com"},
         },
     }
 

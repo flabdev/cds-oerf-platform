@@ -933,11 +933,7 @@ def test_evidence_object_created_rule_is_tenant_scoped_and_targets_analyzer(
     assert props["EventPattern"]["detail-type"] == ["Object Created"]
     assert props["EventPattern"]["detail"]["bucket"]["name"]
     keys = props["EventPattern"]["detail"]["object"]["key"]
-    assert keys == [
-        {"wildcard": "tenants/*/inbound/*/*/*.jpg"},
-        {"wildcard": "tenants/*/inbound/*/*/*.png"},
-        {"wildcard": "tenants/*/inbound/*/*/*.webp"},
-    ]
+    assert keys == [{"wildcard": "tenants/*/inbound/*"}]
     assert len(props["Targets"]) == 1
     target_arn = props["Targets"][0]["Arn"]
     assert "EvidenceAnalyzerFunction" in json.dumps(target_arn)

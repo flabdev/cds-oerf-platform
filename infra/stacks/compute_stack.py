@@ -356,7 +356,8 @@ class OerfComputeStack(Stack):
             },
         )
         # EventBridge avoids an S3 bucket -> compute Lambda cross-stack reference.
-        # Only incident-scoped inbound images match; analyzer outputs go to DynamoDB.
+        # One wildcard keeps the rule under EventBridge complexity limits; the
+        # analyzer accepts only incident-scoped inbound jpg, png, and webp keys.
         data_stack.evidence_bucket.grant_read(self.evidence_analyzer_fn)
         evidence_rule = events.Rule(
             self,
@@ -366,13 +367,7 @@ class OerfComputeStack(Stack):
                 detail_type=["Object Created"],
                 detail={
                     "bucket": {"name": [data_stack.evidence_bucket.bucket_name]},
-                    "object": {
-                        "key": [
-                            {"wildcard": "tenants/*/inbound/*/*/*.jpg"},
-                            {"wildcard": "tenants/*/inbound/*/*/*.png"},
-                            {"wildcard": "tenants/*/inbound/*/*/*.webp"},
-                        ]
-                    },
+                    "object": {"key": [{"wildcard": "tenants/*/inbound/*"}]},
                 },
             ),
         )
