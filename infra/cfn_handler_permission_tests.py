@@ -11,19 +11,24 @@ Synthetic types ``AWS::CDK::Metadata`` and empty handler files are skipped.
 provider Lambda is checked via ``AWS::Lambda::Function``. Bedrock guardrail
 ``kms:*`` handler calls apply only when ``KmsKeyArn`` is set; the dev template
 omits it, so those actions are reported as not applicable rather than required
-allows.
+allows. Other skips use ``template_property_rules()`` plus delivery-graph checks,
+verified against synthesized dev templates when ``dev_templates`` is passed.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from infra.dev_boundary import intersection_allows, is_workload_permissions_boundary
+from infra.dev_boundary import (
+    _glob as iam_glob_match,
+    intersection_allows,
+    is_workload_permissions_boundary,
+)
 
 # Invoked via provider Lambda only; CFN has no handler policy for this type.
 CUSTOM_RESOURCE_CFN_TYPE = "AWS::CloudFormation::CustomResource"
@@ -165,6 +170,323 @@ def dev_iam_roles_all_have_permissions_boundary(
             ):
                 return False
     return True
+
+
+@dataclass(frozen=True)
+class TemplatePropertyRule:
+    """Skip handler actions when dev never sets a triggering property."""
+
+    cfn_type: str
+    action_pattern: str
+    property_label: str
+    predicate: Callable[[Iterable[dict[str, Any]]], bool]
+
+
+def _resources_of_type(
+    templates: Iterable[dict[str, Any]], cfn_type: str
+) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    for template in templates:
+        for resource in template.get("Resources", {}).values():
+            if resource.get("Type") == cfn_type:
+                found.append(resource)
+    return found
+
+
+def _props_nonempty(obj: Any) -> bool:
+    if obj is None:
+        return False
+    if isinstance(obj, list):
+        return len(obj) > 0
+    if isinstance(obj, dict):
+        return len(obj) > 0
+    return True
+
+
+def _any_cfn_resource_has_property(
+    templates: Iterable[dict[str, Any]], cfn_type: str, key: str
+) -> bool:
+    for res in _resources_of_type(templates, cfn_type):
+        props = (res.get("Properties") or {}) if isinstance(res, dict) else {}
+        if key in props and _props_nonempty(props.get(key)):
+            return True
+    return False
+
+
+def _iam_inline_policy_targets_users_or_groups(templates: Iterable[dict[str, Any]]) -> bool:
+    for cfn_type in ("AWS::IAM::Policy",):
+        for res in _resources_of_type(templates, cfn_type):
+            props = res.get("Properties") or {}
+            if _props_nonempty(props.get("Users")) or _props_nonempty(props.get("Groups")):
+                return True
+    return False
+
+
+def _skip_inline_user_group_policies(templates: Iterable[dict[str, Any]]) -> bool:
+    return not _iam_inline_policy_targets_users_or_groups(templates)
+
+
+def _skip_inline_policy_get_user(templates: Iterable[dict[str, Any]]) -> bool:
+    return not _any_cfn_resource_has_property(templates, "AWS::IAM::Policy", "Users")
+
+
+def _skip_inline_policy_get_group(templates: Iterable[dict[str, Any]]) -> bool:
+    return not _any_cfn_resource_has_property(templates, "AWS::IAM::Policy", "Groups")
+
+
+def _skip_managed_policy_attach_users(templates: Iterable[dict[str, Any]]) -> bool:
+    return not _any_cfn_resource_has_property(templates, "AWS::IAM::ManagedPolicy", "Users")
+
+
+def _skip_managed_policy_attach_groups(templates: Iterable[dict[str, Any]]) -> bool:
+    return not _any_cfn_resource_has_property(templates, "AWS::IAM::ManagedPolicy", "Groups")
+
+
+def _skip_lambda_vpc_efs_s3files(templates: Iterable[dict[str, Any]]) -> bool:
+    return not _lambda_has_vpc_or_filesystem(templates)
+
+
+def _skip_dynamo_kinesis_actions(templates: Iterable[dict[str, Any]]) -> bool:
+    return not _dynamo_has_kinesis_stream_spec(templates)
+
+
+def _skip_s3_metadata_table(templates: Iterable[dict[str, Any]]) -> bool:
+    return not _s3_metadata_table_enabled(templates)
+
+
+def _skip_agentcore_vpc_lattice(templates: Iterable[dict[str, Any]]) -> bool:
+    return not _agentcore_runtime_uses_private_network(templates)
+
+
+def _lambda_has_vpc_or_filesystem(templates: Iterable[dict[str, Any]]) -> bool:
+    for res in _resources_of_type(templates, "AWS::Lambda::Function"):
+        props = res.get("Properties") or {}
+        fn = props.get("Function") or props
+        if not isinstance(fn, dict):
+            continue
+        if "VpcConfig" in fn and _props_nonempty(fn.get("VpcConfig")):
+            return True
+        if "FileSystemConfigs" in fn and _props_nonempty(fn.get("FileSystemConfigs")):
+            return True
+    return False
+
+
+def _dynamo_has_kinesis_stream_spec(templates: Iterable[dict[str, Any]]) -> bool:
+    for res in _resources_of_type(templates, "AWS::DynamoDB::Table"):
+        props = res.get("Properties") or {}
+        if "KinesisStreamSpecification" in props and _props_nonempty(
+            props.get("KinesisStreamSpecification")
+        ):
+            return True
+    return False
+
+
+def _s3_metadata_table_enabled(templates: Iterable[dict[str, Any]]) -> bool:
+    for res in _resources_of_type(templates, "AWS::S3::Bucket"):
+        props = res.get("Properties") or {}
+        if "MetadataTableConfiguration" in props and _props_nonempty(
+            props.get("MetadataTableConfiguration")
+        ):
+            return True
+    return False
+
+
+def _logs_delivery_source_resource_arns(templates: Iterable[dict[str, Any]]) -> set[str]:
+    """First two segments ``arn:aws:svc`` for each DeliverySource ResourceArn."""
+
+    prefixes: set[str] = set()
+    for res in _resources_of_type(templates, "AWS::Logs::DeliverySource"):
+        props = res.get("Properties") or {}
+        arn = props.get("ResourceArn") or props.get("Arn")
+        if isinstance(arn, str) and arn.startswith("arn:aws:"):
+            parts = arn.split(":", 3)
+            if len(parts) >= 3:
+                prefixes.add(f"{parts[0]}:{parts[1]}:{parts[2]}")
+    return prefixes
+
+
+def _dev_includes_logs_delivery_graph(templates: Iterable[dict[str, Any]]) -> bool:
+    for template in templates:
+        for body in template.get("Resources", {}).values():
+            if isinstance(body, dict) and body.get("Type") == "AWS::Logs::Delivery":
+                return True
+    return False
+
+
+def _agentcore_runtime_uses_private_network(templates: Iterable[dict[str, Any]]) -> bool:
+    for res in _resources_of_type(templates, "AWS::BedrockAgentCore::Runtime"):
+        props = res.get("Properties") or {}
+        net = props.get("NetworkConfiguration") or props.get("networkConfiguration")
+        if not isinstance(net, dict):
+            continue
+        if "VpcVPCId" in net or "vpcVPCId" in net:
+            return True
+        for key in ("Vpc", "vpc", "SubnetIds", "subnetIds", "SecurityGroupIds"):
+            if key in net and _props_nonempty(net.get(key)):
+                return True
+    return False
+
+
+def template_property_rules() -> tuple[TemplatePropertyRule, ...]:
+    """Rules evaluated in order; first match wins."""
+
+    return (
+        TemplatePropertyRule(
+            "AWS::IAM::Policy",
+            "iam:*UserPolicy*",
+            "Users (and Groups on the same type)",
+            _skip_inline_user_group_policies,
+        ),
+        TemplatePropertyRule(
+            "AWS::IAM::Policy",
+            "iam:*GroupPolicy*",
+            "Groups (and Users on the same type)",
+            _skip_inline_user_group_policies,
+        ),
+        TemplatePropertyRule(
+            "AWS::IAM::Policy",
+            "iam:GetUserPolicy",
+            "Users",
+            _skip_inline_policy_get_user,
+        ),
+        TemplatePropertyRule(
+            "AWS::IAM::Policy",
+            "iam:GetGroupPolicy",
+            "Groups",
+            _skip_inline_policy_get_group,
+        ),
+        TemplatePropertyRule(
+            "AWS::IAM::ManagedPolicy",
+            "iam:AttachUserPolicy",
+            "Users",
+            _skip_managed_policy_attach_users,
+        ),
+        TemplatePropertyRule(
+            "AWS::IAM::ManagedPolicy",
+            "iam:DetachUserPolicy",
+            "Users",
+            _skip_managed_policy_attach_users,
+        ),
+        TemplatePropertyRule(
+            "AWS::IAM::ManagedPolicy",
+            "iam:AttachGroupPolicy",
+            "Groups",
+            _skip_managed_policy_attach_groups,
+        ),
+        TemplatePropertyRule(
+            "AWS::IAM::ManagedPolicy",
+            "iam:DetachGroupPolicy",
+            "Groups",
+            _skip_managed_policy_attach_groups,
+        ),
+        TemplatePropertyRule(
+            "AWS::Lambda::Function",
+            "ec2:*",
+            "VpcConfig / FileSystemConfigs",
+            _skip_lambda_vpc_efs_s3files,
+        ),
+        TemplatePropertyRule(
+            "AWS::Lambda::Function",
+            "elasticfilesystem:*",
+            "FileSystemConfigs",
+            _skip_lambda_vpc_efs_s3files,
+        ),
+        TemplatePropertyRule(
+            "AWS::Lambda::Function",
+            "s3files:*",
+            "FileSystemConfigs",
+            _skip_lambda_vpc_efs_s3files,
+        ),
+        TemplatePropertyRule(
+            "AWS::DynamoDB::Table",
+            "kinesis:*",
+            "KinesisStreamSpecification",
+            _skip_dynamo_kinesis_actions,
+        ),
+        TemplatePropertyRule(
+            "AWS::S3::Bucket",
+            "s3tables:*",
+            "MetadataTableConfiguration",
+            _skip_s3_metadata_table,
+        ),
+        TemplatePropertyRule(
+            "AWS::BedrockAgentCore::Runtime",
+            "vpc-lattice:*",
+            "NetworkConfiguration (private/VPC)",
+            _skip_agentcore_vpc_lattice,
+        ),
+        TemplatePropertyRule(
+            "AWS::BedrockAgentCore::Runtime",
+            "ec2:CreateNetworkInterface",
+            "NetworkConfiguration (private/VPC)",
+            _skip_agentcore_vpc_lattice,
+        ),
+    )
+
+
+def _vended_log_skip_for_action(
+    action: str,
+    *,
+    templates: Iterable[dict[str, Any]],
+) -> str | None:
+    service = action.split(":", 1)[0]
+    if service not in ("autoloop", "codewhisperer", "workmail", "logs"):
+        return None
+    if action == "logs:AllowVendedLogDeliveryForResource":
+        prefixes = _logs_delivery_source_resource_arns(templates)
+        if "arn:aws:logs" in prefixes:
+            return None
+        return "not applicable: no DeliverySource with ResourceArn to logs"
+    if action.endswith("AllowVendedLogDeliveryForResource") and service in (
+        "autoloop",
+        "codewhisperer",
+        "workmail",
+    ):
+        prefixes = _logs_delivery_source_resource_arns(templates)
+        want = f"arn:aws:{service}"
+        if want in prefixes:
+            return None
+        return f"not applicable: DeliverySource ResourceArn types do not include {service}"
+    return None
+
+
+def _logs_firehose_skip(action: str, templates: Iterable[dict[str, Any]]) -> str | None:
+    if not action.startswith("firehose:"):
+        return None
+    if _dev_includes_logs_delivery_graph(templates):
+        return None
+    return "not applicable: no Logs::Delivery graph referencing DeliverySource/Destination"
+
+
+def template_property_skip_reason(
+    cfn_type: str,
+    action: str,
+    templates: Iterable[dict[str, Any]] | None,
+) -> str | None:
+    """N/A when every rule predicate is true for this (type, action); else None or raises."""
+
+    if templates is None:
+        return None
+
+    vended = _vended_log_skip_for_action(action, templates=templates)
+    if vended is not None:
+        return vended
+    fh = _logs_firehose_skip(action, templates)
+    if fh is not None:
+        return fh
+
+    for rule in template_property_rules():
+        if rule.cfn_type != cfn_type:
+            continue
+        if not iam_glob_match(rule.action_pattern, action):
+            continue
+        if not rule.predicate(templates):
+            raise ValueError(
+                f"{cfn_type} {action}: dev template sets {rule.property_label}; "
+                "remove the skip or extend dev execution allows"
+            )
+        return f"not applicable: {rule.property_label} absent on every dev resource"
+    return None
 
 
 def _bedrock_kms_skipped_reason(
@@ -564,6 +886,16 @@ def check_handler_permissions(
                 skipped.append((cfn_type, action, iam_na))
                 continue
 
+            tpl_na: str | None = None
+            try:
+                tpl_na = template_property_skip_reason(cfn_type, action, dev_templates)
+            except ValueError as exc:
+                failures.append(f"{cfn_type} {action} {resource} ({exc})")
+                continue
+            if tpl_na is not None:
+                skipped.append((cfn_type, action, tpl_na))
+                continue
+
             if not intersection_allows(
                 action,
                 resource,
@@ -633,6 +965,15 @@ def handler_permission_checks(
                 continue
             if iam_na is not None:
                 skipped.append((cfn_type, action, iam_na))
+                continue
+
+            try:
+                tpl_na = template_property_skip_reason(cfn_type, action, dev_templates)
+            except ValueError as exc:
+                skipped.append((cfn_type, action, f"CHECK ERROR: {exc}"))
+                continue
+            if tpl_na is not None:
+                skipped.append((cfn_type, action, tpl_na))
                 continue
 
             expect_allow = intersection_allows(

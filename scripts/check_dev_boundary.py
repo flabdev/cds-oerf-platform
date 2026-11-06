@@ -327,6 +327,9 @@ FENCE_CHECKS: list[tuple[str, str, bool]] = [
         False,
     ),
     ("cognito-idp:TagResource", "{user_pool_arn}", False),
+    ("iam:PutUserPolicy", "arn:aws:iam::{account}:user/oerf-dev-check", False),
+    ("iam:AttachGroupPolicy", "arn:aws:iam::{account}:group/oerf-dev-check", False),
+    ("ec2:CreateNetworkInterface", "*", False),
 ]
 
 # action, resource template, expect allowed by the caller role and the boundary.

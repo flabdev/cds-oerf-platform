@@ -92,34 +92,18 @@ STAR_ACTION_REASONS: list[str] = [
     "kms:Decrypt",
     "kms:DescribeKey",
     "kms:Encrypt",
-    "firehose:TagDeliveryStream",
     "kinesis:*",
-    "vpc-lattice:*",
-    "s3tables:*",
+    "firehose:TagDeliveryStream",
     "bedrock:CreateGuardrail",
     "ec2:Describe*",
-    "ec2:CreateNetworkInterface",
-    "elasticfilesystem:DescribeMountTargets",
-    "s3files:ListMountTargets",
     "iam:ListRoles",
-    "iam:*UserPolicy",
-    "iam:*GroupPolicy",
     "bedrock:ListTagsForResource",
 ]
 
 _OUTSIDE_DEV_NOT_ACTION_EXTRA: tuple[str, ...] = (
     "kms:*",
-    "ec2:Describe*",
-    "ec2:CreateNetworkInterface",
-    "elasticfilesystem:DescribeMountTargets",
-    "s3files:ListMountTargets",
     "iam:CreateServiceLinkedRole",
     "iam:ListRoles",
-    "iam:*UserPolicy",
-    "iam:*GroupPolicy",
-    "codewhisperer:AllowVendedLogDeliveryForResource",
-    "autoloop:AllowVendedLogDeliveryForResource",
-    "workmail:AllowVendedLogDeliveryForResource",
 )
 
 # Granted to the execution role on "*". Workload-only star actions stay off
@@ -135,20 +119,7 @@ _EXEC_STAR_ACTIONS = [
     "logs:*LogDeliver*",
     "logs:*ResourcePolic*",
     "logs:DescribeLogGroups",
-    "firehose:TagDeliveryStream",
-    "kinesis:*",
-    "vpc-lattice:*",
-    "autoloop:AllowVendedLogDeliveryForResource",
-    "codewhisperer:AllowVendedLogDeliveryForResource",
-    "workmail:AllowVendedLogDeliveryForResource",
-    "s3tables:*",
-    "ec2:Describe*",
-    "ec2:CreateNetworkInterface",
-    "elasticfilesystem:DescribeMountTargets",
-    "s3files:ListMountTargets",
     "iam:ListRoles",
-    "iam:*UserPolicy",
-    "iam:*GroupPolicy",
     "bedrock:CreateGuardrail",
     "bedrock:CreateGuardrailVersion",
     "bedrock:DeleteGuardrail",
@@ -160,11 +131,80 @@ _EXEC_STAR_ACTIONS = [
     "bedrock:UpdateGuardrail",
 ]
 
+# One line per ``_EXEC_STAR_ACTIONS`` entry (Resource ``*``); keep in sync with U.
+_EXEC_STAR_REASONS: dict[str, str] = {
+    "apigateway:*": "REST control plane has no stage-scoped ARN until create returns an id",
+    "apigatewayv2:*": "HTTP/WebSocket control plane tags are separate; create has no id yet",
+    "cloudfront:*": "Tag-unfriendly reads and OAC lifecycle; fenced elsewhere where needed",
+    "cloudwatch:DescribeAlarms": "Describe has no resource-scoped denial matching dev names",
+    "cognito-idp:*": "User pool CRUD is not expressible as a single dev ARN pattern in NotResource",
+    "ecr:GetAuthorizationToken": "ECR auth has no resource ARN",
+    "lambda:*EventSourceMapping*": (
+        "Event source mapping ARNs are not folded into dev name patterns"
+    ),
+    "logs:*LogDeliver*": "Cross-service log delivery control plane uses unscopeable ARNs",
+    "logs:*ResourcePolic*": "Account-wide logs resource policies are not dev-name scoped",
+    "logs:DescribeLogGroups": "Describe matches names outside strict dev ARN forms",
+    "iam:ListRoles": "ListRoles is account-level; used by IAM::Role handler list operation",
+    "bedrock:CreateGuardrail": "Create authorizes on guardrail-profile; new guardrail id unknown",
+    "bedrock:CreateGuardrailVersion": "Version create follows same unscoped pattern as create",
+    "bedrock:DeleteGuardrail": "Service lists guardrail APIs as authorizing on resource *",
+    "bedrock:GetGuardrail": "Same as delete for read path on handler",
+    "bedrock:ListGuardrails": "List is account-wide in the service model",
+    "bedrock:ListTagsForResource": "Handler list-tags path per resource",
+    "bedrock:TagResource": "Tagging dev guardrail after create",
+    "bedrock:UntagResource": "Untag on dev guardrail",
+    "bedrock:UpdateGuardrail": "Update on dev guardrail",
+}
+
 
 def exec_policy_star_resource_actions() -> list[str]:
     """Actions OerfDevCfnExecPolicy allows on ``Resource`` ``*`` (statement ``U``)."""
 
     return list(_EXEC_STAR_ACTIONS)
+
+
+def exec_policy_star_action_reasons() -> list[tuple[str, str]]:
+    """(action pattern, rationale) pairs for statement ``U`` allows on ``*``."""
+
+    out: list[tuple[str, str]] = []
+    for action in _EXEC_STAR_ACTIONS:
+        reason = _EXEC_STAR_REASONS.get(action)
+        if reason is None:
+            raise ValueError(f"add _EXEC_STAR_REASONS entry for {action!r}")
+        out.append((action, reason))
+    return out
+
+
+# Additional execution allows on ``*`` (separate Sids from statement ``U``).
+_EXEC_STAR_RESOURCE_EXTRA: tuple[tuple[str, str, str], ...] = (
+    (
+        "EC2D",
+        "ec2:Describe*",
+        (
+            "Lambda and AgentCore handlers describe VPCs/subnets/security groups "
+            "without a single dev ARN"
+        ),
+    ),
+    (
+        "KFH",
+        "kinesis:*",
+        "DynamoDB table Kinesis streaming destination uses a dev-named stream ARN",
+    ),
+    (
+        "KFH",
+        "firehose:TagDeliveryStream",
+        "CloudWatch Logs subscription delivery may tag a dev-named Firehose delivery stream",
+    ),
+)
+
+
+def exec_policy_resource_star_rows() -> list[tuple[str, str, str]]:
+    """(statement Sid, action pattern, rationale) for every Allow on Resource ``*``."""
+
+    rows = [("U", action, reason) for action, reason in exec_policy_star_action_reasons()]
+    rows.extend(_EXEC_STAR_RESOURCE_EXTRA)
+    return rows
 
 
 # Excluded from the name deny. The guardrail ARN deny fences these except
@@ -296,6 +336,19 @@ def execution_policy(account: str, region: str, guardrail_arn: str) -> dict[str,
                 "U",
                 _EXEC_STAR_ACTIONS,
                 "*",
+            ),
+            _allow(
+                "EC2D",
+                "ec2:Describe*",
+                "*",
+            ),
+            _allow(
+                "KFH",
+                ["kinesis:*", "firehose:TagDeliveryStream"],
+                [
+                    f"arn:aws:kinesis:*:{account}:*-dev-*",
+                    f"arn:aws:firehose:*:{account}:deliverystream/*-dev-*",
+                ],
             ),
             _kms_allow(account, region),
             _kms_via_service_allow(account, region),
@@ -859,11 +912,21 @@ def _boundary_denies(account: str) -> list[dict[str, Any]]:
             "Sid": "NU",
             "Effect": "Deny",
             "Action": [
+                "iam:AddUserToGroup",
+                "iam:AttachGroupPolicy",
+                "iam:AttachUserPolicy",
                 "iam:CreateAccessKey",
                 "iam:CreateLoginProfile",
                 "iam:CreateUser",
+                "iam:DeleteGroupPolicy",
                 "iam:DeleteRolePermissionsBoundary",
                 "iam:DeleteUserPermissionsBoundary",
+                "iam:DeleteUserPolicy",
+                "iam:DetachGroupPolicy",
+                "iam:DetachUserPolicy",
+                "iam:PutGroupPolicy",
+                "iam:PutUserPolicy",
+                "iam:RemoveUserFromGroup",
             ],
             "Resource": "*",
         },

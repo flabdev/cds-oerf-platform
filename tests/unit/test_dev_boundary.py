@@ -242,9 +242,31 @@ def test_short_wildcards_cover_the_same_star_actions() -> None:
 def test_policy_documents_fit_the_managed_policy_quota() -> None:
     from infra.dev_boundary import boundary_policy, execution_deny_policy, execution_policy
 
-    assert nonwhitespace_size(execution_policy(ACCOUNT, REGION, DEV_GUARDRAIL)) <= 6144
-    assert nonwhitespace_size(execution_deny_policy(ACCOUNT, DEV_GUARDRAIL)) <= 6144
-    assert nonwhitespace_size(boundary_policy(ACCOUNT, REGION, DEV_GUARDRAIL)) <= 6144
+    exec_doc = execution_policy(ACCOUNT, REGION, DEV_GUARDRAIL)
+    deny_doc = execution_deny_policy(ACCOUNT, DEV_GUARDRAIL)
+    boundary_doc = boundary_policy(ACCOUNT, REGION, DEV_GUARDRAIL)
+    exec_size = nonwhitespace_size(exec_doc)
+    deny_size = nonwhitespace_size(deny_doc)
+    boundary_size = nonwhitespace_size(boundary_doc)
+    assert exec_size <= 6144
+    assert deny_size <= 6144
+    assert boundary_size <= 6144
+    slack = 6144 - boundary_size
+    assert slack >= 34, f"OerfDevWorkloadBoundary slack below 34 chars: {slack}"
+
+
+def test_exec_policy_resource_star_rows_cover_u_ec2d_kfh() -> None:
+    from infra.dev_boundary import exec_policy_resource_star_rows, exec_policy_star_resource_actions
+
+    rows = exec_policy_resource_star_rows()
+    u_actions = {action for sid, action, _ in rows if sid == "U"}
+    assert u_actions == set(exec_policy_star_resource_actions())
+    assert any(
+        sid == "EC2D" and action == "ec2:Describe*" for sid, action, _ in rows
+    )
+    kfh = {(sid, action) for sid, action, _ in rows if sid == "KFH"}
+    assert ("KFH", "kinesis:*") in kfh
+    assert ("KFH", "firehose:TagDeliveryStream") in kfh
 
 
 def test_every_dev_role_has_the_workload_boundary(dev_off, dev_on, dev_min) -> None:
