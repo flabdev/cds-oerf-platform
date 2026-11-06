@@ -160,6 +160,13 @@ _EXEC_STAR_ACTIONS = [
     "bedrock:UpdateGuardrail",
 ]
 
+
+def exec_policy_star_resource_actions() -> list[str]:
+    """Actions OerfDevCfnExecPolicy allows on ``Resource`` ``*`` (statement ``U``)."""
+
+    return list(_EXEC_STAR_ACTIONS)
+
+
 # Excluded from the name deny. The guardrail ARN deny fences these except
 # CreateGuardrail, which stays on aws:RequestTag. ApplyGuardrail is
 # workload-only, so it is not in the execution allow.
@@ -238,6 +245,31 @@ def policy_arn(account: str, name: str) -> str:
     return f"arn:aws:iam::{account}:policy/{name}"
 
 
+def workload_permissions_boundary_import(account: str) -> dict[str, Any]:
+    """CDK shape for ``PermissionsBoundary`` on roles (partition token)."""
+
+    return {
+        "Fn::Join": [
+            "",
+            [
+                "arn:",
+                {"Ref": "AWS::Partition"},
+                f":iam::{account}:policy/{BOUNDARY_POLICY_NAME}",
+            ],
+        ]
+    }
+
+
+def is_workload_permissions_boundary(value: object, account: str) -> bool:
+    """True if ``value`` is the imported OerfDevWorkloadBoundary reference."""
+
+    if value == policy_arn(account, BOUNDARY_POLICY_NAME):
+        return True
+    if isinstance(value, dict) and value == workload_permissions_boundary_import(account):
+        return True
+    return False
+
+
 def nonwhitespace_size(document: dict[str, Any]) -> int:
     """IAM managed-policy quota is 6,144 characters excluding whitespace."""
 
@@ -284,7 +316,6 @@ def execution_policy(account: str, region: str, guardrail_arn: str) -> dict[str,
                 "DRR",
                 [
                     "iam:DeleteRole",
-                    "iam:DeleteRolePermissionsBoundary",
                     "iam:DeleteRolePolicy",
                     "iam:DetachRolePolicy",
                     "iam:GetRole",
@@ -831,6 +862,7 @@ def _boundary_denies(account: str) -> list[dict[str, Any]]:
                 "iam:CreateAccessKey",
                 "iam:CreateLoginProfile",
                 "iam:CreateUser",
+                "iam:DeleteRolePermissionsBoundary",
                 "iam:DeleteUserPermissionsBoundary",
             ],
             "Resource": "*",
@@ -867,7 +899,6 @@ def _boundary_denies(account: str) -> list[dict[str, Any]]:
                     [
                         *_ROLE_MUTATIONS,
                         "iam:DeleteRole",
-                        "iam:DeleteRolePermissionsBoundary",
                         "iam:DeleteRolePolicy",
                         "iam:DetachRolePolicy",
                         "iam:PassRole",

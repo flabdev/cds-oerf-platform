@@ -24,6 +24,7 @@ from infra.dev_boundary import (
     apply_to_stack,
     bootstrap_ssm_parameter_arn,
     dev_name_patterns,
+    is_workload_permissions_boundary,
     nonwhitespace_size,
     runtime_violations,
 )
@@ -57,7 +58,6 @@ _CI_CONTEXT = {
     "dev:guardrailArn": DEV_GUARDRAIL,
 }
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BOUNDARY_ARN = f"arn:aws:iam::{ACCOUNT}:policy/{BOUNDARY_POLICY_NAME}"
 PHONE = "phone-number-id-0000000000"
 TOPIC = f"arn:aws:sns:{REGION}:{ACCOUNT}:OerfComputeStack-InboundTopic89167089-AbCd"
 _FORBIDDEN_MANAGED = ("AdministratorAccess", "PowerUserAccess", "IAMFullAccess")
@@ -633,17 +633,7 @@ def _check_values() -> dict[str, str]:
 def _is_boundary_arn(value: object) -> bool:
     """CDK renders an imported policy ARN with the partition token."""
 
-    expected = {
-        "Fn::Join": [
-            "",
-            [
-                "arn:",
-                {"Ref": "AWS::Partition"},
-                f":iam::{ACCOUNT}:policy/{BOUNDARY_POLICY_NAME}",
-            ],
-        ]
-    }
-    return value == BOUNDARY_ARN or value == expected
+    return is_workload_permissions_boundary(value, ACCOUNT)
 
 
 def _app_template_is_narrow(template: dict) -> bool:

@@ -16,6 +16,7 @@ from infra.cfn_handler_permission_tests import (
     load_handler_files,
     type_to_filename,
 )
+from infra.dev_boundary import apply_to_stack
 from infra.naming import Stage
 from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
@@ -109,7 +110,29 @@ def test_dev_policies_allow_all_handler_permissions() -> None:
     stage = Stage("dev")
     data = OerfDataStack(app, "OerfDataStack", stage=stage, env=env)
     compute = OerfComputeStack(app, "OerfComputeStack", data_stack=data, stage=stage, env=env)
+    api = OerfApiStack(
+        app,
+        "OerfApiStack",
+        data_stack=data,
+        inbound_queue=compute.inbound_queue,
+        websocket_url=compute.ws_stage.url,
+        stage=stage,
+        env=env,
+    )
+    obs = OerfObservabilityStack(
+        app,
+        "OerfObservabilityStack",
+        functions=lambda_functions(data, compute, api),
+        dead_letter_queues=[compute.inbound_dlq, compute.ingest_dlq, compute.stream_dlq],
+        state_machines=[data.cold_chain_state_machine, data.engage_party_state_machine],
+        channel_router_log_group=compute.channel_router_fn.log_group,
+        stage=stage,
+        env=env,
+    )
+    for stack in (data, compute, api, obs):
+        apply_to_stack(stack)
     compute_template = Template.from_stack(compute).to_json()
+    dev_templates = [Template.from_stack(s).to_json() for s in (data, compute, api, obs)]
     assert not bedrock_guardrail_has_kms_key_arn(compute_template), (
         "Dev guardrail must omit KmsKeyArn so customer-key KMS handler calls stay N/A"
     )
@@ -119,11 +142,17 @@ def test_dev_policies_allow_all_handler_permissions() -> None:
         region=REGION,
         guardrail_arn=DEV_GUARDRAIL,
         kms_key_arn_set=bedrock_guardrail_has_kms_key_arn(compute_template),
+        dev_templates=dev_templates,
     )
     assert result.failures == [], "Handler permission gaps:\n" + "\n".join(result.failures)
     assert any(
-        line.startswith(CUSTOM_RESOURCE_CFN_TYPE) for line in result.skipped
+        item[0] == CUSTOM_RESOURCE_CFN_TYPE for item in result.skipped
     ), "expected CustomResource listed as not checked"
     assert any(
-        "not applicable: KmsKeyArn unset" in line for line in result.skipped
+        row[2] == "not applicable: KmsKeyArn unset" for row in result.skipped
     ), "expected Bedrock handler kms:* skipped when KmsKeyArn is omitted"
+    assert (
+        "AWS::IAM::Role",
+        "iam:DeleteRolePermissionsBoundary",
+        "not applicable: every dev role sets PermissionsBoundary",
+    ) in result.skipped

@@ -109,7 +109,7 @@ EXEC_CHECKS: list[tuple[str, str, bool, bool]] = [
     (
         "iam:DeleteRolePermissionsBoundary",
         "arn:aws:iam::{account}:role/OerfDataStack-dev-Example",
-        True,
+        False,
         False,
     ),
     (
@@ -522,13 +522,16 @@ def _run_handler_permissions(client: Any, args: argparse.Namespace) -> int:
         guardrail_arn=args.dev_guardrail_arn,
         handler_dir=handler_dir,
         kms_key_arn_set=kms_key_arn_set,
+        dev_templates=None,
     )
     print(
         f"handler-permissions from {handler_dir} ({len(rows)} simulations, "
         f"{len(handler_skipped)} skipped)"
     )
-    for line in handler_skipped:
-        print(f"SKIP {line}")
+    for cfn_type, action, reason in sorted(
+        handler_skipped, key=lambda t: (t[0], t[1], t[2])
+    ):
+        print(f"SKIP {cfn_type} {action} {reason}")
     for cfn_type, action, resource, expect_allow, context in rows:
         resource_sim = attach_compatible_resource_arn(
             resource, args.account, args.region

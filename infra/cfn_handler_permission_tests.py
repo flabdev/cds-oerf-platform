@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from infra.dev_boundary import intersection_allows
+from infra.dev_boundary import intersection_allows, is_workload_permissions_boundary
 
 # Invoked via provider Lambda only; CFN has no handler policy for this type.
 CUSTOM_RESOURCE_CFN_TYPE = "AWS::CloudFormation::CustomResource"
@@ -150,6 +150,23 @@ def bedrock_guardrail_has_kms_key_arn(template: dict[str, Any]) -> bool:
     return False
 
 
+def dev_iam_roles_all_have_permissions_boundary(
+    templates: Iterable[dict[str, Any]], *, account: str
+) -> bool:
+    """True when every ``AWS::IAM::Role`` has the workload boundary reference."""
+
+    for template in templates:
+        for resource in template.get("Resources", {}).values():
+            if resource.get("Type") != "AWS::IAM::Role":
+                continue
+            props = resource.get("Properties") or {}
+            if not is_workload_permissions_boundary(
+                props.get("PermissionsBoundary"), account
+            ):
+                return False
+    return True
+
+
 def _bedrock_kms_skipped_reason(
     cfn_type: str, action: str, *, kms_key_arn_set: bool
 ) -> str | None:
@@ -164,12 +181,36 @@ def _bedrock_kms_skipped_reason(
     return "not applicable: KmsKeyArn unset"
 
 
+def _iam_role_delete_boundary_skipped_reason(
+    cfn_type: str,
+    action: str,
+    *,
+    dev_templates: Iterable[dict[str, Any]] | None,
+    account: str,
+) -> str | None:
+    """Handlers may call delete-boundary on update; dev roles always keep the boundary."""
+
+    if (
+        cfn_type != "AWS::IAM::Role"
+        or action != "iam:DeleteRolePermissionsBoundary"
+    ):
+        return None
+    if dev_templates is None:
+        return None
+    if not dev_iam_roles_all_have_permissions_boundary(dev_templates, account=account):
+        raise ValueError(
+            "dev IAM roles must all set PermissionsBoundary before skipping "
+            "iam:DeleteRolePermissionsBoundary for AWS::IAM::Role"
+        )
+    return "not applicable: every dev role sets PermissionsBoundary"
+
+
 @dataclass
 class HandlerPermissionResult:
     """Credential-free handler check outcome."""
 
     failures: list[str] = field(default_factory=list)
-    skipped: list[str] = field(default_factory=list)
+    skipped: list[tuple[str, str, str]] = field(default_factory=list)
 
 
 def default_probe_values(
@@ -459,7 +500,6 @@ _ROLE_MUTATIONS_EXCLUDING_CREATE = frozenset(
         "iam:AttachRolePolicy",
         "iam:UpdateAssumeRolePolicy",
         "iam:TagRole",
-        "iam:DeleteRolePermissionsBoundary",
     }
 )
 
@@ -472,6 +512,7 @@ def check_handler_permissions(
     types: Iterable[str] | None = None,
     handler_dir: Path | None = None,
     kms_key_arn_set: bool = False,
+    dev_templates: Iterable[dict[str, Any]] | None = None,
 ) -> HandlerPermissionResult:
     """Check each applicable handler action; return failures and skipped rows."""
 
@@ -480,12 +521,12 @@ def check_handler_permissions(
     load_types = frozenset(types) if types is not None else _DEV_APP_TEMPLATE_TYPES
     documents = load_handler_files(directory, types=load_types)
     failures: list[str] = []
-    skipped: list[str] = []
+    skipped: list[tuple[str, str, str]] = []
 
     for cfn_type in sorted(load_types):
         path = directory / type_to_filename(cfn_type)
         if cfn_type == CUSTOM_RESOURCE_CFN_TYPE:
-            skipped.append(f"{cfn_type} {_CUSTOM_RESOURCE_SKIP}")
+            skipped.append((cfn_type, "*", _CUSTOM_RESOURCE_SKIP))
             continue
         if not path.exists():
             failures.append(f"{cfn_type} <missing JSON {path.name}>")
@@ -501,7 +542,7 @@ def check_handler_permissions(
                 cfn_type, action, kms_key_arn_set=kms_key_arn_set
             )
             if na_reason is not None:
-                skipped.append(f"{cfn_type} {action} {na_reason}")
+                skipped.append((cfn_type, action, na_reason))
                 continue
 
             probe_values = dict(values)
@@ -509,6 +550,19 @@ def check_handler_permissions(
             context = _boundary_context_for_probe(
                 action, resource, probe_values, cfn_type=cfn_type
             )
+            try:
+                iam_na = _iam_role_delete_boundary_skipped_reason(
+                    cfn_type,
+                    action,
+                    dev_templates=dev_templates,
+                    account=account,
+                )
+            except ValueError as exc:
+                failures.append(f"{cfn_type} {action} {resource} ({exc})")
+                continue
+            if iam_na is not None:
+                skipped.append((cfn_type, action, iam_na))
+                continue
 
             if not intersection_allows(
                 action,
@@ -531,9 +585,10 @@ def handler_permission_checks(
     types: Iterable[str] | None = None,
     handler_dir: Path | None = None,
     kms_key_arn_set: bool = False,
+    dev_templates: Iterable[dict[str, Any]] | None = None,
 ) -> tuple[
     list[tuple[str, str, str, bool, dict[str, str]]],
-    list[str],
+    list[tuple[str, str, str]],
 ]:
     """Rows for IAM simulation: (cfn_type, action, resource, expect_allow, context)."""
 
@@ -542,12 +597,12 @@ def handler_permission_checks(
     load_types = frozenset(types) if types is not None else _DEV_APP_TEMPLATE_TYPES
     documents = load_handler_files(directory, types=load_types)
     rows: list[tuple[str, str, str, bool, dict[str, str]]] = []
-    skipped: list[str] = []
+    skipped: list[tuple[str, str, str]] = []
 
     for cfn_type in sorted(load_types):
         path = directory / type_to_filename(cfn_type)
         if cfn_type == CUSTOM_RESOURCE_CFN_TYPE:
-            skipped.append(f"{cfn_type} {_CUSTOM_RESOURCE_SKIP}")
+            skipped.append((cfn_type, "*", _CUSTOM_RESOURCE_SKIP))
             continue
         if not path.exists() or path.stat().st_size == 0:
             continue
@@ -558,7 +613,7 @@ def handler_permission_checks(
                 cfn_type, action, kms_key_arn_set=kms_key_arn_set
             )
             if na_reason is not None:
-                skipped.append(f"{cfn_type} {action} {na_reason}")
+                skipped.append((cfn_type, action, na_reason))
                 continue
 
             probe_values = dict(values)
@@ -566,7 +621,29 @@ def handler_permission_checks(
             context = _boundary_context_for_probe(
                 action, resource, probe_values, cfn_type=cfn_type
             )
-            rows.append((cfn_type, action, resource, True, context))
+            try:
+                iam_na = _iam_role_delete_boundary_skipped_reason(
+                    cfn_type,
+                    action,
+                    dev_templates=dev_templates,
+                    account=account,
+                )
+            except ValueError as exc:
+                skipped.append((cfn_type, action, f"CHECK ERROR: {exc}"))
+                continue
+            if iam_na is not None:
+                skipped.append((cfn_type, action, iam_na))
+                continue
+
+            expect_allow = intersection_allows(
+                action,
+                resource,
+                account,
+                region,
+                context,
+                guardrail_arn=guardrail_arn,
+            )
+            rows.append((cfn_type, action, resource, expect_allow, context))
 
     return rows, skipped
 
