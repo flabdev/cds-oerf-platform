@@ -1,0 +1,37 @@
+{
+  "type": "AWS::Events::Rule",
+  "handlers": {
+    "read": [
+      "iam:PassRole",
+      "events:DescribeRule",
+      "events:ListTargetsByRule",
+      "events:ListTagsForResource"
+    ],
+    "create": [
+      "iam:PassRole",
+      "events:DescribeRule",
+      "events:PutRule",
+      "events:PutTargets",
+      "events:TagResource"
+    ],
+    "update": [
+      "iam:PassRole",
+      "events:DescribeRule",
+      "events:PutRule",
+      "events:RemoveTargets",
+      "events:PutTargets",
+      "events:UntagResource",
+      "events:TagResource"
+    ],
+    "list": [
+      "events:ListRules"
+    ],
+    "delete": [
+      "iam:PassRole",
+      "events:DescribeRule",
+      "events:DeleteRule",
+      "events:RemoveTargets",
+      "events:ListTargetsByRule"
+    ]
+  }
+}

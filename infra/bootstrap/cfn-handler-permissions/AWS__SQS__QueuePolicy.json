@@ -1,0 +1,14 @@
+{
+  "type": "AWS::SQS::QueuePolicy",
+  "handlers": {
+    "create": [
+      "sqs:SetQueueAttributes"
+    ],
+    "update": [
+      "sqs:SetQueueAttributes"
+    ],
+    "delete": [
+      "sqs:SetQueueAttributes"
+    ]
+  }
+}

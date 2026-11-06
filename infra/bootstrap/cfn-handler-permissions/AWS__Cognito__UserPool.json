@@ -1,0 +1,52 @@
+{
+  "type": "AWS::Cognito::UserPool",
+  "handlers": {
+    "read": [
+      "cognito-idp:DescribeUserPool",
+      "cognito-idp:GetUserPoolMfaConfig",
+      "kms:Decrypt",
+      "kms:DescribeKey"
+    ],
+    "create": [
+      "cognito-idp:CreateUserPool",
+      "iam:PassRole",
+      "cognito-idp:SetUserPoolMfaConfig",
+      "cognito-idp:DescribeUserPool",
+      "kms:CreateGrant",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:GenerateDataKey",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:ReEncryptFrom",
+      "kms:ReEncryptTo",
+      "iam:CreateServiceLinkedRole",
+      "cognito-idp:TagResource"
+    ],
+    "update": [
+      "cognito-idp:UpdateUserPool",
+      "cognito-idp:ListTagsForResource",
+      "cognito-idp:UntagResource",
+      "cognito-idp:TagResource",
+      "cognito-idp:SetUserPoolMfaConfig",
+      "cognito-idp:AddCustomAttributes",
+      "cognito-idp:DescribeUserPool",
+      "cognito-idp:GetUserPoolMfaConfig",
+      "iam:PassRole",
+      "kms:CreateGrant",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:GenerateDataKey",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:ReEncryptFrom",
+      "kms:ReEncryptTo"
+    ],
+    "list": [
+      "cognito-idp:ListUserPools"
+    ],
+    "delete": [
+      "cognito-idp:DeleteUserPool"
+    ]
+  }
+}

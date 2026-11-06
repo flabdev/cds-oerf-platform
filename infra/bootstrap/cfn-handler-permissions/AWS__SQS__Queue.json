@@ -1,0 +1,30 @@
+{
+  "type": "AWS::SQS::Queue",
+  "handlers": {
+    "create": [
+      "sqs:CreateQueue",
+      "sqs:GetQueueUrl",
+      "sqs:GetQueueAttributes",
+      "sqs:ListQueueTags",
+      "sqs:TagQueue"
+    ],
+    "read": [
+      "sqs:GetQueueAttributes",
+      "sqs:ListQueueTags"
+    ],
+    "update": [
+      "sqs:SetQueueAttributes",
+      "sqs:GetQueueAttributes",
+      "sqs:ListQueueTags",
+      "sqs:TagQueue",
+      "sqs:UntagQueue"
+    ],
+    "delete": [
+      "sqs:DeleteQueue",
+      "sqs:GetQueueAttributes"
+    ],
+    "list": [
+      "sqs:ListQueues"
+    ]
+  }
+}

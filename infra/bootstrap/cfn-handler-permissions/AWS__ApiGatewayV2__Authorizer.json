@@ -1,0 +1,25 @@
+{
+  "type": "AWS::ApiGatewayV2::Authorizer",
+  "handlers": {
+    "create": [
+      "apigateway:POST",
+      "iam:PassRole"
+    ],
+    "update": [
+      "apigateway:PATCH",
+      "apigateway:GET",
+      "apigateway:PUT",
+      "iam:PassRole"
+    ],
+    "read": [
+      "apigateway:GET"
+    ],
+    "delete": [
+      "apigateway:GET",
+      "apigateway:DELETE"
+    ],
+    "list": [
+      "apigateway:GET"
+    ]
+  }
+}

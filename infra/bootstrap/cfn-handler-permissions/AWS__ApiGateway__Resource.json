@@ -1,0 +1,21 @@
+{
+  "type": "AWS::ApiGateway::Resource",
+  "handlers": {
+    "read": [
+      "apigateway:GET"
+    ],
+    "create": [
+      "apigateway:POST"
+    ],
+    "update": [
+      "apigateway:GET",
+      "apigateway:PATCH"
+    ],
+    "list": [
+      "apigateway:GET"
+    ],
+    "delete": [
+      "apigateway:DELETE"
+    ]
+  }
+}

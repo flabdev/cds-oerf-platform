@@ -1,0 +1,32 @@
+{
+  "type": "AWS::Logs::DeliverySource",
+  "handlers": {
+    "create": [
+      "logs:PutDeliverySource",
+      "logs:GetDeliverySource",
+      "logs:ListTagsForResource",
+      "logs:TagResource",
+      "logs:AllowVendedLogDeliveryForResource",
+      "codewhisperer:AllowVendedLogDeliveryForResource",
+      "autoloop:AllowVendedLogDeliveryForResource",
+      "workmail:AllowVendedLogDeliveryForResource"
+    ],
+    "read": [
+      "logs:GetDeliverySource",
+      "logs:ListTagsForResource"
+    ],
+    "update": [
+      "logs:PutDeliverySource",
+      "logs:GetDeliverySource",
+      "logs:ListTagsForResource",
+      "logs:TagResource",
+      "logs:UntagResource"
+    ],
+    "delete": [
+      "logs:DeleteDeliverySource"
+    ],
+    "list": [
+      "logs:DescribeDeliverySources"
+    ]
+  }
+}

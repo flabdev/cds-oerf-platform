@@ -1,0 +1,41 @@
+{
+  "type": "AWS::IAM::ManagedPolicy",
+  "handlers": {
+    "create": [
+      "iam:CreatePolicy",
+      "iam:AttachGroupPolicy",
+      "iam:AttachUserPolicy",
+      "iam:AttachRolePolicy"
+    ],
+    "read": [
+      "iam:GetPolicy",
+      "iam:ListEntitiesForPolicy",
+      "iam:GetPolicyVersion"
+    ],
+    "update": [
+      "iam:DetachRolePolicy",
+      "iam:GetPolicy",
+      "iam:ListPolicyVersions",
+      "iam:DetachGroupPolicy",
+      "iam:DetachUserPolicy",
+      "iam:CreatePolicyVersion",
+      "iam:DeletePolicyVersion",
+      "iam:AttachGroupPolicy",
+      "iam:AttachUserPolicy",
+      "iam:AttachRolePolicy"
+    ],
+    "delete": [
+      "iam:DetachRolePolicy",
+      "iam:GetPolicy",
+      "iam:ListPolicyVersions",
+      "iam:DetachGroupPolicy",
+      "iam:DetachUserPolicy",
+      "iam:DeletePolicyVersion",
+      "iam:DeletePolicy",
+      "iam:ListEntitiesForPolicy"
+    ],
+    "list": [
+      "iam:ListPolicies"
+    ]
+  }
+}

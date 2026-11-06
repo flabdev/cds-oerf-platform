@@ -1,0 +1,35 @@
+{
+  "type": "AWS::Lambda::EventSourceMapping",
+  "handlers": {
+    "read": [
+      "lambda:GetEventSourceMapping",
+      "lambda:ListTags",
+      "kms:Decrypt"
+    ],
+    "create": [
+      "lambda:CreateEventSourceMapping",
+      "lambda:GetEventSourceMapping",
+      "lambda:TagResource",
+      "kms:DescribeKey",
+      "kms:GenerateDataKey",
+      "kms:Decrypt"
+    ],
+    "update": [
+      "lambda:UpdateEventSourceMapping",
+      "lambda:GetEventSourceMapping",
+      "lambda:TagResource",
+      "lambda:UntagResource",
+      "kms:DescribeKey",
+      "kms:GenerateDataKey",
+      "kms:Decrypt"
+    ],
+    "list": [
+      "lambda:ListEventSourceMappings"
+    ],
+    "delete": [
+      "lambda:DeleteEventSourceMapping",
+      "lambda:GetEventSourceMapping",
+      "kms:Decrypt"
+    ]
+  }
+}

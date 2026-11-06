@@ -1,0 +1,27 @@
+{
+  "type": "AWS::ApiGateway::Deployment",
+  "handlers": {
+    "read": [
+      "apigateway:GET"
+    ],
+    "create": [
+      "apigateway:POST",
+      "apigateway:PATCH",
+      "apigateway:PUT",
+      "apigateway:GET"
+    ],
+    "update": [
+      "apigateway:PATCH",
+      "apigateway:GET",
+      "apigateway:PUT",
+      "apigateway:DELETE"
+    ],
+    "list": [
+      "apigateway:GET"
+    ],
+    "delete": [
+      "apigateway:GET",
+      "apigateway:DELETE"
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "type": "AWS::Logs::DeliveryDestination",
+  "handlers": {
+    "create": [
+      "logs:PutDeliveryDestination",
+      "logs:GetDeliveryDestination",
+      "logs:ListTagsForResource",
+      "logs:TagResource",
+      "logs:UntagResource",
+      "logs:PutDeliveryDestinationPolicy",
+      "logs:GetDeliveryDestinationPolicy"
+    ],
+    "read": [
+      "logs:GetDeliveryDestination",
+      "logs:ListTagsForResource",
+      "logs:GetDeliveryDestinationPolicy"
+    ],
+    "update": [
+      "logs:PutDeliveryDestination",
+      "logs:GetDeliveryDestination",
+      "logs:ListTagsForResource",
+      "logs:TagResource",
+      "logs:UntagResource",
+      "logs:DeleteDeliveryDestinationPolicy",
+      "logs:PutDeliveryDestinationPolicy",
+      "logs:GetDeliveryDestinationPolicy"
+    ],
+    "delete": [
+      "logs:DeleteDeliveryDestination",
+      "logs:DeleteDeliveryDestinationPolicy"
+    ],
+    "list": [
+      "logs:DescribeDeliveryDestinations",
+      "logs:GetDeliveryDestinationPolicy"
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "type": "AWS::Lambda::LayerVersion",
+  "handlers": {
+    "create": [
+      "lambda:PublishLayerVersion",
+      "s3:GetObject",
+      "s3:GetObjectVersion"
+    ],
+    "read": [
+      "lambda:GetLayerVersion"
+    ],
+    "delete": [
+      "lambda:GetLayerVersion",
+      "lambda:DeleteLayerVersion"
+    ],
+    "list": [
+      "lambda:ListLayerVersions"
+    ]
+  }
+}

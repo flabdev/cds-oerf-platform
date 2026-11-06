@@ -1,0 +1,38 @@
+{
+  "type": "AWS::StepFunctions::StateMachine",
+  "handlers": {
+    "create": [
+      "states:CreateStateMachine",
+      "states:DescribeStateMachine",
+      "states:TagResource",
+      "iam:PassRole",
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "kms:DescribeKey",
+      "kms:GenerateDataKey"
+    ],
+    "read": [
+      "states:DescribeStateMachine",
+      "states:ListTagsForResource",
+      "kms:Decrypt"
+    ],
+    "update": [
+      "states:UpdateStateMachine",
+      "states:TagResource",
+      "states:UntagResource",
+      "states:ListTagsForResource",
+      "iam:PassRole",
+      "kms:DescribeKey",
+      "kms:GenerateDataKey",
+      "s3:GetObject",
+      "s3:GetObjectVersion"
+    ],
+    "delete": [
+      "states:DeleteStateMachine",
+      "states:DescribeStateMachine"
+    ],
+    "list": [
+      "states:ListStateMachines"
+    ]
+  }
+}

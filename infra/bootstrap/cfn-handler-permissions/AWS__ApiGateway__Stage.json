@@ -1,0 +1,26 @@
+{
+  "type": "AWS::ApiGateway::Stage",
+  "handlers": {
+    "create": [
+      "apigateway:POST",
+      "apigateway:PATCH",
+      "apigateway:GET",
+      "apigateway:PUT"
+    ],
+    "read": [
+      "apigateway:GET"
+    ],
+    "update": [
+      "apigateway:GET",
+      "apigateway:PATCH",
+      "apigateway:PUT",
+      "apigateway:DELETE"
+    ],
+    "delete": [
+      "apigateway:DELETE"
+    ],
+    "list": [
+      "apigateway:GET"
+    ]
+  }
+}
