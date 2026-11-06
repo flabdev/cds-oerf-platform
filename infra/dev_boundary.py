@@ -13,9 +13,12 @@ no resource type. Dev names are ``-dev-``, ``_dev_``, ``/dev/``, ``Stackdev``
 and ``oerfdev``. They do not match a main name that merely contains ``dev``,
 such as ``oerf-device-seed``. IAM does not allow a wildcard in the service
 segment, so each style is written on the services that use it. Actions on
-``*`` are listed in ``STAR_ACTION_REASONS``. Cognito, API Gateway, CloudFront
-and Bedrock guardrails are denied unless the resource or the create request
-carries ``oerf:stage=dev``.
+``*`` are listed in ``STAR_ACTION_REASONS``. Cognito, API Gateway and
+CloudFront are denied unless the resource or the create request carries
+``oerf:stage=dev``. Bedrock guardrail calls are denied unless the resource
+is the dev guardrail ARN from context ``dev:guardrailArn``, a version of
+that ARN, or this account's ``guardrail-profile/*``. ``CreateGuardrail``
+stays on the request tag: the new id is not known yet.
 """
 
 from __future__ import annotations
@@ -77,20 +80,19 @@ STAR_ACTION_REASONS: dict[str, str] = {
     "cognito-idp:*": "User pool ARNs contain the generated pool id, not oerf-dev-users.",
     "dynamodb:ListStreams": "ListStreams has no resource type.",
     "ecr:GetAuthorizationToken": "GetAuthorizationToken has no resource type.",
-    "lambda:CreateEventSourceMapping": "The mapping id does not exist yet, so the resource is *.",
-    "lambda:DeleteEventSourceMapping": "Mapping ids are UUIDs. IAM authorizes the call on *.",
-    "lambda:GetEventSourceMapping": "Mapping ids are UUIDs. IAM authorizes the call on *.",
-    "lambda:ListEventSourceMappings": "The list API has no resource type.",
-    "lambda:UpdateEventSourceMapping": "Mapping ids are UUIDs. IAM authorizes the call on *.",
-    "logs:CreateLogDelivery": "Log delivery APIs authorize on *.",
-    "logs:DeleteLogDelivery": "Log delivery APIs authorize on *.",
-    "logs:DeleteResourcePolicy": "Account log resource policies have no stage in the ARN.",
+    "lambda:*EventSourceMapping*": (
+        "Mapping ids are UUIDs or do not exist yet. The wildcard is exactly "
+        "Create, Delete, Get, List, and Update."
+    ),
+    "logs:*LogDeliver*": (
+        "Log delivery APIs authorize on *. The wildcard is exactly Create, "
+        "Delete, Get, List, and Update."
+    ),
+    "logs:*ResourcePolic*": (
+        "Account log resource policies have no stage in the ARN. The wildcard "
+        "is exactly Delete, Describe, and Put."
+    ),
     "logs:DescribeLogGroups": "The agent runtime lists groups with log-group:*.",
-    "logs:DescribeResourcePolicies": "Account log resource policies have no stage in the ARN.",
-    "logs:GetLogDelivery": "Log delivery APIs authorize on *.",
-    "logs:ListLogDeliveries": "Log delivery APIs authorize on *.",
-    "logs:PutResourcePolicy": "Account log resource policies have no stage in the ARN.",
-    "logs:UpdateLogDelivery": "Log delivery APIs authorize on *.",
     "sns:Publish": "SMS publish has no topic ARN. Publish to the main inbound topic is denied.",
     "states:SendTaskSuccess": "Task-token APIs have no resource type.",
     "xray:*": "X-Ray APIs have no resource type.",
@@ -114,41 +116,50 @@ _EXEC_STAR_ACTIONS = [
     "cloudwatch:DescribeAlarms",
     "cognito-idp:*",
     "ecr:GetAuthorizationToken",
-    "lambda:CreateEventSourceMapping",
-    "lambda:DeleteEventSourceMapping",
-    "lambda:GetEventSourceMapping",
-    "lambda:ListEventSourceMappings",
-    "lambda:UpdateEventSourceMapping",
-    "logs:CreateLogDelivery",
-    "logs:DeleteLogDelivery",
-    "logs:DeleteResourcePolicy",
+    "lambda:*EventSourceMapping*",
+    "logs:*LogDeliver*",
+    "logs:*ResourcePolic*",
     "logs:DescribeLogGroups",
-    "logs:DescribeResourcePolicies",
-    "logs:GetLogDelivery",
-    "logs:ListLogDeliveries",
-    "logs:PutResourcePolicy",
-    "logs:UpdateLogDelivery",
     "bedrock:CreateGuardrail",
     "bedrock:CreateGuardrailVersion",
     "bedrock:DeleteGuardrail",
     "bedrock:GetGuardrail",
+    "bedrock:ListGuardrails",
     "bedrock:TagResource",
     "bedrock:UntagResource",
     "bedrock:UpdateGuardrail",
 ]
 
-# Excluded from the name deny. The tag denies are what fence these in.
-# ApplyGuardrail is workload-only, so it is not in the execution allow.
-_BEDROCK_TAG_ACTIONS = [
+# Excluded from the name deny. The guardrail ARN deny fences these except
+# CreateGuardrail, which stays on aws:RequestTag. ApplyGuardrail is
+# workload-only, so it is not in the execution allow.
+_GUARDRAIL_EXEMPT_ACTIONS = [
     "bedrock:ApplyGuardrail",
     "bedrock:CreateGuardrail",
     "bedrock:CreateGuardrailVersion",
     "bedrock:DeleteGuardrail",
     "bedrock:GetGuardrail",
-    "bedrock:TagResource",
-    "bedrock:UntagResource",
+    "bedrock:ListGuardrails",
+    "bedrock:*agResource",
     "bedrock:UpdateGuardrail",
 ]
+# ``bedrock:*Guardrail*`` except CreateGuardrail, plus tag and untag.
+# One statement cannot combine Action and NotAction, so CreateGuardrail is
+# omitted here instead of subtracted. Account-level actions whose names
+# contain Guardrail (enforced configuration, InvokeGuardrailChecks) authorize
+# on ``*`` and stay under NoOutsideDev: a NotResource list cannot exempt ``*``.
+_GUARDRAIL_ARN_ACTIONS = [
+    "bedrock:ApplyGuardrail",
+    "bedrock:CreateGuardrailVersion",
+    "bedrock:DeleteGuardrail",
+    "bedrock:GetGuardrail",
+    "bedrock:*agResource",
+    "bedrock:UpdateGuardrail",
+]
+GUARDRAIL_ARN_CONTEXT = "dev:guardrailArn"
+_GUARDRAIL_ARN_RE = re.compile(
+    r"^arn:aws:bedrock:(?P<region>[a-z0-9-]+):(?P<account>\d{12}):guardrail/(?P<guardrail_id>[0-9a-z]+)$"
+)
 _RESOURCE_TAG = f"aws:ResourceTag/{STAGE_TAG_KEY}"
 _REQUEST_TAG = f"aws:RequestTag/{STAGE_TAG_KEY}"
 
@@ -254,7 +265,7 @@ def execution_policy(account: str, region: str) -> dict[str, Any]:
     return document
 
 
-def execution_deny_policy(account: str) -> dict[str, Any]:
+def execution_deny_policy(account: str, guardrail_arn: str) -> dict[str, Any]:
     """Deny half of the execution role. Attached beside ``execution_policy``.
 
     The allows no longer fit in one managed policy. A deny in either policy
@@ -263,13 +274,16 @@ def execution_deny_policy(account: str) -> dict[str, Any]:
 
     document = {
         "Version": "2012-10-17",
-        "Statement": _exec_denies(account),
+        "Statement": [
+            *_exec_denies(account),
+            _guardrail_arn_deny(account, guardrail_arn),
+        ],
     }
     _check_size(document, EXEC_DENY_POLICY_NAME)
     return document
 
 
-def boundary_policy(account: str, region: str) -> dict[str, Any]:
+def boundary_policy(account: str, region: str, guardrail_arn: str) -> dict[str, Any]:
     """Permissions boundary for dev roles and the execution role."""
 
     document = {
@@ -284,6 +298,7 @@ def boundary_policy(account: str, region: str) -> dict[str, Any]:
                 "Resource": _main_topic(account, region),
             },
             *_tag_denies(),
+            _guardrail_arn_deny(account, guardrail_arn),
             *_boundary_denies(account),
             _sts_deny(account),
         ],
@@ -320,11 +335,14 @@ def boundary_permits(
     account: str,
     region: str,
     context: dict[str, str] | None = None,
+    *,
+    guardrail_arn: str | None = None,
 ) -> bool:
     """True when the workload boundary does not deny this call."""
 
+    arn = guardrail_arn or evaluation_guardrail_arn(account, region)
     return not _any_deny(
-        boundary_policy(account, region)["Statement"],
+        boundary_policy(account, region, arn)["Statement"],
         action,
         resource,
         context or {},
@@ -337,15 +355,18 @@ def intersection_allows(
     account: str,
     region: str,
     context: dict[str, str] | None = None,
+    *,
+    guardrail_arn: str | None = None,
 ) -> bool:
     """True when the execution policy and the boundary both allow the call."""
 
     current = context or {}
+    arn = guardrail_arn or evaluation_guardrail_arn(account, region)
     identities = [
         execution_policy(account, region)["Statement"],
-        execution_deny_policy(account)["Statement"],
+        execution_deny_policy(account, arn)["Statement"],
     ]
-    boundary = boundary_policy(account, region)["Statement"]
+    boundary = boundary_policy(account, region, arn)["Statement"]
     if any(_any_deny(identity, action, resource, current) for identity in identities):
         return False
     if _any_deny(boundary, action, resource, current):
@@ -498,15 +519,16 @@ def _outside_dev_deny(account: str, region: str) -> dict[str, Any]:
     """Deny every action that is not unscoped, on every resource that is not dev or shared.
 
     ``NotAction`` holds APIs whose request resource is ``*`` or an id with no
-    stage name, plus the tag-gated Bedrock guardrail actions. ``NotResource``
-    holds dev names and the shared ARNs. A bare ``*`` is not a NotResource
-    entry: in IAM that would match every resource.
+    stage name, plus the Bedrock guardrail actions. Those are fenced by the
+    dev guardrail ARN, not by a name pattern. ``NotResource`` holds dev names
+    and the shared ARNs. A bare ``*`` is not a NotResource entry: in IAM that
+    would match every resource.
     """
 
     return {
         "Sid": "NoOutsideDev",
         "Effect": "Deny",
-        "NotAction": sorted(set(STAR_ACTION_REASONS) | set(_BEDROCK_TAG_ACTIONS)),
+        "NotAction": sorted(set(STAR_ACTION_REASONS) | set(_GUARDRAIL_EXEMPT_ACTIONS)),
         "NotResource": _not_resources(account, region),
     }
 
@@ -521,8 +543,8 @@ def _not_resources(account: str, region: str) -> list[str]:
         *dev_name_patterns(account),
         _main_topic(account, region),
         _arn("events", region, account, f"rule/{_SHARED_EVENTS_RULE}"),
+        # ``*`` at the end of the ARN also matches the log-stream suffix.
         runtime_logs,
-        runtime_logs + ":*",
         _arn("execute-api", region, account, "*"),
         "arn:aws:bedrock:*::foundation-model/*",
         "arn:aws:bedrock:*:*:guardrail-profile/*",
@@ -532,8 +554,78 @@ def _not_resources(account: str, region: str) -> list[str]:
     ]
 
 
+def parse_guardrail_arn(value: object, *, account: str, region: str) -> str:
+    """Return the dev guardrail ARN, or raise when it does not match this stack.
+
+    Required when ``ci:deployRoleStack`` is true. The form is
+    ``arn:aws:bedrock:<region>:<account>:guardrail/<id>`` using this stack's
+    region and account. ``OerfCiStack`` does not create the guardrail.
+    """
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            "CDK context 'dev:guardrailArn' is required when "
+            "ci:deployRoleStack=true. Pass the dev guardrail ARN "
+            "arn:aws:bedrock:<region>:<account>:guardrail/<id>. "
+            "This stack does not create the guardrail."
+        )
+    arn = value.strip()
+    match = _GUARDRAIL_ARN_RE.match(arn)
+    if (
+        match is None
+        or match.group("account") != account
+        or match.group("region") != region
+    ):
+        raise ValueError(
+            "CDK context 'dev:guardrailArn' must be "
+            f"arn:aws:bedrock:{region}:{account}:guardrail/<id> "
+            f"(lowercase id). Got {arn!r}."
+        )
+    return arn
+
+
+def evaluation_guardrail_arn(account: str, region: str) -> str:
+    """Placeholder used by in-process checks that are not about a real guardrail.
+
+    Profile ARNs are exempt by pattern. A concrete guardrail ARN is denied
+    unless the caller passes ``guardrail_arn``.
+    """
+
+    return f"arn:aws:bedrock:{region}:{account}:guardrail/evalguardrail"
+
+
+def _guardrail_not_resources(account: str, guardrail_arn: str) -> list[str]:
+    """Dev guardrail, its versions, and this account's cross-region profiles."""
+
+    return [
+        guardrail_arn,
+        f"{guardrail_arn}:*",
+        f"arn:aws:bedrock:*:{account}:guardrail-profile/*",
+    ]
+
+
+def _guardrail_arn_deny(account: str, guardrail_arn: str) -> dict[str, Any]:
+    """Deny guardrail calls that are not the dev guardrail or a profile.
+
+    ``GetGuardrail`` and ``ApplyGuardrail`` do not send ``aws:ResourceTag``
+    on the real call, so a tag condition denies the dev guardrail. The
+    service authorization reference does list ``aws:RequestTag`` for
+    ``CreateGuardrail`` on ``guardrail-profile`` (the cross-region profile
+    this stack sets). That action stays on ``DenyCreateUnlessDevTag``.
+    ``ListGuardrails`` is omitted: IAM authorizes it on ``*``, so
+    ``NotResource`` cannot fence it. It stays a harmless residual read.
+    """
+
+    return {
+        "Sid": "DenyGuardrailUnlessDevArn",
+        "Effect": "Deny",
+        "Action": list(_GUARDRAIL_ARN_ACTIONS),
+        "NotResource": _guardrail_not_resources(account, guardrail_arn),
+    }
+
+
 def _tag_denies() -> list[dict[str, Any]]:
-    """Deny Cognito, API Gateway, CloudFront and Bedrock guardrails without the dev tag.
+    """Deny Cognito, API Gateway and CloudFront without the dev tag.
 
     Existing resources use ``aws:ResourceTag``. Create calls use ``aws:RequestTag``,
     and only on the create ARN, so a child create under an already tagged API is
@@ -544,20 +636,21 @@ def _tag_denies() -> list[dict[str, Any]]:
     ``cognito-idp:*``, ``apigatewayv2:*`` and ``cloudfront:*`` already include
     ``TagResource`` and ``UntagResource``. Cognito and CloudFront authorize
     those on the user pool and the distribution, and both support
-    ``aws:ResourceTag``. API Gateway V2 has no ``TagResource`` action; tagging
-    a REST or HTTP API is ``apigateway:*`` on ``/tags/*``, which does not
-    support ``aws:ResourceTag`` and is denied outright. ``bedrock:*Guardrail*``
-    does not match ``bedrock:TagResource``, so those two actions are listed.
-    They support ``aws:ResourceTag`` on ``guardrail/*``.
+    ``aws:ResourceTag``. API Gateway has no separate ``TagResource`` action;
+    tagging a REST or HTTP API is ``apigateway:*`` on ``/tags/*``, which does
+    not support ``aws:ResourceTag`` and is denied outright. Bedrock guardrail
+    actions are not in this statement. ``CreateGuardrail`` remains: its
+    reference row lists ``aws:RequestTag`` on ``guardrail-profile``.
 
-    Actions with no tag condition key stay allowed and are residuals:
-    Cognito ``DescribeUserPoolDomain`` and ``ListUserPools``; API Gateway
+    Reads whose reference row has no tag key, and whose resource is not one
+    of the ARNs above, stay allowed. They are residuals: Cognito
+    ``DescribeUserPoolDomain``, ``ListUserPools`` and ``GetUser``; API Gateway
     ``GET`` on ``/account``; CloudFront ``ListDistributions`` and
     ``CreateOriginAccessControl`` (update and delete of an origin access
     control are denied outright); Bedrock ``InvokeModel`` on a foundation
-    model, which cannot carry a customer tag. ``ApplyGuardrail`` on
-    ``guardrail-profile/*`` has no tag key. The guardrail id itself is
-    tag-checked.
+    model, which cannot carry a customer tag, and ``ListGuardrails`` on
+    ``*``. ``ApplyGuardrail`` on ``guardrail-profile/*`` has no tag key and
+    is exempted by the guardrail ARN deny.
     """
 
     missing_resource_tag = {"StringNotEqualsIfExists": {_RESOURCE_TAG: STAGE_TAG_VALUE}}
@@ -571,16 +664,12 @@ def _tag_denies() -> list[dict[str, Any]]:
                 "apigateway:*",
                 "apigatewayv2:*",
                 "cloudfront:*",
-                "bedrock:*Guardrail*",
-                "bedrock:TagResource",
-                "bedrock:UntagResource",
             ],
             "Resource": [
                 "arn:aws:cognito-idp:*:*:userpool/*",
                 "arn:aws:apigateway:*::/restapis/*",
                 "arn:aws:apigateway:*::/apis/*",
                 "arn:aws:cloudfront::*:distribution/*",
-                "arn:aws:bedrock:*:*:guardrail/*",
             ],
             "Condition": missing_resource_tag,
         },

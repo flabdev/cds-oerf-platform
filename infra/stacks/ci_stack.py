@@ -13,9 +13,11 @@ from infra.dev_boundary import (
     BOUNDARY_POLICY_NAME,
     EXEC_DENY_POLICY_NAME,
     EXEC_POLICY_NAME,
+    GUARDRAIL_ARN_CONTEXT,
     boundary_policy,
     execution_deny_policy,
     execution_policy,
+    parse_guardrail_arn,
 )
 from infra.naming import Stage, qualify_dev_names
 
@@ -81,6 +83,11 @@ class OerfCiStack(Stack):
 def _dev_boundary_policies(stack: Stack) -> None:
     """Fixed-name policies the dev bootstrap attaches. Not applied to this stack's role."""
 
+    guardrail_arn = parse_guardrail_arn(
+        stack.node.try_get_context(GUARDRAIL_ARN_CONTEXT),
+        account=stack.account,
+        region=stack.region,
+    )
     exec_policy = iam.CfnManagedPolicy(
         stack,
         "DevCfnExecPolicy",
@@ -93,14 +100,14 @@ def _dev_boundary_policies(stack: Stack) -> None:
         "DevCfnExecDenies",
         managed_policy_name=EXEC_DENY_POLICY_NAME,
         description="CloudFormation execution denies for the oerfdev dev stage",
-        policy_document=execution_deny_policy(stack.account),
+        policy_document=execution_deny_policy(stack.account, guardrail_arn),
     )
     boundary = iam.CfnManagedPolicy(
         stack,
         "DevWorkloadBoundary",
         managed_policy_name=BOUNDARY_POLICY_NAME,
         description="Permissions boundary for dev workload roles and the execution role",
-        policy_document=boundary_policy(stack.account, stack.region),
+        policy_document=boundary_policy(stack.account, stack.region, guardrail_arn),
     )
     CfnOutput(stack, "DevCfnExecPolicyArn", value=exec_policy.ref)
     CfnOutput(stack, "DevCfnExecDeniesArn", value=exec_denies.ref)

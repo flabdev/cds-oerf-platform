@@ -34,15 +34,28 @@ from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
 from infra.stacks.observability import OerfObservabilityStack, lambda_functions
 from scripts.check_dev_boundary import (
+    APPLY_CHECKS,
     EXEC_CHECKS,
     FENCE_CHECKS,
+    GUARDRAIL_EXEC_CHECKS,
     ROUTER_CHECKS,
     RUNTIME_CHECKS,
+    SERVICE_UNTAGGED_ALLOWS,
+    SERVICE_UNTAGGED_DENIES,
     STAGE_CHECKS,
+    TAGGED_POLICY_CHECKS,
 )
 
 ACCOUNT = "000000000000"
 REGION = "us-east-1"
+DEV_GUARDRAIL = f"arn:aws:bedrock:{REGION}:{ACCOUNT}:guardrail/b7nun5huxbii"
+MAIN_GUARDRAIL = f"arn:aws:bedrock:{REGION}:{ACCOUNT}:guardrail/mainrail0001"
+_CI_CONTEXT = {
+    "github:oidcProviderArn": (
+        "arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com"
+    ),
+    "dev:guardrailArn": DEV_GUARDRAIL,
+}
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BOUNDARY_ARN = f"arn:aws:iam::{ACCOUNT}:policy/{BOUNDARY_POLICY_NAME}"
 PHONE = "phone-number-id-0000000000"
@@ -199,12 +212,39 @@ def test_bootstrap_ssm_version_is_allowed_and_main_qualifier_is_not() -> None:
     assert bootstrap_ssm_parameter_arn(ACCOUNT, REGION).endswith("/oerfdev/*")
 
 
+def test_short_wildcards_cover_the_same_star_actions() -> None:
+    from infra.dev_boundary import boundary_permits
+
+    stream = (
+        f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:"
+        "/aws/bedrock-agentcore/runtimes/example:*"
+    )
+    assert boundary_permits("logs:CreateLogStream", stream, ACCOUNT, REGION)
+    assert boundary_permits("logs:PutLogEvents", stream, ACCOUNT, REGION)
+    for action in (
+        "lambda:CreateEventSourceMapping",
+        "lambda:ListEventSourceMappings",
+        "logs:CreateLogDelivery",
+        "logs:ListLogDeliveries",
+        "logs:PutResourcePolicy",
+        "logs:DeleteResourcePolicy",
+        "logs:DescribeResourcePolicies",
+    ):
+        assert boundary_permits(action, "*", ACCOUNT, REGION), action
+    assert not boundary_permits(
+        "lambda:DeleteFunction",
+        f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:oerf-step-context",
+        ACCOUNT,
+        REGION,
+    )
+
+
 def test_policy_documents_fit_the_managed_policy_quota() -> None:
     from infra.dev_boundary import boundary_policy, execution_deny_policy, execution_policy
 
     assert nonwhitespace_size(execution_policy(ACCOUNT, REGION)) <= 6144
-    assert nonwhitespace_size(execution_deny_policy(ACCOUNT)) <= 6144
-    assert nonwhitespace_size(boundary_policy(ACCOUNT, REGION)) <= 6144
+    assert nonwhitespace_size(execution_deny_policy(ACCOUNT, DEV_GUARDRAIL)) <= 6144
+    assert nonwhitespace_size(boundary_policy(ACCOUNT, REGION, DEV_GUARDRAIL)) <= 6144
 
 
 def test_every_dev_role_has_the_workload_boundary(dev_off, dev_on, dev_min) -> None:
@@ -304,14 +344,7 @@ def test_unscoped_star_action_is_allowed_and_a_scoped_star_is_not() -> None:
 
 
 def test_ci_stack_policies_and_github_role_untouched() -> None:
-    app = cdk.App(
-        context={
-            "github:oidcProviderArn": (
-                "arn:aws:iam::000000000000:oidc-provider/"
-                "token.actions.githubusercontent.com"
-            )
-        }
-    )
+    app = cdk.App(context=_CI_CONTEXT)
     stack = OerfCiStack(
         app,
         "OerfCiStack-dev",
@@ -338,6 +371,25 @@ def test_ci_stack_policies_and_github_role_untouched() -> None:
     _assert_tag_denies(boundary_doc)
     _assert_tag_actions(exec_doc)
     _assert_tag_actions(boundary_doc)
+    _assert_guardrail_arn_deny(deny_doc)
+    _assert_guardrail_arn_deny(boundary_doc)
+    for document in (exec_doc, boundary_doc):
+        create = _statement(document, "DenyCreateUnlessDevTag")
+        assert "bedrock:CreateGuardrail" in _as_list(create["Action"])
+        assert "aws:RequestTag/oerf:stage" in json.dumps(create["Condition"])
+    _assert_no_guardrail_wildcard_in_tag_denies(exec_doc)
+    _assert_no_guardrail_wildcard_in_tag_denies(deny_doc)
+    _assert_no_guardrail_wildcard_in_tag_denies(boundary_doc)
+    assert all(
+        item.get("Sid") != "DenyGuardrailUnlessDevArn" for item in _statements(exec_doc)
+    )
+    assert "bedrock:GetGuardrail" in json.dumps(exec_doc)
+    assert "bedrock:UpdateGuardrail" in json.dumps(exec_doc)
+    assert "bedrock:CreateGuardrailVersion" in json.dumps(exec_doc)
+    assert "bedrock:DeleteGuardrail" in json.dumps(exec_doc)
+    assert "bedrock:TagResource" in json.dumps(exec_doc)
+    assert "bedrock:UntagResource" in json.dumps(exec_doc)
+    assert "bedrock:ApplyGuardrail" not in json.dumps(exec_doc)
     _assert_outright_denies(deny_doc)
     _assert_outright_denies(boundary_doc)
     _assert_boundary_covers_services(boundary_doc)
@@ -422,51 +474,160 @@ def test_main_names_do_not_match_dev_patterns(main_a, main_b, main_seed) -> None
     assert found_seed
 
 
+def test_dev_guardrail_arn_is_required_and_must_match_the_stack() -> None:
+    from infra.dev_boundary import parse_guardrail_arn
+
+    assert parse_guardrail_arn(DEV_GUARDRAIL, account=ACCOUNT, region=REGION) == DEV_GUARDRAIL
+    with pytest.raises(ValueError, match="dev:guardrailArn"):
+        parse_guardrail_arn(None, account=ACCOUNT, region=REGION)
+    with pytest.raises(ValueError, match="dev:guardrailArn"):
+        parse_guardrail_arn("   ", account=ACCOUNT, region=REGION)
+    other_account = f"arn:aws:bedrock:{REGION}:111111111111:guardrail/b7nun5huxbii"
+    with pytest.raises(ValueError, match="guardrail"):
+        parse_guardrail_arn(other_account, account=ACCOUNT, region=REGION)
+    versioned = f"{DEV_GUARDRAIL}:1"
+    with pytest.raises(ValueError, match="guardrail"):
+        parse_guardrail_arn(versioned, account=ACCOUNT, region=REGION)
+
+
+def test_guardrail_calls_follow_the_arn_without_a_tag() -> None:
+    from infra.dev_boundary import boundary_permits, intersection_allows
+
+    profile = (
+        f"arn:aws:bedrock:{REGION}:{ACCOUNT}:guardrail-profile/us.guardrail.v1:0"
+    )
+    west = f"arn:aws:bedrock:us-west-2:{ACCOUNT}:guardrail-profile/us.guardrail.v1:0"
+    other_profile = (
+        "arn:aws:bedrock:us-east-1:111111111111:guardrail-profile/us.guardrail.v1:0"
+    )
+    kwargs = {"guardrail_arn": DEV_GUARDRAIL}
+    for action in (
+        "bedrock:GetGuardrail",
+        "bedrock:UpdateGuardrail",
+        "bedrock:CreateGuardrailVersion",
+        "bedrock:DeleteGuardrail",
+        "bedrock:TagResource",
+        "bedrock:UntagResource",
+    ):
+        assert intersection_allows(action, DEV_GUARDRAIL, ACCOUNT, REGION, **kwargs)
+        assert intersection_allows(action, f"{DEV_GUARDRAIL}:1", ACCOUNT, REGION, **kwargs)
+        assert not intersection_allows(action, MAIN_GUARDRAIL, ACCOUNT, REGION, **kwargs)
+    assert boundary_permits(
+        "bedrock:ApplyGuardrail", DEV_GUARDRAIL, ACCOUNT, REGION, **kwargs
+    )
+    assert boundary_permits("bedrock:ApplyGuardrail", profile, ACCOUNT, REGION, **kwargs)
+    assert boundary_permits("bedrock:ApplyGuardrail", west, ACCOUNT, REGION, **kwargs)
+    assert not boundary_permits(
+        "bedrock:ApplyGuardrail", MAIN_GUARDRAIL, ACCOUNT, REGION, **kwargs
+    )
+    assert not boundary_permits(
+        "bedrock:ApplyGuardrail", other_profile, ACCOUNT, REGION, **kwargs
+    )
+    assert boundary_permits("bedrock:ListGuardrails", "*", ACCOUNT, REGION, **kwargs)
+    assert intersection_allows("bedrock:ListGuardrails", "*", ACCOUNT, REGION, **kwargs)
+    assert not intersection_allows("bedrock:CreateGuardrail", "*", ACCOUNT, REGION, **kwargs)
+    assert intersection_allows(
+        "bedrock:CreateGuardrail",
+        "*",
+        ACCOUNT,
+        REGION,
+        {"aws:RequestTag/oerf:stage": "dev"},
+        **kwargs,
+    )
+
+
 def test_offline_check_cases_match_the_documents() -> None:
     from infra.dev_boundary import boundary_permits, intersection_allows
 
     boundary = f"arn:aws:iam::{ACCOUNT}:policy/{BOUNDARY_POLICY_NAME}"
     context = {"iam:PermissionsBoundary": boundary}
+    kwargs = {"guardrail_arn": DEV_GUARDRAIL}
+    values = _check_values()
     for action, resource, expect_allow, needs_boundary in EXEC_CHECKS:
         current = context if needs_boundary else {}
         concrete = resource.format(account=ACCOUNT, region=REGION, boundary=boundary)
-        got = intersection_allows(action, concrete, ACCOUNT, REGION, current)
+        got = intersection_allows(action, concrete, ACCOUNT, REGION, current, **kwargs)
         assert got is expect_allow, action
     for action, resource, expect_allow in ROUTER_CHECKS:
         concrete = resource.format(account=ACCOUNT, region=REGION, phone="0000000000")
-        assert boundary_permits(action, concrete, ACCOUNT, REGION) is expect_allow
-    pool = f"arn:aws:cognito-idp:{REGION}:{ACCOUNT}:userpool/us-east-1_MAIN"
-    distribution = f"arn:aws:cloudfront::{ACCOUNT}:distribution/EMAIN"
-    for action, resource, expect_allow, kind in STAGE_CHECKS:
-        concrete = resource.format(
-            account=ACCOUNT,
-            region=REGION,
-            user_pool_arn=pool,
-            distribution_arn=distribution,
-        )
-        context = {"aws:ResourceTag/oerf:stage": "dev"} if kind == "resource-tag" else {}
-        assert intersection_allows(action, concrete, ACCOUNT, REGION, context) is expect_allow
-        assert boundary_permits(action, concrete, ACCOUNT, REGION, context) is expect_allow
-    for action, resource, expect_allow in FENCE_CHECKS:
-        concrete = resource.format(
-            account=ACCOUNT,
-            region=REGION,
-            rest_api_id="mainapi",
-            user_pool_arn=pool,
-        )
-        assert intersection_allows(action, concrete, ACCOUNT, REGION) is expect_allow
-        assert boundary_permits(action, concrete, ACCOUNT, REGION) is expect_allow
-    dev_runtime = f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:runtime/oerf_dev_agent"
-    main_runtime = f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:runtime/oerf_agent"
+        assert boundary_permits(action, concrete, ACCOUNT, REGION, **kwargs) is expect_allow
+    for action, resource, expect_allow in (
+        *STAGE_CHECKS,
+        *FENCE_CHECKS,
+        *GUARDRAIL_EXEC_CHECKS,
+        *SERVICE_UNTAGGED_DENIES,
+        *SERVICE_UNTAGGED_ALLOWS,
+    ):
+        concrete = resource.format(**values)
+        assert (
+            intersection_allows(action, concrete, ACCOUNT, REGION, **kwargs) is expect_allow
+        ), action
+        assert (
+            boundary_permits(action, concrete, ACCOUNT, REGION, **kwargs) is expect_allow
+        ), action
+    for action, resource, expect_allow in APPLY_CHECKS:
+        concrete = resource.format(**values)
+        assert (
+            boundary_permits(action, concrete, ACCOUNT, REGION, **kwargs) is expect_allow
+        ), action
+    for action, resource, expect_allow, tag_context in TAGGED_POLICY_CHECKS:
+        concrete = resource.format(**values)
+        assert (
+            intersection_allows(
+                action, concrete, ACCOUNT, REGION, tag_context, **kwargs
+            )
+            is expect_allow
+        ), action
+        assert (
+            boundary_permits(action, concrete, ACCOUNT, REGION, tag_context, **kwargs)
+            is expect_allow
+        ), action
     for action, resource, expect_allow in RUNTIME_CHECKS:
-        concrete = resource.format(dev_runtime_arn=dev_runtime, main_runtime_arn=main_runtime)
-        assert intersection_allows(action, concrete, ACCOUNT, REGION) is expect_allow
-        assert boundary_permits(action, concrete, ACCOUNT, REGION) is expect_allow
-    assert intersection_allows("cloudfront:CreateOriginAccessControl", "*", ACCOUNT, REGION)
-    assert boundary_permits("cloudfront:CreateOriginAccessControl", "*", ACCOUNT, REGION)
-    assert not intersection_allows(
-        "cloudfront:DeleteOriginAccessControl", "*", ACCOUNT, REGION
+        concrete = resource.format(**values)
+        assert (
+            intersection_allows(action, concrete, ACCOUNT, REGION, **kwargs) is expect_allow
+        )
+        assert boundary_permits(action, concrete, ACCOUNT, REGION, **kwargs) is expect_allow
+    assert intersection_allows(
+        "cloudfront:CreateOriginAccessControl", "*", ACCOUNT, REGION, **kwargs
     )
+    assert boundary_permits(
+        "cloudfront:CreateOriginAccessControl", "*", ACCOUNT, REGION, **kwargs
+    )
+    assert not intersection_allows(
+        "cloudfront:DeleteOriginAccessControl", "*", ACCOUNT, REGION, **kwargs
+    )
+
+
+def _check_values() -> dict[str, str]:
+    profile = f"arn:aws:bedrock:{REGION}:{ACCOUNT}:guardrail-profile/us.guardrail.v1:0"
+    west = f"arn:aws:bedrock:us-west-2:{ACCOUNT}:guardrail-profile/us.guardrail.v1:0"
+    return {
+        "account": ACCOUNT,
+        "region": REGION,
+        "boundary": f"arn:aws:iam::{ACCOUNT}:policy/{BOUNDARY_POLICY_NAME}",
+        "phone": "0000000000",
+        "user_pool_arn": f"arn:aws:cognito-idp:{REGION}:{ACCOUNT}:userpool/us-east-1_MAIN",
+        "dev_user_pool_arn": f"arn:aws:cognito-idp:{REGION}:{ACCOUNT}:userpool/us-east-1_DEV",
+        "distribution_arn": f"arn:aws:cloudfront::{ACCOUNT}:distribution/EMAIN",
+        "dev_distribution_arn": f"arn:aws:cloudfront::{ACCOUNT}:distribution/EDEV",
+        "rest_api_id": "mainapi",
+        "dev_rest_api_id": "devapi",
+        "http_api_id": "mainhttp",
+        "dev_http_api_id": "devhttp",
+        "ws_api_id": "mainws",
+        "dev_ws_api_id": "devws",
+        "dev_guardrail_arn": DEV_GUARDRAIL,
+        "main_guardrail_arn": MAIN_GUARDRAIL,
+        "profile_arn": profile,
+        "profile_west_arn": west,
+        "dev_runtime_arn": (
+            f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:runtime/oerf_dev_agent"
+        ),
+        "main_runtime_arn": (
+            f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:runtime/oerf_agent"
+        ),
+    }
 
 
 def _is_boundary_arn(value: object) -> bool:
@@ -547,8 +708,44 @@ def _assert_tag_actions(document: dict) -> None:
     statement = _statement(document, "DenyExistingUnlessDevTag")
     actions = set(_as_list(statement["Action"]))
     assert {"cognito-idp:*", "apigatewayv2:*", "cloudfront:*"} <= actions
-    assert {"bedrock:TagResource", "bedrock:UntagResource"} <= actions
+    assert "bedrock:TagResource" not in actions
+    assert "bedrock:UntagResource" not in actions
+    assert "bedrock:*Guardrail*" not in actions
+    assert "arn:aws:bedrock:*:*:guardrail/*" not in _as_list(statement["Resource"])
     assert "aws:ResourceTag/oerf:stage" in json.dumps(statement["Condition"])
+
+
+def _assert_guardrail_arn_deny(document: dict) -> None:
+    statement = _statement(document, "DenyGuardrailUnlessDevArn")
+    assert statement["Effect"] == "Deny"
+    assert "Condition" not in statement
+    assert "Resource" not in statement
+    actions = set(_as_list(statement["Action"]))
+    assert "bedrock:CreateGuardrail" not in actions
+    assert "bedrock:*Guardrail*" not in actions
+    assert {
+        "bedrock:GetGuardrail",
+        "bedrock:UpdateGuardrail",
+        "bedrock:ApplyGuardrail",
+        "bedrock:CreateGuardrailVersion",
+        "bedrock:DeleteGuardrail",
+        "bedrock:*agResource",
+    } <= actions
+    assert "bedrock:ListGuardrails" not in actions
+    assert statement["NotResource"] == [
+        DEV_GUARDRAIL,
+        f"{DEV_GUARDRAIL}:*",
+        f"arn:aws:bedrock:*:{ACCOUNT}:guardrail-profile/*",
+    ]
+
+
+def _assert_no_guardrail_wildcard_in_tag_denies(document: dict) -> None:
+    for statement in _statements(document):
+        condition = json.dumps(statement.get("Condition", {}))
+        if "aws:ResourceTag/" not in condition and "aws:RequestTag/" not in condition:
+            continue
+        for action in _as_list(statement.get("Action")):
+            assert action != "bedrock:*Guardrail*", statement.get("Sid")
 
 
 def _assert_outright_denies(document: dict) -> None:

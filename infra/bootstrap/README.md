@@ -77,7 +77,8 @@ cdk synth --quiet \
   -c stage=dev \
   -c account=906048429638 \
   -c ci:deployRoleStack=true \
-  -c github:oidcProviderArn=arn:aws:iam::906048429638:oidc-provider/token.actions.githubusercontent.com
+  -c github:oidcProviderArn=arn:aws:iam::906048429638:oidc-provider/token.actions.githubusercontent.com \
+  -c dev:guardrailArn=arn:aws:bedrock:us-east-1:906048429638:guardrail/GUARDRAIL_ID
 
 aws cloudformation deploy \
   --profile Fission-OERF \
@@ -88,7 +89,22 @@ aws cloudformation deploy \
   --no-fail-on-empty-changeset
 ```
 
-Replace the OIDC provider ARN if the account’s GitHub provider ARN differs.
+Replace the OIDC provider ARN if the account’s GitHub provider ARN differs. Replace `GUARDRAIL_ID` with the dev guardrail id. `dev:guardrailArn` is required with `ci:deployRoleStack=true` and must be `arn:aws:bedrock:<region>:<account>:guardrail/<id>` for this stack. Synth fails otherwise.
+
+Guardrail calls are allowed only on that ARN, on the same ARN with a version suffix, and on `arn:aws:bedrock:*:<account>:guardrail-profile/*`. If the dev guardrail is replaced (new id), redeploy `OerfCiStack-dev` with the new `dev:guardrailArn` before the next dev deploy. Until that redeploy, guardrail calls are denied.
+
+Read the id from the dev compute stack when it exists:
+
+```bash
+aws cloudformation list-stack-resources \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfComputeStack-dev \
+  --query "StackResourceSummaries[?ResourceType=='AWS::Bedrock::Guardrail'].PhysicalResourceId" \
+  --output text
+```
+
+The ARN is `arn:aws:bedrock:us-east-1:906048429638:guardrail/<that id>`. The guardrail deployed before the tag check was removed is `b7nun5huxbii`.
 
 This stack also creates `OerfDevCfnExecPolicy`, `OerfDevCfnExecDenies`, and `OerfDevWorkloadBoundary`. The allows and the denies are two policies because the per-service dev name patterns do not fit in one. Deploy the stack before the re-bootstrap below. The dev application stacks do not create these policies. They only name the boundary.
 
@@ -145,6 +161,8 @@ The check is read-only (`iam:SimulatePrincipalPolicy` and `iam:SimulateCustomPol
 
 The channel-router role ARN is the `Role` of `oerf-dev-channel-router`. The phone-number id is the SSM parameter below. The topic ARN is the main inbound topic from the start of this section. Do not paste the results into a ticket; the script prints PASS or FAIL only.
 
+Lines labelled `untagged` pass no resource tag and no request tag. Lines labelled `tagged-policy` are a separate set: they check the tag conditions when the key is present. The evidence analyzer role is the `Role` of `oerf-dev-evidence-analyzer`. The Interpret path calls `bedrock:ApplyGuardrail` from the AgentCore execution role `oerf-dev-agent-runtime`, not from the `oerf-dev-engage-interpret` Lambda role. HTTP and WebSocket API ids are the two `AWS::ApiGatewayV2::Api` resources on the compute stack (`OerfHttpApi` and `OerfWebSocketApi`). The REST API and the distribution are on the API stack. The user pool id is the `CognitoUserPoolId` output of the data stack. Use the `*-dev` stack names for the dev ids and the unsuffixed names for main. Simulation does not require the resource to exist.
+
 ```bash
 ROUTER_ROLE=$(aws lambda get-function-configuration \
   --profile Fission-OERF \
@@ -195,6 +213,68 @@ MAIN_RUNTIME_ARN=$(aws cloudformation describe-stacks \
   --query "Stacks[0].Outputs[?OutputKey=='AgentRuntimeArn'].OutputValue | [0]" \
   --output text)
 
+DEV_POOL_ID=$(aws cloudformation describe-stacks \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfDataStack-dev \
+  --query "Stacks[0].Outputs[?OutputKey=='CognitoUserPoolId'].OutputValue | [0]" \
+  --output text)
+
+DEV_DIST_ID=$(aws cloudformation list-stack-resources \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfApiStack-dev \
+  --query "StackResourceSummaries[?ResourceType=='AWS::CloudFront::Distribution'].PhysicalResourceId | [0]" \
+  --output text)
+
+DEV_REST_API_ID=$(aws cloudformation list-stack-resources \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfApiStack-dev \
+  --query "StackResourceSummaries[?ResourceType=='AWS::ApiGateway::RestApi'].PhysicalResourceId | [0]" \
+  --output text)
+
+DEV_GUARDRAIL_ID=$(aws cloudformation list-stack-resources \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfComputeStack-dev \
+  --query "StackResourceSummaries[?ResourceType=='AWS::Bedrock::Guardrail'].PhysicalResourceId | [0]" \
+  --output text)
+
+MAIN_GUARDRAIL_ID=$(aws cloudformation list-stack-resources \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfComputeStack \
+  --query "StackResourceSummaries[?ResourceType=='AWS::Bedrock::Guardrail'].PhysicalResourceId | [0]" \
+  --output text)
+
+ANALYZER_ROLE=$(aws lambda get-function-configuration \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --function-name oerf-dev-evidence-analyzer \
+  --query Role \
+  --output text)
+
+INTERPRET_ROLE=$(aws iam get-role \
+  --profile Fission-OERF \
+  --role-name oerf-dev-agent-runtime \
+  --query Role.Arn \
+  --output text)
+
+# HTTP and WebSocket ids. Logical ids start with OerfHttpApi and OerfWebSocketApi.
+aws cloudformation list-stack-resources \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfComputeStack \
+  --query "StackResourceSummaries[?ResourceType=='AWS::ApiGatewayV2::Api'].[LogicalResourceId,PhysicalResourceId]" \
+  --output text
+aws cloudformation list-stack-resources \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --stack-name OerfComputeStack-dev \
+  --query "StackResourceSummaries[?ResourceType=='AWS::ApiGatewayV2::Api'].[LogicalResourceId,PhysicalResourceId]" \
+  --output text
+
 .venv311/bin/python -m scripts.check_dev_boundary \
   --profile Fission-OERF \
   --region us-east-1 \
@@ -203,11 +283,22 @@ MAIN_RUNTIME_ARN=$(aws cloudformation describe-stacks \
   --phone-number-id "$PHONE_ID" \
   --inbound-topic-arn "$SHARED_INBOUND_TOPIC_ARN" \
   --user-pool-arn "arn:aws:cognito-idp:us-east-1:906048429638:userpool/${POOL_ID}" \
+  --dev-user-pool-arn "arn:aws:cognito-idp:us-east-1:906048429638:userpool/${DEV_POOL_ID}" \
   --distribution-arn "arn:aws:cloudfront::906048429638:distribution/${DIST_ID}" \
+  --dev-distribution-arn "arn:aws:cloudfront::906048429638:distribution/${DEV_DIST_ID}" \
   --rest-api-id "$REST_API_ID" \
+  --dev-rest-api-id "$DEV_REST_API_ID" \
+  --http-api-id "$MAIN_HTTP_API_ID" \
+  --dev-http-api-id "$DEV_HTTP_API_ID" \
+  --ws-api-id "$MAIN_WS_API_ID" \
+  --dev-ws-api-id "$DEV_WS_API_ID" \
   --caller-role-arn arn:aws:iam::906048429638:role/oerf-dev-agent-caller \
   --dev-runtime-arn "$DEV_RUNTIME_ARN" \
-  --main-runtime-arn "$MAIN_RUNTIME_ARN"
+  --main-runtime-arn "$MAIN_RUNTIME_ARN" \
+  --dev-guardrail-arn "arn:aws:bedrock:us-east-1:906048429638:guardrail/${DEV_GUARDRAIL_ID}" \
+  --main-guardrail-arn "arn:aws:bedrock:us-east-1:906048429638:guardrail/${MAIN_GUARDRAIL_ID}" \
+  --analyzer-role-arn "$ANALYZER_ROLE" \
+  --interpret-role-arn "$INTERPRET_ROLE"
 ```
 
 `SHARED_INBOUND_TOPIC_ARN` is the main topic from the `list-stack-resources` command at the top of this section. If `oerf-dev-channel-router` does not exist yet, deploy the four application stacks (section 3) first, then run the check.
