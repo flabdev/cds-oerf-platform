@@ -1,0 +1,40 @@
+{
+  "type": "AWS::Bedrock::Guardrail",
+  "handlers": {
+    "create": [
+      "bedrock:CreateGuardrail",
+      "bedrock:GetGuardrail",
+      "kms:DescribeKey",
+      "kms:CreateGrant",
+      "kms:GenerateDataKey",
+      "kms:Decrypt",
+      "bedrock:TagResource",
+      "bedrock:ListTagsForResource"
+    ],
+    "read": [
+      "bedrock:GetGuardrail",
+      "kms:Decrypt",
+      "bedrock:ListTagsForResource"
+    ],
+    "update": [
+      "bedrock:UpdateGuardrail",
+      "bedrock:GetGuardrail",
+      "bedrock:ListTagsForResource",
+      "bedrock:TagResource",
+      "bedrock:UntagResource",
+      "kms:DescribeKey",
+      "kms:CreateGrant",
+      "kms:GenerateDataKey",
+      "kms:Decrypt"
+    ],
+    "delete": [
+      "bedrock:DeleteGuardrail",
+      "bedrock:GetGuardrail",
+      "kms:Decrypt",
+      "kms:RetireGrant"
+    ],
+    "list": [
+      "bedrock:ListGuardrails"
+    ]
+  }
+}

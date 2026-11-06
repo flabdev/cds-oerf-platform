@@ -12,8 +12,8 @@ a documented shared ARN, or a call whose resource is ``*`` because the API has
 no resource type. Dev names are ``-dev-``, ``_dev_``, ``/dev/``, ``Stackdev``
 and ``oerfdev``. They do not match a main name that merely contains ``dev``,
 such as ``oerf-device-seed``. IAM does not allow a wildcard in the service
-segment, so each style is written on the services that use it. Actions on
-``*`` are listed in ``STAR_ACTION_REASONS``. Cognito, API Gateway and
+segment, so each style is written on the services that use it. Unscoped APIs
+allowed by the name deny are listed in ``STAR_ACTION_REASONS``. Cognito, API Gateway and
 CloudFront are denied unless the resource or the create request carries
 ``oerf:stage=dev``. Bedrock guardrail calls are denied unless the resource
 is the dev guardrail ARN from context ``dev:guardrailArn``, a version of
@@ -23,7 +23,6 @@ stays on the request tag: the new id is not known yet.
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import re
 from typing import Any
@@ -56,8 +55,10 @@ _PASS_TO_SERVICES = [
     "apigateway.amazonaws.com",
     "bedrock-agentcore.amazonaws.com",
     "cognito-idp.amazonaws.com",
+    "dynamodb.amazonaws.com",
     "events.amazonaws.com",
     "lambda.amazonaws.com",
+    "sns.amazonaws.com",
     "states.amazonaws.com",
 ]
 _BROAD_MANAGED_POLICIES = [
@@ -70,42 +71,56 @@ _MAIN_INBOUND_TOPIC_SUFFIX = "OerfComputeStack-InboundTopic*"
 _ASSET_KEY_ALIAS = "alias/cdk-oerfdev-assets-key"
 _LAMBDA_ENV_KEY_ALIAS = "alias/aws/lambda"
 
-# Resource "*" actions. The reason is the IAM or CloudFormation limitation.
-STAR_ACTION_REASONS: dict[str, str] = {
-    "apigateway:*": "REST API ids are generated. The stage name is not in the ARN.",
-    "apigatewayv2:*": "HTTP and WebSocket API ids are generated. The stage name is not in the ARN.",
-    "cloudfront:*": "Distribution and invalidation APIs do not accept a stage name.",
-    "cloudwatch:DescribeAlarms": "DescribeAlarms is a read with no alarm name.",
-    "cloudwatch:PutMetricData": "PutMetricData has no resource type.",
-    "cognito-idp:*": "User pool ARNs contain the generated pool id, not oerf-dev-users.",
-    "dynamodb:ListStreams": "ListStreams has no resource type.",
-    "ecr:GetAuthorizationToken": "GetAuthorizationToken has no resource type.",
-    "lambda:*EventSourceMapping*": (
-        "Mapping ids are UUIDs or do not exist yet. The wildcard is exactly "
-        "Create, Delete, Get, List, and Update."
-    ),
-    "logs:*LogDeliver*": (
-        "Log delivery APIs authorize on *. The wildcard is exactly Create, "
-        "Delete, Get, List, and Update."
-    ),
-    "logs:*ResourcePolic*": (
-        "Account log resource policies have no stage in the ARN. The wildcard "
-        "is exactly Delete, Describe, and Put."
-    ),
-    "logs:DescribeLogGroups": "The agent runtime lists groups with log-group:*.",
-    "sns:Publish": "SMS publish has no topic ARN. Publish to the main inbound topic is denied.",
-    "states:SendTaskSuccess": "Task-token APIs have no resource type.",
-    "xray:*": "X-Ray APIs have no resource type.",
-    "kms:Decrypt": (
-        "Asset-bucket key id is generated. The execution policy requires the oerfdev alias."
-    ),
-    "kms:DescribeKey": (
-        "Asset-bucket key id is generated. The execution policy requires the oerfdev alias."
-    ),
-    "kms:Encrypt": (
-        "Lambda environment variables use the AWS/Lambda key; the key id is generated."
-    ),
-}
+# Resource "*" or unscoped actions exempted from the name-based deny (NOD).
+# Rationale per action: docs/adr and STAR_ACTION_REASONS in git history.
+STAR_ACTION_REASONS: list[str] = [
+    "apigateway:*",
+    "apigatewayv2:*",
+    "cloudfront:*",
+    "cloudwatch:DescribeAlarms",
+    "cloudwatch:PutMetricData",
+    "cognito-idp:*",
+    "dynamodb:ListStreams",
+    "ecr:GetAuthorizationToken",
+    "lambda:*EventSourceMapping*",
+    "logs:*LogDeliver*",
+    "logs:*ResourcePolic*",
+    "logs:DescribeLogGroups",
+    "sns:Publish",
+    "states:SendTaskSuccess",
+    "xray:*",
+    "kms:Decrypt",
+    "kms:DescribeKey",
+    "kms:Encrypt",
+    "firehose:TagDeliveryStream",
+    "kinesis:*",
+    "vpc-lattice:*",
+    "s3tables:*",
+    "bedrock:CreateGuardrail",
+    "ec2:Describe*",
+    "ec2:CreateNetworkInterface",
+    "elasticfilesystem:DescribeMountTargets",
+    "s3files:ListMountTargets",
+    "iam:ListRoles",
+    "iam:*UserPolicy",
+    "iam:*GroupPolicy",
+    "bedrock:ListTagsForResource",
+]
+
+_OUTSIDE_DEV_NOT_ACTION_EXTRA: tuple[str, ...] = (
+    "kms:*",
+    "ec2:Describe*",
+    "ec2:CreateNetworkInterface",
+    "elasticfilesystem:DescribeMountTargets",
+    "s3files:ListMountTargets",
+    "iam:CreateServiceLinkedRole",
+    "iam:ListRoles",
+    "iam:*UserPolicy",
+    "iam:*GroupPolicy",
+    "codewhisperer:AllowVendedLogDeliveryForResource",
+    "autoloop:AllowVendedLogDeliveryForResource",
+    "workmail:AllowVendedLogDeliveryForResource",
+)
 
 # Granted to the execution role on "*". Workload-only star actions stay off
 # this list so CloudFormation cannot call them.
@@ -120,11 +135,26 @@ _EXEC_STAR_ACTIONS = [
     "logs:*LogDeliver*",
     "logs:*ResourcePolic*",
     "logs:DescribeLogGroups",
+    "firehose:TagDeliveryStream",
+    "kinesis:*",
+    "vpc-lattice:*",
+    "autoloop:AllowVendedLogDeliveryForResource",
+    "codewhisperer:AllowVendedLogDeliveryForResource",
+    "workmail:AllowVendedLogDeliveryForResource",
+    "s3tables:*",
+    "ec2:Describe*",
+    "ec2:CreateNetworkInterface",
+    "elasticfilesystem:DescribeMountTargets",
+    "s3files:ListMountTargets",
+    "iam:ListRoles",
+    "iam:*UserPolicy",
+    "iam:*GroupPolicy",
     "bedrock:CreateGuardrail",
     "bedrock:CreateGuardrailVersion",
     "bedrock:DeleteGuardrail",
     "bedrock:GetGuardrail",
     "bedrock:ListGuardrails",
+    "bedrock:ListTagsForResource",
     "bedrock:TagResource",
     "bedrock:UntagResource",
     "bedrock:UpdateGuardrail",
@@ -153,9 +183,26 @@ _GUARDRAIL_ARN_ACTIONS = [
     "bedrock:CreateGuardrailVersion",
     "bedrock:DeleteGuardrail",
     "bedrock:GetGuardrail",
+    "bedrock:ListTagsForResource",
     "bedrock:*agResource",
     "bedrock:UpdateGuardrail",
 ]
+
+
+def _outside_dev_not_actions() -> list[str]:
+    """Stable union for NOD ``NotAction`` without per-entry doc strings."""
+
+    return list(
+        dict.fromkeys(
+            [
+                *STAR_ACTION_REASONS,
+                *_GUARDRAIL_EXEMPT_ACTIONS,
+                *_OUTSIDE_DEV_NOT_ACTION_EXTRA,
+            ]
+        )
+    )
+
+
 GUARDRAIL_ARN_CONTEXT = "dev:guardrailArn"
 _GUARDRAIL_ARN_RE = re.compile(
     r"^arn:aws:bedrock:(?P<region>[a-z0-9-]+):(?P<account>\d{12}):guardrail/(?P<guardrail_id>[0-9a-z]+)$"
@@ -173,9 +220,12 @@ _MAIN_TOPIC_ALLOWED = [
 _SERVICE_LINKED = [
     "apigateway.amazonaws.com",
     "bedrock-agentcore.amazonaws.com",
+    "cognito-idp.amazonaws.com",
+    "dynamodb.amazonaws.com",
     "events.amazonaws.com",
     "lambda.amazonaws.com",
     "logs.amazonaws.com",
+    "sns.amazonaws.com",
     "states.amazonaws.com",
 ]
 
@@ -194,45 +244,47 @@ def nonwhitespace_size(document: dict[str, Any]) -> int:
     return len(json.dumps(document, separators=(",", ":")))
 
 
-def execution_policy(account: str, region: str) -> dict[str, Any]:
+def execution_policy(account: str, region: str, guardrail_arn: str) -> dict[str, Any]:
     """Identity policy for the dev CloudFormation execution role."""
 
     boundary = policy_arn(account, BOUNDARY_POLICY_NAME)
     document = {
         "Version": "2012-10-17",
         "Statement": [
-            _allow("DevNames", _NAMED_SERVICE_ACTIONS, _service_dev_patterns(account)),
-            _allow("DevS3", "s3:*", "arn:aws:s3:::*-dev-*"),
-            _allow("AssetRead", ["s3:Get*", "s3:List*"], _asset_bucket_arns(account, region)),
-            _allow("MainTopic", _MAIN_TOPIC_ALLOWED, _main_topic(account, region)),
+            _allow("DN", _NAMED_SERVICE_ACTIONS, _service_dev_patterns(account)),
+            _allow("DS3", "s3:*", "arn:aws:s3:::*-dev-*"),
+            _allow("AR", ["s3:Get*", "s3:List*"], _asset_bucket_arns(account, region)),
+            _allow("MT", _MAIN_TOPIC_ALLOWED, _main_topic(account, region)),
             _allow(
-                "ReadDevBootstrapVersion",
+                "BS",
                 ["ssm:GetParameter", "ssm:GetParameters"],
                 _bootstrap_ssm_parameter_arn(account, region),
             ),
             _allow(
-                "Unscoped",
+                "U",
                 _EXEC_STAR_ACTIONS,
                 "*",
             ),
             _kms_allow(account, region),
+            _kms_via_service_allow(account, region),
             _lambda_kms_allow(account, region),
             _allow(
-                "CreateDevRoleWithBoundary",
+                "CRB",
                 _ROLE_CREATE_ACTIONS,
                 _role_pattern(account),
                 condition={"StringEquals": {_BOUNDARY_KEY: boundary}},
             ),
             _allow(
-                "MutateDevRoleWhenBoundaryPresent",
+                "MRB",
                 _ROLE_MUTATION_ACTIONS,
                 _role_pattern(account),
                 condition={"StringEqualsIfExists": {_BOUNDARY_KEY: boundary}},
             ),
             _allow(
-                "DeleteAndReadDevRoles",
+                "DRR",
                 [
                     "iam:DeleteRole",
+                    "iam:DeleteRolePermissionsBoundary",
                     "iam:DeleteRolePolicy",
                     "iam:DetachRolePolicy",
                     "iam:GetRole",
@@ -247,13 +299,13 @@ def execution_policy(account: str, region: str) -> dict[str, Any]:
                 _role_pattern(account),
             ),
             _allow(
-                "PassDevRoles",
+                "PR",
                 ["iam:PassRole"],
                 _role_pattern(account),
                 condition={"StringEquals": {"iam:PassedToService": _PASS_TO_SERVICES}},
             ),
             _allow(
-                "CreateServiceLinkedRole",
+                "SLR",
                 ["iam:CreateServiceLinkedRole"],
                 f"arn:aws:iam::{account}:role/aws-service-role/*",
                 condition={"StringLike": {"iam:AWSServiceName": _SERVICE_LINKED}},
@@ -289,10 +341,10 @@ def boundary_policy(account: str, region: str, guardrail_arn: str) -> dict[str, 
     document = {
         "Version": "2012-10-17",
         "Statement": [
-            _allow("AllowAll", "*", "*"),
+            _allow("A", "*", "*"),
             _outside_dev_deny(account, region),
             {
-                "Sid": "NoMainTopicWrite",
+                "Sid": "NMT",
                 "Effect": "Deny",
                 "NotAction": _MAIN_TOPIC_ALLOWED,
                 "Resource": _main_topic(account, region),
@@ -363,7 +415,7 @@ def intersection_allows(
     current = context or {}
     arn = guardrail_arn or evaluation_guardrail_arn(account, region)
     identities = [
-        execution_policy(account, region)["Statement"],
+        execution_policy(account, region, arn)["Statement"],
         execution_deny_policy(account, arn)["Statement"],
     ]
     boundary = boundary_policy(account, region, arn)["Statement"]
@@ -469,6 +521,7 @@ _HYPHEN_SERVICES = (
     "cloudwatch",
     "dynamodb",
     "events",
+    "kinesis",
     "lambda",
     "logs",
     "sns",
@@ -526,9 +579,9 @@ def _outside_dev_deny(account: str, region: str) -> dict[str, Any]:
     """
 
     return {
-        "Sid": "NoOutsideDev",
+        "Sid": "NOD",
         "Effect": "Deny",
-        "NotAction": sorted(set(STAR_ACTION_REASONS) | set(_GUARDRAIL_EXEMPT_ACTIONS)),
+        "NotAction": _outside_dev_not_actions(),
         "NotResource": _not_resources(account, region),
     }
 
@@ -611,13 +664,14 @@ def _guardrail_arn_deny(account: str, guardrail_arn: str) -> dict[str, Any]:
     on the real call, so a tag condition denies the dev guardrail. The
     service authorization reference does list ``aws:RequestTag`` for
     ``CreateGuardrail`` on ``guardrail-profile`` (the cross-region profile
-    this stack sets). That action stays on ``DenyCreateUnlessDevTag``.
-    ``ListGuardrails`` is omitted: IAM authorizes it on ``*``, so
-    ``NotResource`` cannot fence it. It stays a harmless residual read.
+    this stack sets). That action stays on ``ReqTag``.
+    ``ListGuardrails`` is omitted: IAM authorizes it on ``*``, so ``NotResource``
+    cannot fence it.     ``ListTagsForResource`` is listed here: harmless read but must not reach
+    the main guardrail ARN.
     """
 
     return {
-        "Sid": "DenyGuardrailUnlessDevArn",
+        "Sid": "GA",
         "Effect": "Deny",
         "Action": list(_GUARDRAIL_ARN_ACTIONS),
         "NotResource": _guardrail_not_resources(account, guardrail_arn),
@@ -648,16 +702,16 @@ def _tag_denies() -> list[dict[str, Any]]:
     ``GET`` on ``/account``; CloudFront ``ListDistributions`` and
     ``CreateOriginAccessControl`` (update and delete of an origin access
     control are denied outright); Bedrock ``InvokeModel`` on a foundation
-    model, which cannot carry a customer tag, and ``ListGuardrails`` on
-    ``*``. ``ApplyGuardrail`` on ``guardrail-profile/*`` has no tag key and
-    is exempted by the guardrail ARN deny.
+    model, which cannot carry a customer tag, and ``ListGuardrails`` on ``*``.
+    ``ApplyGuardrail`` on ``guardrail-profile/*`` has no tag key and is exempted
+    by the guardrail ARN deny.
     """
 
     missing_resource_tag = {"StringNotEqualsIfExists": {_RESOURCE_TAG: STAGE_TAG_VALUE}}
     missing_request_tag = {"StringNotEqualsIfExists": {_REQUEST_TAG: STAGE_TAG_VALUE}}
     return [
         {
-            "Sid": "DenyExistingUnlessDevTag",
+            "Sid": "TD",
             "Effect": "Deny",
             "Action": [
                 "cognito-idp:*",
@@ -674,7 +728,7 @@ def _tag_denies() -> list[dict[str, Any]]:
             "Condition": missing_resource_tag,
         },
         {
-            "Sid": "DenyCreateUnlessDevTag",
+            "Sid": "RT",
             "Effect": "Deny",
             "Action": [
                 "cognito-idp:CreateUserPool",
@@ -688,7 +742,7 @@ def _tag_denies() -> list[dict[str, Any]]:
             "Condition": missing_request_tag,
         },
         {
-            "Sid": "DenyApiCreateUnlessDevTag",
+            "Sid": "TAP",
             "Effect": "Deny",
             "Action": "apigateway:POST",
             "Resource": [
@@ -698,7 +752,7 @@ def _tag_denies() -> list[dict[str, Any]]:
             "Condition": missing_request_tag,
         },
         {
-            "Sid": "DenyAdminCreateUser",
+            "Sid": "NAU",
             "Effect": "Deny",
             "Action": "cognito-idp:AdminCreateUser",
             "Resource": "*",
@@ -734,16 +788,19 @@ def _exec_denies(account: str) -> list[dict[str, Any]]:
     return [item for item in _boundary_denies(account) if item["Sid"] in _EXEC_DENY_SIDS]
 
 
-_EXEC_DENY_SIDS = {
-    "DenyApiGatewayTags",
-    "DenyOriginAccessControlWrite",
-    "NoBoundaryDelete",
-    "NoPolicyEdit",
-    "NoUsers",
-    "NoProtectedRoles",
-    "NoBroadAttach",
-    "NoOrgs",
-}
+_EXEC_DENY_SIDS = frozenset(
+    {
+        "DAT",
+        "NPE",
+        "NU",
+        "NPR",
+        "NRB",
+        "NCP",
+        "NIOD",
+        "NBA",
+        "NO",
+    }
+)
 
 
 def _boundary_denies(account: str) -> list[dict[str, Any]]:
@@ -756,16 +813,7 @@ def _boundary_denies(account: str) -> list[dict[str, Any]]:
     return [
         *_outright_denies(),
         {
-            "Sid": "NoBoundaryDelete",
-            "Effect": "Deny",
-            "Action": [
-                "iam:DeleteRolePermissionsBoundary",
-                "iam:DeleteUserPermissionsBoundary",
-            ],
-            "Resource": "*",
-        },
-        {
-            "Sid": "NoPolicyEdit",
+            "Sid": "NPE",
             "Effect": "Deny",
             "Action": [
                 "iam:CreatePolicy",
@@ -777,17 +825,18 @@ def _boundary_denies(account: str) -> list[dict[str, Any]]:
             "Resource": protected,
         },
         {
-            "Sid": "NoUsers",
+            "Sid": "NU",
             "Effect": "Deny",
             "Action": [
                 "iam:CreateAccessKey",
                 "iam:CreateLoginProfile",
                 "iam:CreateUser",
+                "iam:DeleteUserPermissionsBoundary",
             ],
             "Resource": "*",
         },
         {
-            "Sid": "NoProtectedRoles",
+            "Sid": "NPR",
             "Effect": "Deny",
             "Action": "iam:*",
             "Resource": [
@@ -798,26 +847,27 @@ def _boundary_denies(account: str) -> list[dict[str, Any]]:
             ],
         },
         {
-            "Sid": "NoRoleWithoutBoundary",
+            "Sid": "NRB",
             "Effect": "Deny",
             "Action": _ROLE_CREATE_ACTIONS,
             "Resource": "*",
             "Condition": {"StringNotEqualsIfExists": {_BOUNDARY_KEY: boundary}},
         },
         {
-            "Sid": "NoCreatePolicy",
+            "Sid": "NCP",
             "Effect": "Deny",
             "Action": "iam:CreatePolicy",
             "Resource": [f"arn:aws:iam::{account}:policy/*", "*"],
         },
         {
-            "Sid": "NoIamOutsideDev",
+            "Sid": "NIOD",
             "Effect": "Deny",
             "Action": list(
                 dict.fromkeys(
                     [
                         *_ROLE_MUTATIONS,
                         "iam:DeleteRole",
+                        "iam:DeleteRolePermissionsBoundary",
                         "iam:DeleteRolePolicy",
                         "iam:DetachRolePolicy",
                         "iam:PassRole",
@@ -828,14 +878,14 @@ def _boundary_denies(account: str) -> list[dict[str, Any]]:
             "NotResource": [_role_pattern(account)],
         },
         {
-            "Sid": "NoBroadAttach",
+            "Sid": "NBA",
             "Effect": "Deny",
             "Action": ["iam:AttachRolePolicy", "iam:AttachUserPolicy"],
             "Resource": "*",
             "Condition": {"ArnEquals": {"iam:PolicyARN": _BROAD_MANAGED_POLICIES}},
         },
         {
-            "Sid": "NoOrgs",
+            "Sid": "NO",
             "Effect": "Deny",
             "Action": ["account:*", "organizations:*"],
             "Resource": "*",
@@ -854,19 +904,10 @@ def _outright_denies() -> list[dict[str, Any]]:
 
     return [
         {
-            "Sid": "DenyApiGatewayTags",
+            "Sid": "DAT",
             "Effect": "Deny",
             "Action": "apigateway:*",
             "Resource": "arn:aws:apigateway:*::/tags/*",
-        },
-        {
-            "Sid": "DenyOriginAccessControlWrite",
-            "Effect": "Deny",
-            "Action": [
-                "cloudfront:UpdateOriginAccessControl",
-                "cloudfront:DeleteOriginAccessControl",
-            ],
-            "Resource": "*",
         },
     ]
 
@@ -881,7 +922,7 @@ def _sts_deny(account: str) -> dict[str, Any]:
     """
 
     return {
-        "Sid": "NoAssumeOutsideDev",
+        "Sid": "NAOD",
         "Effect": "Deny",
         "Action": ["sts:AssumeRole", "sts:AssumeRoleWithWebIdentity"],
         "NotResource": [_role_pattern(account)],
@@ -898,7 +939,7 @@ def _kms_allow(account: str, region: str) -> dict[str, Any]:
     """
 
     return {
-        "Sid": "DecryptBootstrapAssetKey",
+        "Sid": "K1",
         "Effect": "Allow",
         "Action": ["kms:Decrypt", "kms:DescribeKey"],
         "Resource": f"arn:aws:kms:{region}:{account}:key/*",
@@ -913,13 +954,41 @@ def _lambda_kms_allow(account: str, region: str) -> dict[str, Any]:
     """Encrypt Lambda environment variables with the account AWS/Lambda key."""
 
     return {
-        "Sid": "EncryptLambdaEnvKey",
+        "Sid": "K2",
         "Effect": "Allow",
         "Action": ["kms:Encrypt", "kms:DescribeKey"],
         "Resource": f"arn:aws:kms:{region}:{account}:key/*",
         "Condition": {
             "ForAnyValue:StringEquals": {"kms:ResourceAliases": _LAMBDA_ENV_KEY_ALIAS},
             "StringEquals": {"kms:ViaService": f"lambda.{region}.amazonaws.com"},
+        },
+    }
+
+
+_VIA_SERVICES_KMS = (
+    "apigateway.{region}.amazonaws.com",
+    "bedrock.{region}.amazonaws.com",
+    "cognito-idp.{region}.amazonaws.com",
+    "dynamodb.{region}.amazonaws.com",
+    "events.{region}.amazonaws.com",
+    "lambda.{region}.amazonaws.com",
+    "sns.{region}.amazonaws.com",
+    "states.{region}.amazonaws.com",
+)
+
+
+def _kms_via_service_allow(account: str, region: str) -> dict[str, Any]:
+    """KMS data-plane calls CloudFormation handlers make via AWS services."""
+
+    return {
+        "Sid": "KV",
+        "Effect": "Allow",
+        "Action": "kms:*",
+        "Resource": f"arn:aws:kms:{region}:{account}:key/*",
+        "Condition": {
+            "StringEquals": {
+                "kms:ViaService": [s.format(region=region) for s in _VIA_SERVICES_KMS]
+            }
         },
     }
 
@@ -1091,6 +1160,17 @@ def _value_matches(base: str, actual: str, values: list[str]) -> bool:
 
 
 def _glob(pattern: str, value: str) -> bool:
-    """IAM ``*`` and ``?`` matching. ``*`` crosses ``/`` and ``:``."""
+    """IAM ``*`` and ``?`` matching. ``*`` matches across ``/`` and ``:``."""
 
-    return fnmatch.fnmatchcase(value, pattern.replace("[", "[[]"))
+    if "*" not in pattern and "?" not in pattern:
+        return pattern == value
+    regex = "^"
+    for char in pattern:
+        if char == "*":
+            regex += ".*"
+        elif char == "?":
+            regex += "."
+        else:
+            regex += re.escape(char)
+    regex += "$"
+    return re.match(regex, value) is not None

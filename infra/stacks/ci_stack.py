@@ -93,7 +93,7 @@ def _dev_boundary_policies(stack: Stack) -> None:
         "DevCfnExecPolicy",
         managed_policy_name=EXEC_POLICY_NAME,
         description="CloudFormation execution allows for the oerfdev dev stage",
-        policy_document=execution_policy(stack.account, stack.region),
+        policy_document=execution_policy(stack.account, stack.region, guardrail_arn),
     )
     exec_denies = iam.CfnManagedPolicy(
         stack,

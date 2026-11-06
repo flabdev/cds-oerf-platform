@@ -1,0 +1,69 @@
+{
+  "type": "AWS::BedrockAgentCore::Runtime",
+  "handlers": {
+    "create": [
+      "bedrock-agentcore:CreateAgentRuntime",
+      "bedrock-agentcore:CreateAgentRuntimeEndpoint",
+      "bedrock-agentcore:GetAgentRuntime",
+      "bedrock-agentcore:GetAgentRuntimeEndpoint",
+      "bedrock-agentcore:CreateWorkloadIdentity",
+      "bedrock-agentcore:TagResource",
+      "bedrock-agentcore:ListTagsForResource",
+      "bedrock-agentcore:PassCapacityProvider",
+      "iam:CreateServiceLinkedRole",
+      "iam:PassRole",
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "kms:Decrypt",
+      "vpc-lattice:GetResourceConfiguration",
+      "vpc-lattice:CreateServiceNetworkResourceAssociation",
+      "vpc-lattice:GetServiceNetworkResourceAssociation",
+      "vpc-lattice:ListServiceNetworkResourceAssociations",
+      "vpc-lattice:AssociateViaAWSService",
+      "ec2:DescribeVpcs",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeSecurityGroups",
+      "ec2:CreateNetworkInterface"
+    ],
+    "read": [
+      "bedrock-agentcore:GetAgentRuntime",
+      "bedrock-agentcore:GetAgentRuntimeEndpoint",
+      "bedrock-agentcore:ListTagsForResource"
+    ],
+    "update": [
+      "bedrock-agentcore:UpdateAgentRuntime",
+      "bedrock-agentcore:UpdateAgentRuntimeEndpoint",
+      "bedrock-agentcore:GetAgentRuntime",
+      "bedrock-agentcore:GetAgentRuntimeEndpoint",
+      "bedrock-agentcore:TagResource",
+      "bedrock-agentcore:UntagResource",
+      "bedrock-agentcore:ListTagsForResource",
+      "bedrock-agentcore:PassCapacityProvider",
+      "iam:CreateServiceLinkedRole",
+      "iam:PassRole",
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "kms:Decrypt",
+      "vpc-lattice:GetResourceConfiguration",
+      "vpc-lattice:CreateServiceNetworkResourceAssociation",
+      "vpc-lattice:GetServiceNetworkResourceAssociation",
+      "vpc-lattice:ListServiceNetworkResourceAssociations",
+      "vpc-lattice:AssociateViaAWSService",
+      "ec2:DescribeVpcs",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeSecurityGroups",
+      "ec2:CreateNetworkInterface"
+    ],
+    "delete": [
+      "bedrock-agentcore:DeleteAgentRuntime",
+      "bedrock-agentcore:DeleteAgentRuntimeEndpoint",
+      "bedrock-agentcore:DeleteWorkloadIdentity",
+      "bedrock-agentcore:GetAgentRuntime",
+      "bedrock-agentcore:GetAgentRuntimeEndpoint"
+    ],
+    "list": [
+      "bedrock-agentcore:ListAgentRuntimes",
+      "bedrock-agentcore:ListAgentRuntimeEndpoints"
+    ]
+  }
+}

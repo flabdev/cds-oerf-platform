@@ -1,0 +1,25 @@
+{
+  "type": "AWS::ApiGatewayV2::Stage",
+  "handlers": {
+    "read": [
+      "apigateway:GET"
+    ],
+    "create": [
+      "apigateway:POST",
+      "apigateway:TagResource"
+    ],
+    "update": [
+      "apigateway:PATCH",
+      "apigateway:POST",
+      "apigateway:DELETE",
+      "apigateway:TagResource",
+      "apigateway:UntagResource"
+    ],
+    "list": [
+      "apigateway:GET"
+    ],
+    "delete": [
+      "apigateway:DELETE"
+    ]
+  }
+}

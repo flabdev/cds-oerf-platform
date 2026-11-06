@@ -1,0 +1,26 @@
+{
+  "type": "AWS::IAM::Policy",
+  "handlers": {
+    "create": [
+      "iam:GetUserPolicy",
+      "iam:GetRolePolicy",
+      "iam:GetGroupPolicy",
+      "iam:PutUserPolicy",
+      "iam:PutRolePolicy",
+      "iam:PutGroupPolicy"
+    ],
+    "update": [
+      "iam:PutUserPolicy",
+      "iam:PutRolePolicy",
+      "iam:PutGroupPolicy",
+      "iam:DeleteRolePolicy",
+      "iam:DeleteUserPolicy",
+      "iam:DeleteGroupPolicy"
+    ],
+    "delete": [
+      "iam:DeleteRolePolicy",
+      "iam:DeleteUserPolicy",
+      "iam:DeleteGroupPolicy"
+    ]
+  }
+}

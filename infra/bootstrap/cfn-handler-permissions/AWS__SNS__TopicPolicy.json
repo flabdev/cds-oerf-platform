@@ -1,0 +1,14 @@
+{
+  "type": "AWS::SNS::TopicPolicy",
+  "handlers": {
+    "create": [
+      "sns:SetTopicAttributes"
+    ],
+    "update": [
+      "sns:SetTopicAttributes"
+    ],
+    "delete": [
+      "sns:SetTopicAttributes"
+    ]
+  }
+}

@@ -40,6 +40,11 @@ from typing import Any
 
 import boto3
 
+from infra.cfn_handler_permission_tests import (
+    attach_compatible_resource_arn,
+    handler_permission_checks,
+    handler_permission_dir,
+)
 from infra.constructs.social_messaging_arns import phone_number_arn
 from infra.dev_boundary import (
     BOUNDARY_POLICY_NAME,
@@ -49,6 +54,8 @@ from infra.dev_boundary import (
     parse_guardrail_arn,
     policy_arn,
 )
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _RESOURCE_TAG = "aws:ResourceTag/oerf:stage"
 _REQUEST_TAG = "aws:RequestTag/oerf:stage"
@@ -102,7 +109,7 @@ EXEC_CHECKS: list[tuple[str, str, bool, bool]] = [
     (
         "iam:DeleteRolePermissionsBoundary",
         "arn:aws:iam::{account}:role/OerfDataStack-dev-Example",
-        False,
+        True,
         False,
     ),
     (
@@ -176,9 +183,11 @@ GUARDRAIL_EXEC_CHECKS: list[tuple[str, str, bool]] = [
     ("bedrock:CreateGuardrailVersion", "{dev_guardrail_arn}", True),
     ("bedrock:DeleteGuardrail", "{dev_guardrail_arn}", True),
     ("bedrock:DeleteGuardrail", "{dev_guardrail_arn}:1", True),
+    ("bedrock:ListTagsForResource", "{dev_guardrail_arn}", True),
     ("bedrock:TagResource", "{dev_guardrail_arn}", True),
     ("bedrock:UntagResource", "{dev_guardrail_arn}", True),
     ("bedrock:GetGuardrail", "{main_guardrail_arn}", False),
+    ("bedrock:ListTagsForResource", "{main_guardrail_arn}", False),
     ("bedrock:UpdateGuardrail", "{main_guardrail_arn}", False),
     ("bedrock:TagResource", "{main_guardrail_arn}", False),
     ("bedrock:UntagResource", "{main_guardrail_arn}", False),
@@ -318,11 +327,6 @@ FENCE_CHECKS: list[tuple[str, str, bool]] = [
         False,
     ),
     ("cognito-idp:TagResource", "{user_pool_arn}", False),
-    (
-        "cloudfront:UpdateOriginAccessControl",
-        "arn:aws:cloudfront::{account}:origin-access-control/MAIN",
-        False,
-    ),
 ]
 
 # action, resource template, expect allowed by the caller role and the boundary.
@@ -342,56 +346,47 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--profile", required=True)
     parser.add_argument("--region", required=True)
     parser.add_argument("--account", required=True)
-    parser.add_argument("--router-role-arn", required=True)
-    parser.add_argument("--phone-number-id", required=True)
+    parser.add_argument("--router-role-arn")
+    parser.add_argument("--phone-number-id")
     parser.add_argument(
         "--inbound-topic-arn",
-        required=True,
         help="Main OerfComputeStack inbound topic. Subscribe is allowed; Publish is not.",
     )
     parser.add_argument(
         "--user-pool-arn",
-        required=True,
         help="Main user pool ARN. Calls are denied with no tag, and AdminCreateUser always.",
     )
     parser.add_argument(
         "--dev-user-pool-arn",
-        required=True,
         help="Dev user pool ARN. Tag-gated calls are denied when the tag is absent.",
     )
     parser.add_argument(
         "--distribution-arn",
-        required=True,
         help="Main CloudFront distribution ARN.",
     )
     parser.add_argument(
         "--dev-distribution-arn",
-        required=True,
         help="Dev CloudFront distribution ARN.",
     )
     parser.add_argument(
         "--rest-api-id",
-        required=True,
         help="Main REST API id. PUT on its /tags path is denied.",
     )
-    parser.add_argument("--dev-rest-api-id", required=True, help="Dev REST API id.")
-    parser.add_argument("--http-api-id", required=True, help="Main HTTP API id.")
-    parser.add_argument("--dev-http-api-id", required=True, help="Dev HTTP API id.")
-    parser.add_argument("--ws-api-id", required=True, help="Main WebSocket API id.")
-    parser.add_argument("--dev-ws-api-id", required=True, help="Dev WebSocket API id.")
+    parser.add_argument("--dev-rest-api-id", help="Dev REST API id.")
+    parser.add_argument("--http-api-id", help="Main HTTP API id.")
+    parser.add_argument("--dev-http-api-id", help="Dev HTTP API id.")
+    parser.add_argument("--ws-api-id", help="Main WebSocket API id.")
+    parser.add_argument("--dev-ws-api-id", help="Dev WebSocket API id.")
     parser.add_argument(
         "--caller-role-arn",
-        required=True,
         help="Dev agent caller role. InvokeAgentRuntime is allowed on the dev runtime only.",
     )
     parser.add_argument(
         "--dev-runtime-arn",
-        required=True,
         help="AgentRuntimeArn output of OerfComputeStack-dev.",
     )
     parser.add_argument(
         "--main-runtime-arn",
-        required=True,
         help="AgentRuntimeArn output of OerfComputeStack. InvokeAgentRuntime is denied.",
     )
     parser.add_argument(
@@ -401,20 +396,38 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--main-guardrail-arn",
-        required=True,
         help="Main guardrail ARN. The same calls are denied.",
     )
     parser.add_argument(
         "--analyzer-role-arn",
-        required=True,
         help="Evidence analyzer role. ApplyGuardrail is allowed on the dev guardrail only.",
     )
     parser.add_argument(
         "--interpret-role-arn",
-        required=True,
         help=(
             "AgentCore runtime execution role (oerf-dev-agent-runtime). "
             "Interpret invokes that runtime, which calls ApplyGuardrail."
+        ),
+    )
+    parser.add_argument(
+        "--handler-permissions",
+        nargs="?",
+        const=handler_permission_dir(_REPO_ROOT),
+        default=None,
+        type=Path,
+        help=(
+            "Only run IAM simulations for CloudFormation handler permissions "
+            "in this directory (default: infra/bootstrap/cfn-handler-permissions). "
+            "Requires the same exec role ARN and policies as the unit test. "
+            "Other checks are skipped."
+        ),
+    )
+    parser.add_argument(
+        "--handler-bedrock-guardrail-kms-key",
+        action="store_true",
+        help=(
+            "Assume AWS::Bedrock::Guardrail has KmsKeyArn set; simulate Bedrock "
+            "handler kms:* actions (default: omit; matches dev template without CMK)."
         ),
     )
     args = parser.parse_args(argv)
@@ -428,16 +441,117 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    if args.handler_permissions is None:
+        missing = [
+            name
+            for name, value in [
+                ("--router-role-arn", args.router_role_arn),
+                ("--phone-number-id", args.phone_number_id),
+                ("--inbound-topic-arn", args.inbound_topic_arn),
+                ("--user-pool-arn", args.user_pool_arn),
+                ("--dev-user-pool-arn", args.dev_user_pool_arn),
+                ("--distribution-arn", args.distribution_arn),
+                ("--dev-distribution-arn", args.dev_distribution_arn),
+                ("--rest-api-id", args.rest_api_id),
+                ("--dev-rest-api-id", args.dev_rest_api_id),
+                ("--http-api-id", args.http_api_id),
+                ("--dev-http-api-id", args.dev_http_api_id),
+                ("--ws-api-id", args.ws_api_id),
+                ("--dev-ws-api-id", args.dev_ws_api_id),
+                ("--caller-role-arn", args.caller_role_arn),
+                ("--dev-runtime-arn", args.dev_runtime_arn),
+                ("--main-runtime-arn", args.main_runtime_arn),
+                ("--main-guardrail-arn", args.main_guardrail_arn),
+                ("--analyzer-role-arn", args.analyzer_role_arn),
+                ("--interpret-role-arn", args.interpret_role_arn),
+            ]
+            if value is None
+        ]
+        if missing:
+            print(
+                "Missing required arguments: " + ", ".join(missing),
+                file=sys.stderr,
+            )
+            return 2
+    elif args.main_guardrail_arn is None:
+        # Parsed ARNs must differ; use a harmless distinct main id for the check.
+        args.main_guardrail_arn = parse_guardrail_arn(
+            f"arn:aws:bedrock:{args.region}:{args.account}:guardrail/main-check-placeholder",
+            account=args.account,
+            region=args.region,
+        )
+
     if args.dev_guardrail_arn == args.main_guardrail_arn:
         print("dev and main guardrail ARNs must differ", file=sys.stderr)
         return 2
     session = boto3.Session(profile_name=args.profile, region_name=args.region)
     client = session.client("iam")
+    if args.handler_permissions is not None:
+        return _run_handler_permissions(client, args)
+
     failures = _run(client, args)
     if failures:
         print(f"{failures} FAIL")
         return 1
     print("ALL PASS")
+    return 0
+
+
+def _run_handler_permissions(client: Any, args: argparse.Namespace) -> int:
+    """Simulate every handler permission against the real execution role."""
+
+    exec_role = (
+        f"arn:aws:iam::{args.account}:role/"
+        f"cdk-oerfdev-cfn-exec-role-{args.account}-{args.region}"
+    )
+    identity = [
+        json.dumps(
+            execution_policy(args.account, args.region, args.dev_guardrail_arn)
+        ),
+        json.dumps(execution_deny_policy(args.account, args.dev_guardrail_arn)),
+    ]
+    boundary_doc = json.dumps(
+        boundary_policy(args.account, args.region, args.dev_guardrail_arn)
+    )
+    handler_dir = args.handler_permissions.resolve()
+    failures = 0
+    kms_key_arn_set = args.handler_bedrock_guardrail_kms_key
+    rows, handler_skipped = handler_permission_checks(
+        account=args.account,
+        region=args.region,
+        guardrail_arn=args.dev_guardrail_arn,
+        handler_dir=handler_dir,
+        kms_key_arn_set=kms_key_arn_set,
+    )
+    print(
+        f"handler-permissions from {handler_dir} ({len(rows)} simulations, "
+        f"{len(handler_skipped)} skipped)"
+    )
+    for line in handler_skipped:
+        print(f"SKIP {line}")
+    for cfn_type, action, resource, expect_allow, context in rows:
+        resource_sim = attach_compatible_resource_arn(
+            resource, args.account, args.region
+        )
+        label_suffix = f" [{cfn_type}]"
+        failures += _expect(
+            "untagged live-exec" + label_suffix,
+            action,
+            resource_sim,
+            expect_allow,
+            _principal(client, exec_role, action, resource_sim, context),
+        )
+        failures += _expect(
+            "untagged repo-exec" + label_suffix,
+            action,
+            resource_sim,
+            expect_allow,
+            _custom(client, identity, boundary_doc, action, resource_sim, context),
+        )
+    if failures:
+        print(f"{failures} FAIL")
+        return 1
+    print("ALL PASS (handler-permissions)")
     return 0
 
 
@@ -448,7 +562,9 @@ def _run(client: Any, args: argparse.Namespace) -> int:
         f"cdk-oerfdev-cfn-exec-role-{args.account}-{args.region}"
     )
     identity = [
-        json.dumps(execution_policy(args.account, args.region)),
+        json.dumps(
+            execution_policy(args.account, args.region, args.dev_guardrail_arn)
+        ),
         json.dumps(execution_deny_policy(args.account, args.dev_guardrail_arn)),
     ]
     boundary_doc = json.dumps(

@@ -1,0 +1,31 @@
+{
+  "type": "AWS::ApiGatewayV2::Api",
+  "handlers": {
+    "create": [
+      "apigateway:POST",
+      "apigateway:PUT",
+      "s3:getObject"
+    ],
+    "update": [
+      "apigateway:PATCH",
+      "apigateway:GET",
+      "apigateway:PUT",
+      "apigateway:POST",
+      "apigateway:DELETE",
+      "s3:getObject"
+    ],
+    "read": [
+      "apigateway:GET",
+      "s3:getObject"
+    ],
+    "delete": [
+      "apigateway:GET",
+      "apigateway:DELETE",
+      "s3:getObject"
+    ],
+    "list": [
+      "apigateway:GET",
+      "s3:getObject"
+    ]
+  }
+}

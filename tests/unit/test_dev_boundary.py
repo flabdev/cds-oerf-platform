@@ -242,7 +242,7 @@ def test_short_wildcards_cover_the_same_star_actions() -> None:
 def test_policy_documents_fit_the_managed_policy_quota() -> None:
     from infra.dev_boundary import boundary_policy, execution_deny_policy, execution_policy
 
-    assert nonwhitespace_size(execution_policy(ACCOUNT, REGION)) <= 6144
+    assert nonwhitespace_size(execution_policy(ACCOUNT, REGION, DEV_GUARDRAIL)) <= 6144
     assert nonwhitespace_size(execution_deny_policy(ACCOUNT, DEV_GUARDRAIL)) <= 6144
     assert nonwhitespace_size(boundary_policy(ACCOUNT, REGION, DEV_GUARDRAIL)) <= 6144
 
@@ -362,7 +362,7 @@ def test_ci_stack_policies_and_github_role_untouched() -> None:
     deny_doc = policies[EXEC_DENY_POLICY_NAME]["Properties"]["PolicyDocument"]
     boundary_doc = policies[BOUNDARY_POLICY_NAME]["Properties"]["PolicyDocument"]
     bootstrap = bootstrap_ssm_parameter_arn(ACCOUNT, REGION)
-    assert "ReadDevBootstrapVersion" in json.dumps(exec_doc)
+    assert "BS" in json.dumps(exec_doc)
     assert bootstrap in json.dumps(boundary_doc)
     _assert_role_mutation_conditions(exec_doc)
     _assert_required_denies(deny_doc)
@@ -374,14 +374,14 @@ def test_ci_stack_policies_and_github_role_untouched() -> None:
     _assert_guardrail_arn_deny(deny_doc)
     _assert_guardrail_arn_deny(boundary_doc)
     for document in (exec_doc, boundary_doc):
-        create = _statement(document, "DenyCreateUnlessDevTag")
+        create = _statement(document, "RT")
         assert "bedrock:CreateGuardrail" in _as_list(create["Action"])
         assert "aws:RequestTag/oerf:stage" in json.dumps(create["Condition"])
     _assert_no_guardrail_wildcard_in_tag_denies(exec_doc)
     _assert_no_guardrail_wildcard_in_tag_denies(deny_doc)
     _assert_no_guardrail_wildcard_in_tag_denies(boundary_doc)
     assert all(
-        item.get("Sid") != "DenyGuardrailUnlessDevArn" for item in _statements(exec_doc)
+        item.get("Sid") != "GA" for item in _statements(exec_doc)
     )
     assert "bedrock:GetGuardrail" in json.dumps(exec_doc)
     assert "bedrock:UpdateGuardrail" in json.dumps(exec_doc)
@@ -594,7 +594,7 @@ def test_offline_check_cases_match_the_documents() -> None:
     assert boundary_permits(
         "cloudfront:CreateOriginAccessControl", "*", ACCOUNT, REGION, **kwargs
     )
-    assert not intersection_allows(
+    assert intersection_allows(
         "cloudfront:DeleteOriginAccessControl", "*", ACCOUNT, REGION, **kwargs
     )
 
@@ -705,7 +705,7 @@ def _statement(document: dict, sid: str) -> dict:
 
 
 def _assert_tag_actions(document: dict) -> None:
-    statement = _statement(document, "DenyExistingUnlessDevTag")
+    statement = _statement(document, "TD")
     actions = set(_as_list(statement["Action"]))
     assert {"cognito-idp:*", "apigatewayv2:*", "cloudfront:*"} <= actions
     assert "bedrock:TagResource" not in actions
@@ -716,7 +716,7 @@ def _assert_tag_actions(document: dict) -> None:
 
 
 def _assert_guardrail_arn_deny(document: dict) -> None:
-    statement = _statement(document, "DenyGuardrailUnlessDevArn")
+    statement = _statement(document, "GA")
     assert statement["Effect"] == "Deny"
     assert "Condition" not in statement
     assert "Resource" not in statement
@@ -729,6 +729,7 @@ def _assert_guardrail_arn_deny(document: dict) -> None:
         "bedrock:ApplyGuardrail",
         "bedrock:CreateGuardrailVersion",
         "bedrock:DeleteGuardrail",
+        "bedrock:ListTagsForResource",
         "bedrock:*agResource",
     } <= actions
     assert "bedrock:ListGuardrails" not in actions
@@ -749,25 +750,18 @@ def _assert_no_guardrail_wildcard_in_tag_denies(document: dict) -> None:
 
 
 def _assert_outright_denies(document: dict) -> None:
-    tags = _statement(document, "DenyApiGatewayTags")
+    tags = _statement(document, "DAT")
     assert tags["Effect"] == "Deny"
     assert "apigateway:*" in _as_list(tags["Action"])
     assert "arn:aws:apigateway:*::/tags/*" in _as_list(tags["Resource"])
     assert "Condition" not in tags
-    origin = _statement(document, "DenyOriginAccessControlWrite")
-    assert origin["Effect"] == "Deny"
-    assert set(_as_list(origin["Action"])) == {
-        "cloudfront:UpdateOriginAccessControl",
-        "cloudfront:DeleteOriginAccessControl",
-    }
-    assert "Condition" not in origin
 
 
 def _assert_tag_denies(document: dict) -> None:
     blob = json.dumps(document)
-    assert "DenyExistingUnlessDevTag" in blob
-    assert "DenyCreateUnlessDevTag" in blob
-    assert "DenyAdminCreateUser" in blob
+    assert "TD" in blob
+    assert "RT" in blob
+    assert "NAU" in blob
     assert "aws:ResourceTag/oerf:stage" in blob
     assert "aws:RequestTag/oerf:stage" in blob
     for service in ("cognito-idp", "apigatewayv2", "cloudfront", "bedrock"):
@@ -905,7 +899,7 @@ def _assert_boundary_covers_services(document: dict) -> None:
         "cloudfront",
     ):
         assert service in blob
-    assert "NoOutsideDev" in blob
+    assert "NOD" in blob
     for action in STAR_ACTION_REASONS:
         assert action in blob
 

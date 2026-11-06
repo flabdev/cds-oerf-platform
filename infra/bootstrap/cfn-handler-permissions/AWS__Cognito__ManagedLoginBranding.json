@@ -1,0 +1,18 @@
+{
+  "type": "AWS::Cognito::ManagedLoginBranding",
+  "handlers": {
+    "create": [
+      "cognito-idp:CreateManagedLoginBranding",
+      "cognito-idp:DescribeManagedLoginBrandingByClient"
+    ],
+    "read": [
+      "cognito-idp:DescribeManagedLoginBranding"
+    ],
+    "update": [
+      "cognito-idp:UpdateManagedLoginBranding"
+    ],
+    "delete": [
+      "cognito-idp:DeleteManagedLoginBranding"
+    ]
+  }
+}

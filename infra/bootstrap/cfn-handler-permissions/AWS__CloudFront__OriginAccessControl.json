@@ -1,0 +1,22 @@
+{
+  "type": "AWS::CloudFront::OriginAccessControl",
+  "handlers": {
+    "create": [
+      "cloudfront:CreateOriginAccessControl"
+    ],
+    "delete": [
+      "cloudfront:DeleteOriginAccessControl",
+      "cloudfront:GetOriginAccessControl"
+    ],
+    "list": [
+      "cloudfront:ListOriginAccessControls"
+    ],
+    "read": [
+      "cloudfront:GetOriginAccessControl"
+    ],
+    "update": [
+      "cloudfront:UpdateOriginAccessControl",
+      "cloudfront:GetOriginAccessControl"
+    ]
+  }
+}

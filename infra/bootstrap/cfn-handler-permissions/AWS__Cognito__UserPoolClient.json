@@ -1,0 +1,28 @@
+{
+  "type": "AWS::Cognito::UserPoolClient",
+  "handlers": {
+    "create": [
+      "cognito-idp:CreateUserPoolClient",
+      "iam:PassRole",
+      "iam:PutRolePolicy",
+      "iam:CreateServiceLinkedRole"
+    ],
+    "read": [
+      "cognito-idp:DescribeUserPoolClient",
+      "cognito-idp:ListUserPoolClientSecrets"
+    ],
+    "update": [
+      "cognito-idp:UpdateUserPoolClient",
+      "iam:PassRole",
+      "iam:PutRolePolicy"
+    ],
+    "delete": [
+      "cognito-idp:DeleteUserPoolClient",
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy"
+    ],
+    "list": [
+      "cognito-idp:ListUserPoolClients"
+    ]
+  }
+}

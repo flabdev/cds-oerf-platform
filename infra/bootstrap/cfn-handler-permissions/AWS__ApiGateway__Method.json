@@ -1,0 +1,22 @@
+{
+  "type": "AWS::ApiGateway::Method",
+  "handlers": {
+    "read": [
+      "apigateway:GET"
+    ],
+    "create": [
+      "apigateway:PUT",
+      "apigateway:GET",
+      "iam:PassRole"
+    ],
+    "update": [
+      "apigateway:GET",
+      "apigateway:DELETE",
+      "apigateway:PUT",
+      "iam:PassRole"
+    ],
+    "delete": [
+      "apigateway:DELETE"
+    ]
+  }
+}

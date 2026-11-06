@@ -17,6 +17,49 @@ Bootstrap it only as stack `CDKToolkit-dev` with `--qualifier oerfdev` and no `-
 
 When the CDK CLI is upgraded, run `cdk bootstrap --show-template`, diff it against this file, and re-apply only the CloudFormation limits above. Keep `BootstrapVariant` custom so the new stock template does not replace this one. Bump the recorded version if `CdkBootstrapVersion` changes.
 
+## CloudFormation handler permissions (repo fixtures)
+
+The folder `infra/bootstrap/cfn-handler-permissions/` stores one JSON file per CloudFormation resource type the four dev application stacks use. Each file has a top-level `"type"` and a `"handlers"` object whose keys are `create`, `read`, `update`, `delete`, and `list`; each value is the list of IAM actions the handler performs (from the registered type schema).
+
+**Refresh when:** you add a new `AWS::…` type to a dev app template, or AWS publishes new handler actions for a type you already use.
+
+**How to refresh:** for each type name `T` (for example `AWS::Bedrock::Guardrail`), fetch the resource type schema and copy the handler permission lists into `infra/bootstrap/cfn-handler-permissions/<T with :: replaced by __>.json`. A typical loop uses the CloudFormation API, for example:
+
+```bash
+for TYPE in AWS::Service::ResourceType AWS::Other::Type; do
+  SAFE=${TYPE//::/__}
+  aws cloudformation describe-type \
+    --type RESOURCE \
+    --type-name "$TYPE" \
+    --query 'Schema' \
+    --output text | jq . > "infra/bootstrap/cfn-handler-permissions/${SAFE}.json"
+done
+```
+
+Adjust the `TYPE` list to match the union of resource types in the dev synth. Merge or edit the saved JSON so it matches the shape above (`type` + `handlers` with IAM action strings) if the raw schema differs.
+
+**What the check does not simulate**
+
+- `AWS::CloudFormation::CustomResource` has no handler IAM policy; CloudFormation invokes the provider Lambda. The unit test and the live script list that type as skipped and rely on `AWS::Lambda::Function` for the Lambda’s own actions.
+- For `AWS::Bedrock::Guardrail` / `AWS::Bedrock::GuardrailVersion`, handler `kms:*` calls apply only when the template sets `KmsKeyArn`. The dev stack does not set it (`BedrockGuardrail` in `infra/constructs/bedrock_guardrail.py`), so those actions are **not applicable** unless you opt in with `--handler-bedrock-guardrail-kms-key`. Do not widen policies with a bare `kms:*` allow to satisfy the schema.
+
+**CI:** `.github/workflows/ci.yml` runs `pytest -q -m "not aws"`, which includes `tests/unit/test_cfn_handler_permissions.py`—the credential-free check that every handler action is allowed by `OerfDevCfnExecPolicy`, `OerfDevCfnExecDenies`, and `OerfDevWorkloadBoundary` for the dev probes.
+
+**Live check (execution role):** after the managed policies exist in the account, simulate the same probes with no tag context against `cdk-oerfdev-cfn-exec-role-<account>-<region>`:
+
+```bash
+.venv311/bin/python -m scripts.check_dev_boundary \
+  --profile Fission-OERF \
+  --region us-east-1 \
+  --account 906048429638 \
+  --dev-guardrail-arn "arn:aws:bedrock:us-east-1:906048429638:guardrail/<id>" \
+  --handler-permissions infra/bootstrap/cfn-handler-permissions
+```
+
+You can omit the path and use `--handler-permissions` alone (default directory). `--main-guardrail-arn` is optional in this mode; other router or channel flags are not required.
+
+To include Bedrock guardrail customer-KMS handler simulations (only if you deploy with `KmsKeyArn` on the guardrail), add `--handler-bedrock-guardrail-kms-key`.
+
 ## Laptop deploy
 
 Run these from the repo root. Use the project Python 3.11 venv so `cdk` can import `aws_cdk`:
