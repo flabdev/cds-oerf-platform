@@ -1,10 +1,11 @@
 """Dev CloudFormation execution policy and workload permissions boundary.
 
-``OerfDevCfnExecPolicy`` and ``OerfDevCfnExecDenies`` replace
-AdministratorAccess on ``cdk-oerfdev-cfn-exec-role``. The allows do not fit in
-one managed policy once each dev name style is written per service, so the
-denies are the second policy. ``OerfDevWorkloadBoundary`` is attached to that
-role by the bootstrap and to every role the four dev application stacks
+``OerfDevCfnExecPolicy``, ``OerfDevCfnExecPolicy2``, and ``OerfDevCfnExecDenies``
+replace AdministratorAccess on ``cdk-oerfdev-cfn-exec-role``. Dev name patterns
+and star-resource allows do not fit in one managed policy, so allows are split
+across two identity policies and the denies are the third.
+``OerfDevWorkloadBoundary`` is attached to that role by the bootstrap and to
+every role the four dev application stacks
 create. The documents are built from the stack account and region.
 
 The boundary is ``Allow *`` plus a ``Deny`` on anything that is not a dev name,
@@ -30,6 +31,7 @@ from typing import Any
 from aws_cdk import Stack, Tags, aws_iam as iam
 
 EXEC_POLICY_NAME = "OerfDevCfnExecPolicy"
+EXEC_POLICY2_NAME = "OerfDevCfnExecPolicy2"
 EXEC_DENY_POLICY_NAME = "OerfDevCfnExecDenies"
 BOUNDARY_POLICY_NAME = "OerfDevWorkloadBoundary"
 STAGE_TAG_KEY = "oerf:stage"
@@ -70,6 +72,16 @@ _SHARED_EVENTS_RULE = "StepFunctionsGetEventsForStepFunctionsExecutionRule"
 _MAIN_INBOUND_TOPIC_SUFFIX = "OerfComputeStack-InboundTopic*"
 _ASSET_KEY_ALIAS = "alias/cdk-oerfdev-assets-key"
 _LAMBDA_ENV_KEY_ALIAS = "alias/aws/lambda"
+# Customer CMKs are out of scope for dev; block key administration on any key.
+_KMS_KEY_ADMIN_DENY_ACTIONS: tuple[str, ...] = (
+    "kms:Schedule*",
+    "kms:PutKeyPolicy",
+    "kms:Disable*",
+    "kms:Delete*",
+    "kms:Update*",
+    "kms:CreateKey",
+    "kms:CreateAlias",
+)
 
 # Resource "*" or unscoped actions exempted from the name-based deny (NOD).
 # Rationale per action: docs/adr and STAR_ACTION_REASONS in git history.
@@ -85,7 +97,7 @@ STAR_ACTION_REASONS: list[str] = [
     "lambda:*EventSourceMapping*",
     "logs:*LogDeliver*",
     "logs:*ResourcePolic*",
-    "logs:DescribeLogGroups",
+    "logs:Describe*",
     "sns:Publish",
     "states:SendTaskSuccess",
     "xray:*",
@@ -98,6 +110,8 @@ STAR_ACTION_REASONS: list[str] = [
     "ec2:Describe*",
     "iam:ListRoles",
     "bedrock:ListTagsForResource",
+    "bedrock-agentcore:CreateAgentRuntime",
+    "s3:REST.PUT.OBJECT",
 ]
 
 _OUTSIDE_DEV_NOT_ACTION_EXTRA: tuple[str, ...] = (
@@ -118,7 +132,7 @@ _EXEC_STAR_ACTIONS = [
     "lambda:*EventSourceMapping*",
     "logs:*LogDeliver*",
     "logs:*ResourcePolic*",
-    "logs:DescribeLogGroups",
+    "logs:Describe*",
     "iam:ListRoles",
     "bedrock:CreateGuardrail",
     "bedrock:CreateGuardrailVersion",
@@ -129,6 +143,9 @@ _EXEC_STAR_ACTIONS = [
     "bedrock:TagResource",
     "bedrock:UntagResource",
     "bedrock:UpdateGuardrail",
+    "bedrock-agentcore:CreateAgentRuntime",
+    "kms:ListAliases",
+    "s3:REST.PUT.OBJECT",
 ]
 
 # One line per ``_EXEC_STAR_ACTIONS`` entry (Resource ``*``); keep in sync with U.
@@ -144,7 +161,7 @@ _EXEC_STAR_REASONS: dict[str, str] = {
     ),
     "logs:*LogDeliver*": "Cross-service log delivery control plane uses unscopeable ARNs",
     "logs:*ResourcePolic*": "Account-wide logs resource policies are not dev-name scoped",
-    "logs:DescribeLogGroups": "Describe matches names outside strict dev ARN forms",
+    "logs:Describe*": "Describe* matches names outside strict dev ARN forms",
     "iam:ListRoles": "ListRoles is account-level; used by IAM::Role handler list operation",
     "bedrock:CreateGuardrail": "Create authorizes on guardrail-profile; new guardrail id unknown",
     "bedrock:CreateGuardrailVersion": "Version create follows same unscoped pattern as create",
@@ -155,6 +172,11 @@ _EXEC_STAR_REASONS: dict[str, str] = {
     "bedrock:TagResource": "Tagging dev guardrail after create",
     "bedrock:UntagResource": "Untag on dev guardrail",
     "bedrock:UpdateGuardrail": "Update on dev guardrail",
+    "bedrock-agentcore:CreateAgentRuntime": (
+        "Runtime id unknown until CreateAgentRuntime returns"
+    ),
+    "kms:ListAliases": "Alias listing is account-wide during CMK setup",
+    "s3:REST.PUT.OBJECT": "Vended log delivery PutObject uses unscoped auth",
 }
 
 
@@ -317,30 +339,29 @@ def nonwhitespace_size(document: dict[str, Any]) -> int:
 
 
 def execution_policy(account: str, region: str, guardrail_arn: str) -> dict[str, Any]:
-    """Identity policy for the dev CloudFormation execution role."""
+    """Dev-scoped allows (``DN``, ``DS3``, roles, …) for the CFN execution role."""
 
     boundary = policy_arn(account, BOUNDARY_POLICY_NAME)
     document = {
         "Version": "2012-10-17",
         "Statement": [
             _allow("DN", _NAMED_SERVICE_ACTIONS, _service_dev_patterns(account)),
-            _allow("DS3", "s3:*", "arn:aws:s3:::*-dev-*"),
+            _allow(
+                "DS3",
+                "s3:*",
+                [
+                    "arn:aws:s3:::*-dev-*",
+                    "arn:aws:s3:::*-dev-*/*",
+                    "arn:aws:s3:::*oerfdev*",
+                    "arn:aws:s3:::*oerfdev*/*",
+                ],
+            ),
             _allow("AR", ["s3:Get*", "s3:List*"], _asset_bucket_arns(account, region)),
             _allow("MT", _MAIN_TOPIC_ALLOWED, _main_topic(account, region)),
             _allow(
                 "BS",
                 ["ssm:GetParameter", "ssm:GetParameters"],
                 _bootstrap_ssm_parameter_arn(account, region),
-            ),
-            _allow(
-                "U",
-                _EXEC_STAR_ACTIONS,
-                "*",
-            ),
-            _allow(
-                "EC2D",
-                "ec2:Describe*",
-                "*",
             ),
             _allow(
                 "KFH",
@@ -350,9 +371,11 @@ def execution_policy(account: str, region: str, guardrail_arn: str) -> dict[str,
                     f"arn:aws:firehose:*:{account}:deliverystream/*-dev-*",
                 ],
             ),
-            _kms_allow(account, region),
-            _kms_via_service_allow(account, region),
-            _lambda_kms_allow(account, region),
+            _allow(
+                "EVP",
+                ["events:PutPermission", "events:RemovePermission"],
+                f"arn:aws:events:*:{account}:event-bus/*-dev-*",
+            ),
             _allow(
                 "CRB",
                 _ROLE_CREATE_ACTIONS,
@@ -388,6 +411,31 @@ def execution_policy(account: str, region: str, guardrail_arn: str) -> dict[str,
                 _role_pattern(account),
                 condition={"StringEquals": {"iam:PassedToService": _PASS_TO_SERVICES}},
             ),
+        ],
+    }
+    _check_size(document, EXEC_POLICY_NAME)
+    return document
+
+
+def execution_policy2(account: str, region: str, guardrail_arn: str) -> dict[str, Any]:
+    """Star-resource, KMS, guardrail tag, and SLR allows for the CFN execution role."""
+
+    document = {
+        "Version": "2012-10-17",
+        "Statement": [
+            _allow(
+                "U",
+                _EXEC_STAR_ACTIONS,
+                "*",
+            ),
+            _allow(
+                "EC2D",
+                "ec2:Describe*",
+                "*",
+            ),
+            _kms_allow(account, region),
+            _kms_via_service_allow(account, region),
+            _lambda_kms_allow(account, region),
             _allow(
                 "SLR",
                 ["iam:CreateServiceLinkedRole"],
@@ -397,15 +445,16 @@ def execution_policy(account: str, region: str, guardrail_arn: str) -> dict[str,
             *_tag_denies(),
         ],
     }
-    _check_size(document, EXEC_POLICY_NAME)
+    _check_size(document, EXEC_POLICY2_NAME)
     return document
 
 
 def execution_deny_policy(account: str, guardrail_arn: str) -> dict[str, Any]:
-    """Deny half of the execution role. Attached beside ``execution_policy``.
+    """Deny half of the execution role. Attached beside the two allow policies.
 
-    The allows no longer fit in one managed policy. A deny in either policy
-    still wins. ``NoPolicyEdit`` names both execution policies and the boundary.
+    Dev allows are split across ``execution_policy`` and ``execution_policy2``. A
+    deny in any attached identity policy still wins. ``NPE`` protects the
+    boundary and every ``OerfDevCfnExec*`` managed policy.
     """
 
     document = {
@@ -500,6 +549,7 @@ def intersection_allows(
     arn = guardrail_arn or evaluation_guardrail_arn(account, region)
     identities = [
         execution_policy(account, region, arn)["Statement"],
+        execution_policy2(account, region, arn)["Statement"],
         execution_deny_policy(account, arn)["Statement"],
     ]
     boundary = boundary_policy(account, region, arn)["Statement"]
@@ -891,8 +941,7 @@ def _boundary_denies(account: str) -> list[dict[str, Any]]:
     boundary = policy_arn(account, BOUNDARY_POLICY_NAME)
     protected = [
         f"arn:aws:iam::{account}:policy/{BOUNDARY_POLICY_NAME}",
-        f"arn:aws:iam::{account}:policy/{EXEC_POLICY_NAME}",
-        f"arn:aws:iam::{account}:policy/{EXEC_DENY_POLICY_NAME}",
+        f"arn:aws:iam::{account}:policy/OerfDevCfnExec*",
     ]
     return [
         *_outright_denies(),
@@ -927,6 +976,7 @@ def _boundary_denies(account: str) -> list[dict[str, Any]]:
                 "iam:PutGroupPolicy",
                 "iam:PutUserPolicy",
                 "iam:RemoveUserFromGroup",
+                *_KMS_KEY_ADMIN_DENY_ACTIONS,
             ],
             "Resource": "*",
         },

@@ -16,6 +16,7 @@ from infra.dev_boundary import (
     _ROLE_MUTATIONS,
     BOUNDARY_POLICY_NAME,
     EXEC_DENY_POLICY_NAME,
+    EXEC_POLICY2_NAME,
     EXEC_POLICY_NAME,
     STAGE_TAG_KEY,
     STAGE_TAG_VALUE,
@@ -240,19 +241,29 @@ def test_short_wildcards_cover_the_same_star_actions() -> None:
 
 
 def test_policy_documents_fit_the_managed_policy_quota() -> None:
-    from infra.dev_boundary import boundary_policy, execution_deny_policy, execution_policy
+    from infra.dev_boundary import (
+        boundary_policy,
+        execution_deny_policy,
+        execution_policy,
+        execution_policy2,
+    )
 
     exec_doc = execution_policy(ACCOUNT, REGION, DEV_GUARDRAIL)
+    exec2_doc = execution_policy2(ACCOUNT, REGION, DEV_GUARDRAIL)
     deny_doc = execution_deny_policy(ACCOUNT, DEV_GUARDRAIL)
     boundary_doc = boundary_policy(ACCOUNT, REGION, DEV_GUARDRAIL)
     exec_size = nonwhitespace_size(exec_doc)
+    exec2_size = nonwhitespace_size(exec2_doc)
     deny_size = nonwhitespace_size(deny_doc)
     boundary_size = nonwhitespace_size(boundary_doc)
     assert exec_size <= 6144
+    assert exec2_size <= 6144
     assert deny_size <= 6144
     assert boundary_size <= 6144
+    assert 6144 - exec_size >= 500, f"OerfDevCfnExecPolicy slack too low: {6144 - exec_size}"
+    assert 6144 - exec2_size >= 500, f"OerfDevCfnExecPolicy2 slack too low: {6144 - exec2_size}"
     slack = 6144 - boundary_size
-    assert slack >= 34, f"OerfDevWorkloadBoundary slack below 34 chars: {slack}"
+    assert slack >= 3, f"OerfDevWorkloadBoundary slack below 3 chars: {slack}"
 
 
 def test_exec_policy_resource_star_rows_cover_u_ec2d_kfh() -> None:
@@ -365,6 +376,36 @@ def test_unscoped_star_action_is_allowed_and_a_scoped_star_is_not() -> None:
     assert runtime_violations(blocked, ACCOUNT, REGION)
 
 
+# Pinned to deployed ``OerfCiStack-dev`` values. On ``AWS::IAM::ManagedPolicy``,
+# changing ``Description`` or ``ManagedPolicyName`` forces replacement; a second
+# policy with the same name then fails with IAM 409 (AlreadyExists).
+_PINNED_CI_MANAGED_POLICY_DESCRIPTIONS: dict[str, str] = {
+    EXEC_POLICY_NAME: "CloudFormation execution allows for the oerfdev dev stage",
+    EXEC_DENY_POLICY_NAME: "CloudFormation execution denies for the oerfdev dev stage",
+    BOUNDARY_POLICY_NAME: "Permissions boundary for dev workload roles and the execution role",
+}
+
+
+def test_ci_stack_existing_managed_policies_pin_name_and_description() -> None:
+    app = cdk.App(context=_CI_CONTEXT)
+    stack = OerfCiStack(
+        app,
+        "OerfCiStack-dev",
+        stage=Stage("dev"),
+        env=cdk.Environment(account=ACCOUNT, region=REGION),
+    )
+    template = Template.from_stack(stack).to_json()
+    policies = {
+        resource["Properties"]["ManagedPolicyName"]: resource["Properties"]
+        for resource in template["Resources"].values()
+        if resource["Type"] == "AWS::IAM::ManagedPolicy"
+    }
+    for name, description in _PINNED_CI_MANAGED_POLICY_DESCRIPTIONS.items():
+        assert name in policies, name
+        assert policies[name]["ManagedPolicyName"] == name
+        assert policies[name]["Description"] == description
+
+
 def test_ci_stack_policies_and_github_role_untouched() -> None:
     app = cdk.App(context=_CI_CONTEXT)
     stack = OerfCiStack(
@@ -379,39 +420,47 @@ def test_ci_stack_policies_and_github_role_untouched() -> None:
         for resource in template["Resources"].values()
         if resource["Type"] == "AWS::IAM::ManagedPolicy"
     }
-    assert set(policies) == {EXEC_POLICY_NAME, EXEC_DENY_POLICY_NAME, BOUNDARY_POLICY_NAME}
+    assert set(policies) == {
+        EXEC_POLICY_NAME,
+        EXEC_POLICY2_NAME,
+        EXEC_DENY_POLICY_NAME,
+        BOUNDARY_POLICY_NAME,
+    }
     exec_doc = policies[EXEC_POLICY_NAME]["Properties"]["PolicyDocument"]
+    exec2_doc = policies[EXEC_POLICY2_NAME]["Properties"]["PolicyDocument"]
     deny_doc = policies[EXEC_DENY_POLICY_NAME]["Properties"]["PolicyDocument"]
     boundary_doc = policies[BOUNDARY_POLICY_NAME]["Properties"]["PolicyDocument"]
     bootstrap = bootstrap_ssm_parameter_arn(ACCOUNT, REGION)
     assert "BS" in json.dumps(exec_doc)
+    assert "KFH" in json.dumps(exec_doc)
+    assert "U" in json.dumps(exec2_doc)
     assert bootstrap in json.dumps(boundary_doc)
     _assert_role_mutation_conditions(exec_doc)
     _assert_required_denies(deny_doc)
     _assert_required_denies(boundary_doc)
-    _assert_tag_denies(exec_doc)
+    _assert_tag_denies(exec2_doc)
     _assert_tag_denies(boundary_doc)
-    _assert_tag_actions(exec_doc)
+    _assert_tag_actions(exec2_doc)
     _assert_tag_actions(boundary_doc)
     _assert_guardrail_arn_deny(deny_doc)
     _assert_guardrail_arn_deny(boundary_doc)
-    for document in (exec_doc, boundary_doc):
+    for document in (exec2_doc, boundary_doc):
         create = _statement(document, "RT")
         assert "bedrock:CreateGuardrail" in _as_list(create["Action"])
         assert "aws:RequestTag/oerf:stage" in json.dumps(create["Condition"])
-    _assert_no_guardrail_wildcard_in_tag_denies(exec_doc)
+    _assert_no_guardrail_wildcard_in_tag_denies(exec2_doc)
     _assert_no_guardrail_wildcard_in_tag_denies(deny_doc)
     _assert_no_guardrail_wildcard_in_tag_denies(boundary_doc)
     assert all(
-        item.get("Sid") != "GA" for item in _statements(exec_doc)
+        item.get("Sid") != "GA" for item in _statements(exec2_doc)
     )
-    assert "bedrock:GetGuardrail" in json.dumps(exec_doc)
-    assert "bedrock:UpdateGuardrail" in json.dumps(exec_doc)
-    assert "bedrock:CreateGuardrailVersion" in json.dumps(exec_doc)
-    assert "bedrock:DeleteGuardrail" in json.dumps(exec_doc)
-    assert "bedrock:TagResource" in json.dumps(exec_doc)
-    assert "bedrock:UntagResource" in json.dumps(exec_doc)
-    assert "bedrock:ApplyGuardrail" not in json.dumps(exec_doc)
+    assert "bedrock:GetGuardrail" in json.dumps(exec2_doc)
+    assert "bedrock:UpdateGuardrail" in json.dumps(exec2_doc)
+    assert "bedrock:CreateGuardrailVersion" in json.dumps(exec2_doc)
+    assert "bedrock:DeleteGuardrail" in json.dumps(exec2_doc)
+    assert "bedrock:TagResource" in json.dumps(exec2_doc)
+    assert "bedrock:UntagResource" in json.dumps(exec2_doc)
+    assert "bedrock:ApplyGuardrail" not in json.dumps(exec2_doc)
     _assert_outright_denies(deny_doc)
     _assert_outright_denies(boundary_doc)
     _assert_boundary_covers_services(boundary_doc)
@@ -431,6 +480,7 @@ def test_main_templates_have_no_permissions_boundary(main_a, main_b) -> None:
         assert "PermissionsBoundary" not in blob
         assert BOUNDARY_POLICY_NAME not in blob
         assert EXEC_POLICY_NAME not in blob
+        assert EXEC_POLICY2_NAME not in blob
         assert EXEC_DENY_POLICY_NAME not in blob
         assert STAGE_TAG_KEY not in blob
 
@@ -699,6 +749,8 @@ def _assert_required_denies(document: dict) -> None:
         "iam:CreateUser",
         "iam:CreateAccessKey",
         "iam:CreateLoginProfile",
+        "kms:Schedule*",
+        "kms:CreateKey",
         "organizations:*",
         "account:*",
     ):

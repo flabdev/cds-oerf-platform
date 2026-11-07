@@ -39,11 +39,15 @@ from pathlib import Path
 from typing import Any
 
 import boto3
+from botocore.exceptions import ClientError
 
 from infra.cfn_handler_permission_tests import (
     attach_compatible_resource_arn,
+    bedrock_guardrail_has_kms_key_arn,
+    collect_handler_list_permissions,
     handler_permission_checks,
     handler_permission_dir,
+    synth_dev_application_templates,
 )
 from infra.constructs.social_messaging_arns import phone_number_arn
 from infra.dev_boundary import (
@@ -51,6 +55,8 @@ from infra.dev_boundary import (
     boundary_policy,
     execution_deny_policy,
     execution_policy,
+    execution_policy2,
+    intersection_allows,
     parse_guardrail_arn,
     policy_arn,
 )
@@ -174,6 +180,16 @@ STAGE_CHECKS: list[tuple[str, str, bool]] = [
     ),
     ("cognito-idp:AdminCreateUser", "{user_pool_arn}", False),
     ("cognito-idp:AdminCreateUser", "{dev_user_pool_arn}", False),
+    (
+        "kms:ScheduleKeyDeletion",
+        "arn:aws:kms:{region}:{account}:key/d3fdd4e1-1b8e-4997-8949-0b4bb6022099",
+        False,
+    ),
+    (
+        "kms:PutKeyPolicy",
+        "arn:aws:kms:{region}:{account}:key/d3fdd4e1-1b8e-4997-8949-0b4bb6022099",
+        False,
+    ),
 ]
 
 # Exec role, no tag context. The dev guardrail is allowed by ARN.
@@ -433,17 +449,36 @@ def main(argv: list[str] | None = None) -> int:
             "handler kms:* actions (default: omit; matches dev template without CMK)."
         ),
     )
+    parser.add_argument(
+        "--handler-repo-only",
+        action="store_true",
+        help=(
+            "With --handler-permissions, skip live-exec simulations against the "
+            "deployed cdk-oerfdev-cfn-exec role; evaluate repo policies locally only."
+        ),
+    )
     args = parser.parse_args(argv)
     try:
         args.dev_guardrail_arn = parse_guardrail_arn(
             args.dev_guardrail_arn, account=args.account, region=args.region
         )
-        args.main_guardrail_arn = parse_guardrail_arn(
-            args.main_guardrail_arn, account=args.account, region=args.region
-        )
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    if args.handler_permissions is not None and args.main_guardrail_arn is None:
+        args.main_guardrail_arn = (
+            f"arn:aws:bedrock:{args.region}:{args.account}:guardrail/maincheckplace1"
+        )
+    if args.main_guardrail_arn is not None:
+        try:
+            args.main_guardrail_arn = parse_guardrail_arn(
+                args.main_guardrail_arn,
+                account=args.account,
+                region=args.region,
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     if args.handler_permissions is None:
         missing = [
             name
@@ -476,13 +511,6 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-    elif args.main_guardrail_arn is None:
-        # Parsed ARNs must differ; use a harmless distinct main id for the check.
-        args.main_guardrail_arn = parse_guardrail_arn(
-            f"arn:aws:bedrock:{args.region}:{args.account}:guardrail/main-check-placeholder",
-            account=args.account,
-            region=args.region,
-        )
 
     if args.dev_guardrail_arn == args.main_guardrail_arn:
         print("dev and main guardrail ARNs must differ", file=sys.stderr)
@@ -507,25 +535,19 @@ def _run_handler_permissions(client: Any, args: argparse.Namespace) -> int:
         f"arn:aws:iam::{args.account}:role/"
         f"cdk-oerfdev-cfn-exec-role-{args.account}-{args.region}"
     )
-    identity = [
-        json.dumps(
-            execution_policy(args.account, args.region, args.dev_guardrail_arn)
-        ),
-        json.dumps(execution_deny_policy(args.account, args.dev_guardrail_arn)),
-    ]
-    boundary_doc = json.dumps(
-        boundary_policy(args.account, args.region, args.dev_guardrail_arn)
-    )
     handler_dir = args.handler_permissions.resolve()
     failures = 0
-    kms_key_arn_set = args.handler_bedrock_guardrail_kms_key
+    dev_templates = synth_dev_application_templates(args.account, args.region)
+    kms_key_arn_set = args.handler_bedrock_guardrail_kms_key or any(
+        bedrock_guardrail_has_kms_key_arn(template) for template in dev_templates
+    )
     rows, handler_skipped = handler_permission_checks(
         account=args.account,
         region=args.region,
         guardrail_arn=args.dev_guardrail_arn,
         handler_dir=handler_dir,
         kms_key_arn_set=kms_key_arn_set,
-        dev_templates=None,
+        dev_templates=dev_templates,
     )
     print(
         f"handler-permissions from {handler_dir} ({len(rows)} simulations, "
@@ -535,24 +557,40 @@ def _run_handler_permissions(client: Any, args: argparse.Namespace) -> int:
         handler_skipped, key=lambda t: (t[0], t[1], t[2])
     ):
         print(f"SKIP {cfn_type} {action} {reason}")
+    list_only = collect_handler_list_permissions(handler_dir)
+    if list_only:
+        print(
+            f"LIST (informational, not simulated; {len(list_only)} CloudFormation "
+            "list-handler permissions)"
+        )
+        for cfn_type, action in sorted(list_only):
+            print(f"LIST {cfn_type} {action}")
     for cfn_type, action, resource, expect_allow, context in rows:
         resource_sim = attach_compatible_resource_arn(
             resource, args.account, args.region
         )
         label_suffix = f" [{cfn_type}]"
-        failures += _expect(
-            "untagged live-exec" + label_suffix,
-            action,
-            resource_sim,
-            expect_allow,
-            _principal(client, exec_role, action, resource_sim, context),
-        )
+        if not args.handler_repo_only:
+            failures += _expect(
+                "untagged live-exec" + label_suffix,
+                action,
+                resource_sim,
+                expect_allow,
+                _principal(client, exec_role, action, resource_sim, context),
+            )
         failures += _expect(
             "untagged repo-exec" + label_suffix,
             action,
             resource_sim,
             expect_allow,
-            _custom(client, identity, boundary_doc, action, resource_sim, context),
+            _repo_exec_decision(
+                action,
+                resource_sim,
+                context,
+                account=args.account,
+                region=args.region,
+                guardrail_arn=args.dev_guardrail_arn,
+            ),
         )
     if failures:
         print(f"{failures} FAIL")
@@ -570,6 +608,9 @@ def _run(client: Any, args: argparse.Namespace) -> int:
     identity = [
         json.dumps(
             execution_policy(args.account, args.region, args.dev_guardrail_arn)
+        ),
+        json.dumps(
+            execution_policy2(args.account, args.region, args.dev_guardrail_arn)
         ),
         json.dumps(execution_deny_policy(args.account, args.dev_guardrail_arn)),
     ]
@@ -883,6 +924,29 @@ def _expect(label: str, action: str, resource: str, expect_allow: bool, decision
     return 0 if ok else 1
 
 
+def _repo_exec_decision(
+    action: str,
+    resource: str,
+    context: dict[str, str],
+    *,
+    account: str,
+    region: str,
+    guardrail_arn: str,
+) -> str:
+    """Local policy evaluation; matches unit ``intersection_allows`` checks."""
+
+    if intersection_allows(
+        action,
+        resource,
+        account,
+        region,
+        context,
+        guardrail_arn=guardrail_arn,
+    ):
+        return "allowed"
+    return "implicitDeny"
+
+
 def _principal(
     client: Any,
     role_arn: str,
@@ -890,12 +954,24 @@ def _principal(
     resource: str,
     context: dict[str, str],
 ) -> str:
-    result = client.simulate_principal_policy(
-        PolicySourceArn=role_arn,
-        ActionNames=[action],
-        ResourceArns=[resource],
-        **_context(context),
-    )
+    try:
+        result = client.simulate_principal_policy(
+            PolicySourceArn=role_arn,
+            ActionNames=[action],
+            ResourceArns=[resource],
+            **_context(context),
+        )
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code in {"ExpiredToken", "ExpiredTokenException", "RequestExpired"}:
+            print(
+                "AWS credentials expired during live-exec simulation; refresh the "
+                "profile (for example `aws sso login`) or pass --handler-repo-only "
+                "to check repo policies without IAM API calls.",
+                file=sys.stderr,
+            )
+            raise SystemExit(2) from exc
+        raise
     return result["EvaluationResults"][0]["EvalDecision"]
 
 
