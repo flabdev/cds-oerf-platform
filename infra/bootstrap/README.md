@@ -11,7 +11,7 @@ What changed from that stock template:
 - An explicit deny blocks every `cloudformation:*` action on `stack/OerfCiStack-dev/*` and its change sets. A second deny blocks CloudFormation writes on `stack/CDKToolkit-dev/*` and its change sets. `*-dev` would otherwise include the toolkit stack. Ananda changes `CDKToolkit-dev` and `OerfCiStack-dev` only from his laptop.
 - `AWSCloudFormationReadOnlyAccess` is not attached. It would have allowed reads of every stack, including main.
 - `iam:PassRole` is still only `${CloudFormationExecutionRole}`. With qualifier `oerfdev` that is `cdk-oerfdev-cfn-exec-role-<account>-<region>`.
-- The execution role is `cdk-oerfdev-cfn-exec-role-<account>-<region>`. After `OerfCiStack-dev` has created `OerfDevCfnExecPolicy`, `OerfDevCfnExecDenies`, and `OerfDevWorkloadBoundary`, re-bootstrap so this role uses both execution policies and that permissions boundary (section 2b). The template parameters are `CloudFormationExecutionPolicies` (a comma-separated list) and `InputPermissionsBoundary`. A first bootstrap, before those policies exist, still passes `AdministratorAccess` and does not set a boundary. Do not leave that in place.
+- The execution role is `cdk-oerfdev-cfn-exec-role-<account>-<region>`. After `OerfCiStack-dev` has created `OerfDevCfnExecPolicy`, `OerfDevCfnExecPolicy2`, `OerfDevCfnExecDenies`, and `OerfDevWorkloadBoundary`, re-bootstrap so this role uses all three identity policies and that permissions boundary (section 2b). The template parameters are `CloudFormationExecutionPolicies` (a comma-separated list of the two allow policies plus the deny policy) and `InputPermissionsBoundary`. A first bootstrap, before those policies exist, still passes `AdministratorAccess` and does not set a boundary. Do not leave that in place.
 
 Bootstrap it only as stack `CDKToolkit-dev` with `--qualifier oerfdev` and no `--trust`. Do not apply this file to `CDKToolkit`.
 
@@ -43,7 +43,7 @@ Adjust the `TYPE` list to match the union of resource types in the dev synth. Me
 - `AWS::CloudFormation::CustomResource` has no handler IAM policy; CloudFormation invokes the provider Lambda. The unit test and the live script list that type as skipped and rely on `AWS::Lambda::Function` for the Lambda’s own actions.
 - For `AWS::Bedrock::Guardrail` / `AWS::Bedrock::GuardrailVersion`, handler `kms:*` calls apply only when the template sets `KmsKeyArn`. The dev stack does not set it (`BedrockGuardrail` in `infra/constructs/bedrock_guardrail.py`), so those actions are **not applicable** unless you opt in with `--handler-bedrock-guardrail-kms-key`. Do not widen policies with a bare `kms:*` allow to satisfy the schema.
 
-**CI:** `.github/workflows/ci.yml` runs `pytest -q -m "not aws"`, which includes `tests/unit/test_cfn_handler_permissions.py`—the credential-free check that every handler action is allowed by `OerfDevCfnExecPolicy`, `OerfDevCfnExecDenies`, and `OerfDevWorkloadBoundary` for the dev probes.
+**CI:** `.github/workflows/ci.yml` runs `pytest -q -m "not aws"`, which includes `tests/unit/test_cfn_handler_permissions.py`—the credential-free check that every handler action is allowed by `OerfDevCfnExecPolicy`, `OerfDevCfnExecPolicy2`, `OerfDevCfnExecDenies`, and `OerfDevWorkloadBoundary` for the dev probes.
 
 **Live check (execution role):** after the managed policies exist in the account, simulate the same probes with no tag context against `cdk-oerfdev-cfn-exec-role-<account>-<region>`:
 
@@ -57,6 +57,8 @@ Adjust the `TYPE` list to match the union of resource types in the dev synth. Me
 ```
 
 You can omit the path and use `--handler-permissions` alone (default directory). `--main-guardrail-arn` is optional in this mode; other router or channel flags are not required.
+
+**Repo vs live:** each applicable handler action is checked twice: `repo-exec` evaluates `infra/dev_boundary.py` locally (no IAM API). `live-exec` calls `iam:SimulatePrincipalPolicy` on the deployed `cdk-oerfdev-cfn-exec-role` and needs valid credentials (`aws sso login` when using SSO). If credentials are expired, refresh the profile or add `--handler-repo-only` to run only the local check.
 
 To include Bedrock guardrail customer-KMS handler simulations (only if you deploy with `KmsKeyArn` on the guardrail), add `--handler-bedrock-guardrail-kms-key`.
 
@@ -149,7 +151,7 @@ aws cloudformation list-stack-resources \
 
 The ARN is `arn:aws:bedrock:us-east-1:906048429638:guardrail/<that id>`. The guardrail deployed before the tag check was removed is `b7nun5huxbii`.
 
-This stack also creates `OerfDevCfnExecPolicy`, `OerfDevCfnExecDenies`, and `OerfDevWorkloadBoundary`. The allows and the denies are two policies because the per-service dev name patterns do not fit in one. Deploy the stack before the re-bootstrap below. The dev application stacks do not create these policies. They only name the boundary.
+This stack also creates `OerfDevCfnExecPolicy`, `OerfDevCfnExecPolicy2`, `OerfDevCfnExecDenies`, and `OerfDevWorkloadBoundary`. The allows are split across two managed policies because dev name patterns and star-resource allows do not fit in one. Deploy the stack before the re-bootstrap below. The dev application stacks do not create these policies. They only name the boundary.
 
 ### 2b. Re-bootstrap and check the boundary
 
@@ -161,7 +163,7 @@ cdk bootstrap aws://906048429638/us-east-1 \
   --toolkit-stack-name CDKToolkit-dev \
   --qualifier oerfdev \
   --template infra/bootstrap/dev-bootstrap.yaml \
-  --cloudformation-execution-policies arn:aws:iam::906048429638:policy/OerfDevCfnExecPolicy,arn:aws:iam::906048429638:policy/OerfDevCfnExecDenies \
+  --cloudformation-execution-policies arn:aws:iam::906048429638:policy/OerfDevCfnExecPolicy,arn:aws:iam::906048429638:policy/OerfDevCfnExecPolicy2,arn:aws:iam::906048429638:policy/OerfDevCfnExecDenies \
   --custom-permissions-boundary OerfDevWorkloadBoundary \
   -c stage=dev \
   -c account=906048429638
@@ -189,7 +191,7 @@ If a boundary ARN is still present when you expect none (or the wrong one), clea
 aws iam delete-role-permissions-boundary --profile Fission-OERF --role-name "$EXEC_ROLE"
 ```
 
-3. **Re-bootstrap with the OERF policies** (section 2b: both `OerfDevCfnExecPolicy` and `OerfDevCfnExecDenies`, plus `OerfDevWorkloadBoundary`). The bootstrap template attaches the boundary only when the role is created or updated through that stack; it does **not** always re-attach the boundary after a manual delete. Check again with `get-role`. If `PermissionsBoundary` is missing, attach it:
+3. **Re-bootstrap with the OERF policies** (section 2b: `OerfDevCfnExecPolicy`, `OerfDevCfnExecPolicy2`, `OerfDevCfnExecDenies`, plus `OerfDevWorkloadBoundary`). The bootstrap template attaches the boundary only when the role is created or updated through that stack; it does **not** always re-attach the boundary after a manual delete. Check again with `get-role`. If `PermissionsBoundary` is missing, attach it:
 
 ```bash
 aws iam put-role-permissions-boundary --profile Fission-OERF --role-name "$EXEC_ROLE" \

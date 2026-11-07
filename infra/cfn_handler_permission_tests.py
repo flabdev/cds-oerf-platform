@@ -29,6 +29,7 @@ from infra.dev_boundary import (
     intersection_allows,
     is_workload_permissions_boundary,
 )
+from infra.service_reference_probes import probe_arn_from_service_reference
 
 # Invoked via provider Lambda only; CFN has no handler policy for this type.
 CUSTOM_RESOURCE_CFN_TYPE = "AWS::CloudFormation::CustomResource"
@@ -129,19 +130,103 @@ def load_handler_files(
 
 
 def iter_handler_actions(data: dict[str, Any]) -> list[str]:
-    """Union of all handler operation lists."""
+    """Union of deploy handler operations (excludes the ``list`` handler)."""
 
-    seen: list[str] = []
+    deploy, _listed = _split_handler_actions(data)
+    return deploy
+
+
+def iter_handler_list_actions(data: dict[str, Any]) -> list[str]:
+    """Actions listed only under the ``list`` handler (resource discovery)."""
+
+    _deploy, listed = _split_handler_actions(data)
+    return listed
+
+
+def collect_handler_list_permissions(
+    handler_dir: Path,
+    *,
+    types: Iterable[str] | None = None,
+) -> list[tuple[str, str]]:
+    """``(cfn_type, action)`` pairs from ``list`` handlers only."""
+
+    load_types = frozenset(types) if types is not None else _DEV_APP_TEMPLATE_TYPES
+    out: list[tuple[str, str]] = []
+    for cfn_type in sorted(load_types):
+        path = handler_dir / type_to_filename(cfn_type)
+        if not path.is_file() or path.stat().st_size == 0:
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for action in iter_handler_list_actions(data):
+            out.append((cfn_type, action))
+    return out
+
+
+def _split_handler_actions(
+    data: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    deploy: list[str] = []
+    listed: list[str] = []
     handlers = data.get("handlers")
     if not isinstance(handlers, dict):
-        return seen
-    for ops in handlers.values():
+        return deploy, listed
+    for op, ops in handlers.items():
         if not isinstance(ops, list):
             continue
+        bucket = listed if op == "list" else deploy
         for item in ops:
-            if isinstance(item, str) and item not in seen:
-                seen.append(item)
-    return seen
+            if isinstance(item, str) and item not in bucket:
+                bucket.append(item)
+    return deploy, listed
+
+
+_CFN_RESOURCE_TYPE_HINT: dict[str, str] = {
+    "AWS::ApiGateway::Authorizer": "Authorizer",
+    "AWS::ApiGateway::Deployment": "Deployment",
+    "AWS::ApiGateway::GatewayResponse": "GatewayResponse",
+    "AWS::ApiGateway::Method": "Method",
+    "AWS::ApiGateway::Resource": "Resource",
+    "AWS::ApiGateway::RestApi": "RestApi",
+    "AWS::ApiGateway::Stage": "Stage",
+    "AWS::ApiGatewayV2::Api": "Api",
+    "AWS::ApiGatewayV2::Authorizer": "Authorizer",
+    "AWS::ApiGatewayV2::Integration": "Integration",
+    "AWS::ApiGatewayV2::Route": "Route",
+    "AWS::ApiGatewayV2::Stage": "Stage",
+    "AWS::Bedrock::Guardrail": "guardrail",
+    "AWS::Bedrock::GuardrailVersion": "guardrail",
+    "AWS::BedrockAgentCore::Runtime": "runtime",
+    "AWS::CloudFront::Distribution": "distribution",
+    "AWS::CloudFront::OriginAccessControl": "origin-access-control",
+    "AWS::CloudWatch::Alarm": "alarm",
+    "AWS::CloudWatch::Dashboard": "dashboard",
+    "AWS::Cognito::UserPool": "userpool",
+    "AWS::Cognito::UserPoolClient": "userpoolClient",
+    "AWS::Cognito::UserPoolDomain": "userpool",
+    "AWS::Cognito::UserPoolGroup": "group",
+    "AWS::DynamoDB::Table": "table",
+    "AWS::Events::EventBus": "event-bus",
+    "AWS::Events::Rule": "rule-on-default-event-bus",
+    "AWS::IAM::Policy": "policy",
+    "AWS::IAM::Role": "role",
+    "AWS::Lambda::EventSourceMapping": "eventSourceMapping",
+    "AWS::Lambda::Function": "function",
+    "AWS::Lambda::Permission": "function",
+    "AWS::Logs::Delivery": "delivery",
+    "AWS::Logs::DeliveryDestination": "deliveryDestination",
+    "AWS::Logs::DeliverySource": "deliverySource",
+    "AWS::Logs::LogGroup": "logGroup",
+    "AWS::Logs::MetricFilter": "logGroup",
+    "AWS::S3::Bucket": "bucket",
+    "AWS::S3::BucketPolicy": "bucket",
+    "AWS::SNS::Subscription": "topic",
+    "AWS::SNS::Topic": "topic",
+    "AWS::SNS::TopicPolicy": "topic",
+    "AWS::SQS::Queue": "queue",
+    "AWS::SQS::QueuePolicy": "queue",
+    "AWS::SSM::Parameter": "parameter",
+    "AWS::StepFunctions::StateMachine": "stateMachine",
+}
 
 
 def bedrock_guardrail_has_kms_key_arn(template: dict[str, Any]) -> bool:
@@ -327,6 +412,51 @@ def _agentcore_runtime_uses_private_network(templates: Iterable[dict[str, Any]])
     return False
 
 
+def _skip_agentcore_capacity_or_workload(templates: Iterable[dict[str, Any]]) -> bool:
+    for res in _resources_of_type(templates, "AWS::BedrockAgentCore::Runtime"):
+        props = res.get("Properties") or {}
+        for key in (
+            "CapacityProviderArn",
+            "capacityProviderArn",
+            "WorkloadIdentityName",
+            "workloadIdentityName",
+        ):
+            if key in props and _props_nonempty(props.get(key)):
+                return False
+    return True
+
+
+def _skip_lambda_capacity_provider(templates: Iterable[dict[str, Any]]) -> bool:
+    for res in _resources_of_type(templates, "AWS::Lambda::Function"):
+        props = res.get("Properties") or {}
+        fn = props.get("Function") or props
+        if not isinstance(fn, dict):
+            continue
+        for key in ("CapacityProviderArn", "capacityProviderArn"):
+            if key in fn and _props_nonempty(fn.get(key)):
+                return False
+    return True
+
+
+def _skip_lambda_runtime_alias(templates: Iterable[dict[str, Any]]) -> bool:
+    for res in _resources_of_type(templates, "AWS::Lambda::Function"):
+        props = res.get("Properties") or {}
+        fn = props.get("Function") or props
+        if not isinstance(fn, dict):
+            continue
+        if "RuntimeAliases" in fn and _props_nonempty(fn.get("RuntimeAliases")):
+            return False
+    return True
+
+
+def _skip_logs_index_policy(templates: Iterable[dict[str, Any]]) -> bool:
+    for res in _resources_of_type(templates, "AWS::Logs::LogGroup"):
+        props = res.get("Properties") or {}
+        if "IndexPolicy" in props and _props_nonempty(props.get("IndexPolicy")):
+            return False
+    return True
+
+
 def template_property_rules() -> tuple[TemplatePropertyRule, ...]:
     """Rules evaluated in order; first match wins."""
 
@@ -420,6 +550,36 @@ def template_property_rules() -> tuple[TemplatePropertyRule, ...]:
             "ec2:CreateNetworkInterface",
             "NetworkConfiguration (private/VPC)",
             _skip_agentcore_vpc_lattice,
+        ),
+        TemplatePropertyRule(
+            "AWS::BedrockAgentCore::Runtime",
+            "bedrock-agentcore:*CapacityProvider*",
+            "CapacityProviderArn",
+            _skip_agentcore_capacity_or_workload,
+        ),
+        TemplatePropertyRule(
+            "AWS::BedrockAgentCore::Runtime",
+            "bedrock-agentcore:*WorkloadIdentity*",
+            "WorkloadIdentityName",
+            _skip_agentcore_capacity_or_workload,
+        ),
+        TemplatePropertyRule(
+            "AWS::Lambda::Function",
+            "lambda:*CapacityProvider*",
+            "CapacityProviderArn",
+            _skip_lambda_capacity_provider,
+        ),
+        TemplatePropertyRule(
+            "AWS::Lambda::Function",
+            "lambda:AssociateRuntimeAlias",
+            "RuntimeAliases",
+            _skip_lambda_runtime_alias,
+        ),
+        TemplatePropertyRule(
+            "AWS::Logs::LogGroup",
+            "logs:*IndexPolic*",
+            "IndexPolicy",
+            _skip_logs_index_policy,
         ),
     )
 
@@ -535,6 +695,68 @@ class HandlerPermissionResult:
     skipped: list[tuple[str, str, str]] = field(default_factory=list)
 
 
+_DEV_HANDLER_SYNTH_CONTEXT: dict[str, str] = {
+    "dashboard:enabled": "true",
+    "agentcore:enabled": "true",
+    "demo:seedDevices": "false",
+}
+
+
+def synth_dev_application_templates(
+    account: str,
+    region: str,
+    *,
+    extra_context: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """In-process synth of the four dev application stacks (no ``OerfCiStack``).
+
+    Policies for the handler check come from ``infra.dev_boundary``; this only
+    supplies template property scans. Does not set ``ci:deployRoleStack``.
+    """
+
+    import aws_cdk as cdk
+    from aws_cdk.assertions import Template
+
+    from infra.dev_boundary import apply_to_stack
+    from infra.naming import Stage
+    from infra.stacks.api_stack import OerfApiStack
+    from infra.stacks.compute_stack import OerfComputeStack
+    from infra.stacks.data_stack import OerfDataStack
+    from infra.stacks.observability import OerfObservabilityStack, lambda_functions
+
+    merged = {**_DEV_HANDLER_SYNTH_CONTEXT, "account": account}
+    if extra_context:
+        merged.update(extra_context)
+    app = cdk.App(context=merged)
+    env = cdk.Environment(account=account, region=region)
+    stage = Stage("dev")
+    data = OerfDataStack(app, "OerfDataStack", stage=stage, env=env)
+    compute = OerfComputeStack(app, "OerfComputeStack", data_stack=data, stage=stage, env=env)
+    api = OerfApiStack(
+        app,
+        "OerfApiStack",
+        data_stack=data,
+        inbound_queue=compute.inbound_queue,
+        websocket_url=compute.ws_stage.url,
+        stage=stage,
+        env=env,
+    )
+    obs = OerfObservabilityStack(
+        app,
+        "OerfObservabilityStack",
+        functions=lambda_functions(data, compute, api),
+        dead_letter_queues=[compute.inbound_dlq, compute.ingest_dlq, compute.stream_dlq],
+        state_machines=[data.cold_chain_state_machine, data.engage_party_state_machine],
+        channel_router_log_group=compute.channel_router_fn.log_group,
+        stage=stage,
+        env=env,
+    )
+    stacks = (data, compute, api, obs)
+    for stack in stacks:
+        apply_to_stack(stack)
+    return [Template.from_stack(stack).to_json() for stack in stacks]
+
+
 def default_probe_values(
     account: str,
     region: str,
@@ -585,121 +807,79 @@ def probe_resource_for_handler(
     *,
     cfn_type: str | None = None,
 ) -> str:
-    """Synthetic resource ARN for IAM simulation."""
+    """Probe resource from the AWS service reference (or ``*`` when unscoped)."""
 
     account = values["account"]
     region = values["region"]
+    if action == "iam:CreateServiceLinkedRole":
+        return (
+            f"arn:aws:iam::{account}:role/aws-service-role/"
+            f"{_service_linked_name(cfn_type)}"
+        )
+    if action in ("events:PutPermission", "events:RemovePermission"):
+        return f"arn:aws:events:{region}:{account}:event-bus/oerf-dev-events"
+    if action == "kms:ReEncrypt":
+        return f"arn:aws:kms:{region}:{account}:key/00000000-0000-0000-0000-000000000001"
+    probe_values = dict(values)
+    if cfn_type and cfn_type.startswith("AWS::ApiGatewayV2::"):
+        probe_values["_apigateway_prefer"] = "/apis/"
+    elif cfn_type and cfn_type.startswith("AWS::ApiGateway::"):
+        probe_values["_apigateway_prefer"] = "/restapis/"
+    hint = _CFN_RESOURCE_TYPE_HINT.get(cfn_type or "")
     svc = action.split(":", 1)[0]
-
     if svc == "s3":
-        return "arn:aws:s3:::oerf-dev-bucket/o"
-    if svc == "sns":
-        return f"arn:aws:sns:{region}:{account}:OerfComputeStack-dev-InboundTopicX"
-    if svc == "sqs":
-        return f"arn:aws:sqs:{region}:{account}:OerfComputeStack-dev-queue"
-    if svc == "lambda":
-        return f"arn:aws:lambda:{region}:{account}:function:oerf-dev-fn"
-    if svc == "dynamodb":
-        return f"arn:aws:dynamodb:{region}:{account}:table/OerfDataStack-dev-TableX"
-    if svc == "logs":
-        return f"arn:aws:logs:{region}:{account}:log-group:/aws/lambda/oerf-dev-x"
-    if svc == "states":
-        return f"arn:aws:states:{region}:{account}:stateMachine:OerfDataStack-dev-sm"
-    if svc == "events":
-        return f"arn:aws:events:{region}:{account}:rule/OerfComputeStack-dev-rule"
-    if svc == "cloudwatch":
-        return f"arn:aws:cloudwatch:{region}:{account}:alarm:OerfObservabilityStack-dev-a"
-    if svc == "ssm":
-        return f"arn:aws:ssm:{region}:{account}:parameter/oerf/dev/param"
-    if svc == "iam":
-        role = f"arn:aws:iam::{account}:role/OerfDataStack-dev-Example"
-        if action == "iam:CreateServiceLinkedRole":
-            return f"arn:aws:iam::{account}:role/aws-service-role/bedrock-agentcore.amazonaws.com"
-        if action == "iam:CreateRole":
-            return role
-        if action == "iam:PassRole":
-            return role
-        if action == "iam:ListRoles":
-            return "*"
-        if "RolePolicy" in action or action in (
-            "iam:GetRole",
-            "iam:AttachRolePolicy",
-            "iam:DetachRolePolicy",
-            "iam:DeleteRole",
-            "iam:ListAttachedRolePolicies",
-            "iam:ListRolePolicies",
-            "iam:ListRoleTags",
-            "iam:TagRole",
-            "iam:UntagRole",
-            "iam:UpdateRole",
-            "iam:UpdateRoleDescription",
-            "iam:UpdateAssumeRolePolicy",
-            "iam:DeleteRolePermissionsBoundary",
-            "iam:PutRolePermissionsBoundary",
-            "iam:GetRolePolicy",
-            "iam:PutRolePolicy",
-            "iam:DeleteRolePolicy",
+        tail = action.split(":", 1)[1]
+        tail_norm = tail[:1].upper() + tail[1:] if tail[:1].islower() else tail
+        object_ops = {
+            "GetObject",
+            "GetObjectVersion",
+            "PutObjectAcl",
+            "DeleteObject",
+            "PutObject",
+        }
+        bucket_ops = {
+            "ListBucket",
+            "GetBucketDefaultStorageClass",
+            "PutBucketDefaultStorageClass",
+            "PutBucketReplication",
+            "PutObjectLockConfiguration",
+            "DeleteBucketAnalyticsConfiguration",
+            "DeleteBucketCors",
+            "DeleteBucketMetricsConfiguration",
+            "DeleteBucketEncryption",
+            "DeleteBucketLifecycle",
+            "DeleteBucketReplication",
+        }
+        if tail_norm in object_ops:
+            hint = "object"
+        elif tail_norm in bucket_ops:
+            hint = "bucket"
+    arn = probe_arn_from_service_reference(
+        action, probe_values, resource_type_hint=hint or None
+    )
+    if arn is not None:
+        if arn == "*" and svc == "s3" and hint == "bucket":
+            return "arn:aws:s3:::oerf-dev-assets"
+        if arn == "*" and svc == "s3" and action.split(":", 1)[-1].lower() in (
+            "getobjectmetadata",
+            "headobject",
         ):
-            return role
-        if "UserPolicy" in action or action in ("iam:GetUser",):
-            return f"arn:aws:iam::{account}:user/oerf-dev-placeholder"
-        if "GroupPolicy" in action:
-            return f"arn:aws:iam::{account}:group/oerf-dev-placeholder"
-        return f"arn:aws:iam::{account}:policy/OerfDataStack-dev-inline"
-    if svc == "apigateway":
-        if action == "apigateway:POST":
-            return f"arn:aws:apigateway:{region}::/restapis"
-        return f"arn:aws:apigateway:{region}::/restapis/{values['dev_rest_api_id']}/*"
-    if svc == "execute-api":
-        return f"arn:aws:execute-api:{region}:{account}:*"
-    if svc == "cognito-idp":
-        if action == "cognito-idp:CreateUserPool":
-            return "*"
-        return values["dev_user_pool_arn"]
-    if svc == "cloudfront":
-        if action in (
-            "cloudfront:CreateDistribution",
-            "cloudfront:CreateDistributionWithTags",
-            "cloudfront:CreateConnectionGroup",
-        ):
-            return "*"
-        if action in (
-            "cloudfront:DeleteOriginAccessControl",
-            "cloudfront:UpdateOriginAccessControl",
-            "cloudfront:GetOriginAccessControl",
-        ):
-            return f"arn:aws:cloudfront::{account}:origin-access-control/OERFDEVOAC"
-        return values["dev_distribution_arn"]
-    if svc == "ecr":
-        return f"arn:aws:ecr:{region}:{account}:repository/cdk-oerfdev-assets"
-    if svc == "bedrock-agentcore":
-        return values["dev_runtime_arn"]
-    if svc == "social-messaging":
-        return phone_arn(region, account, values.get("_phone_suffix", "0000000000"))
+            return "arn:aws:s3:::oerf-dev-assets/cdk/oerf-dev-key"
+        return arn
+
+    svc = action.split(":", 1)[0]
     if svc == "kinesis":
         return f"arn:aws:kinesis:{region}:{account}:stream/oerf-dev-stream"
-    if svc == "vpc-lattice":
-        return f"arn:aws:vpc-lattice:{region}:{account}:servicenetwork/oerf-dev-sn"
-    if svc in ("ec2", "elasticfilesystem", "s3files"):
-        return "*"
     if svc == "firehose":
         return f"arn:aws:firehose:{region}:{account}:deliverystream/oerf-dev-delivery"
-    if svc == "kms":
-        return f"arn:aws:kms:{region}:{account}:key/00000000-0000-0000-0000-000000000000"
-    if svc == "bedrock":
-        if action == "bedrock:CreateGuardrail":
-            return "*"
-        if action == "bedrock:ListGuardrails":
-            return "*"
-        if action in (
-            "bedrock:TagResource",
-            "bedrock:UntagResource",
-            "bedrock:ListTagsForResource",
-        ):
-            return values["dev_guardrail_arn"]
-        return values["dev_guardrail_arn"]
-    if svc in ("codewhisperer", "autoloop", "workmail"):
+    if svc == "vpc-lattice":
+        return f"arn:aws:vpc-lattice:{region}:{account}:servicenetwork/oerf-dev-sn"
+    if svc in ("ec2", "elasticfilesystem", "s3files", "codewhisperer", "autoloop", "workmail"):
         return "*"
+    if svc == "execute-api":
+        return f"arn:aws:execute-api:{region}:{account}:*"
+    if svc == "social-messaging":
+        return phone_arn(region, account, values.get("_phone_suffix", "0000000000"))
     return "*"
 
 
@@ -797,12 +977,43 @@ def _boundary_context_for_probe(
         ):
             ctx.update(_DEV_TAG)
 
+    if action == "cloudwatch:PutDashboard":
+        ctx.update(_DEV_REQUEST_TAG)
+    elif action == "cloudwatch:PutMetricAlarm":
+        ctx.update(_DEV_REQUEST_TAG)
+    elif action.startswith("cloudwatch:") and (
+        "dashboard/" in resource or ":alarm:" in resource
+    ):
+        if action in (
+            "cloudwatch:TagResource",
+            "cloudwatch:UntagResource",
+            "cloudwatch:ListTagsForResource",
+        ):
+            ctx.update(_DEV_TAG)
+
     if action == "apigateway:POST":
         ctx.update(_DEV_REQUEST_TAG)
     elif action.startswith("apigateway:") and "/restapis/" in resource:
         ctx.update(_DEV_TAG)
     elif action.startswith("apigateway:") and "/apis/" in resource:
         ctx.update(_DEV_TAG)
+
+    if action.startswith("events:") and "/event-bus/" in resource:
+        if action == "events:CreateEventBus":
+            ctx.update(_DEV_REQUEST_TAG)
+        elif action in (
+            "events:TagResource",
+            "events:UntagResource",
+            "events:ListTagsForResource",
+        ):
+            ctx.update(_DEV_TAG)
+    elif action.startswith("events:") and "/rule/" in resource:
+        if action in (
+            "events:TagResource",
+            "events:UntagResource",
+            "events:ListTagsForResource",
+        ):
+            ctx.update(_DEV_TAG)
 
     if action in (
         "apigatewayv2:CreateApi",
@@ -990,39 +1201,7 @@ def handler_permission_checks(
 
 
 def attach_compatible_resource_arn(resource: str, account: str, region: str) -> str:
-    """Rewrite probe ARNs so ``resourceGroupList`` matches (drop :cdk* index)."""
+    """Return the probe ARN unchanged (kept for CLI compatibility)."""
 
-    if resource == "*":
-        return resource
-    if _CD_INDEX.search(resource):
-        return resource
-    parts = resource.split(":", 5)
-    if len(parts) < 6:
-        return resource
-    # arn:aws:service:region:account:rest...
-    svc = parts[2]
-    rest = parts[5]
-    if svc in (
-        "dynamodb",
-        "sns",
-        "sqs",
-        "lambda",
-        "states",
-        "ssm",
-        "logs",
-        "cognito-idp",
-        "cloudfront",
-        "events",
-        "cloudwatch",
-        "kms",
-        "kinesis",
-        "social-messaging",
-        "ecr",
-        "bedrock-agentcore",
-        "vpc-lattice",
-        "s3",
-        "iam",
-        "bedrock",
-    ):
-        return f"{':'.join(parts[:5])}:{rest}:cdk{hash(rest) % 100000}"
+    _ = account, region
     return resource
