@@ -33,6 +33,16 @@ from infra.service_reference_probes import probe_arn_from_service_reference
 
 # Invoked via provider Lambda only; CFN has no handler policy for this type.
 CUSTOM_RESOURCE_CFN_TYPE = "AWS::CloudFormation::CustomResource"
+_SNS_SUBSCRIPTION_TOPIC_ACTIONS = frozenset(
+    {
+        "sns:GetSubscriptionAttributes",
+        "sns:SetSubscriptionAttributes",
+        "sns:Unsubscribe",
+    }
+)
+
+_DEV_INBOUND_TOPIC_PROBE = "OerfComputeStack-dev-InboundTopic-probe"
+
 _CUSTOM_RESOURCE_SKIP = (
     "not checked: CustomResource has no handler permissions; "
     "provider Lambda uses AWS::Lambda::Function allows"
@@ -481,6 +491,10 @@ def _skip_lambda_runtime_alias(templates: Iterable[dict[str, Any]]) -> bool:
     return True
 
 
+def _skip_event_bus_policy(templates: Iterable[dict[str, Any]]) -> bool:
+    return not _any_cfn_resource_has_property(templates, "AWS::Events::EventBus", "Policy")
+
+
 def _skip_logs_index_policy(templates: Iterable[dict[str, Any]]) -> bool:
     for res in _resources_of_type(templates, "AWS::Logs::LogGroup"):
         props = res.get("Properties") or {}
@@ -612,6 +626,18 @@ def template_property_rules() -> tuple[TemplatePropertyRule, ...]:
             "logs:*IndexPolic*",
             "IndexPolicy",
             _skip_logs_index_policy,
+        ),
+        TemplatePropertyRule(
+            "AWS::Events::EventBus",
+            "events:PutPermission",
+            "Policy",
+            _skip_event_bus_policy,
+        ),
+        TemplatePropertyRule(
+            "AWS::Events::EventBus",
+            "events:RemovePermission",
+            "Policy",
+            _skip_event_bus_policy,
         ),
     )
 
@@ -789,6 +815,73 @@ def synth_dev_application_templates(
     return [Template.from_stack(stack).to_json() for stack in stacks]
 
 
+def _resolve_topic_arn_from_subscription_property(
+    topic_arn: Any,
+    topic_by_logical: dict[str, str],
+    account: str,
+    region: str,
+) -> str | None:
+    if isinstance(topic_arn, str) and topic_arn.startswith("arn:aws:sns:"):
+        return topic_arn
+    if not isinstance(topic_arn, dict):
+        return None
+    ref = topic_arn.get("Ref")
+    if isinstance(ref, str) and ref in topic_by_logical:
+        return topic_by_logical[ref]
+    return None
+
+
+def resolve_sns_subscription_topic_arn(
+    templates: Iterable[dict[str, Any]] | None,
+    account: str,
+    region: str,
+) -> str:
+    """Topic ARN used by ``AWS::SNS::Subscription`` (main inbound or dev topic)."""
+
+    fallback = f"arn:aws:sns:{region}:{account}:{_DEV_INBOUND_TOPIC_PROBE}"
+    if templates is None:
+        return fallback
+    for template in templates:
+        resources = template.get("Resources") or {}
+        topic_by_logical: dict[str, str] = {}
+        for logical_id, res in resources.items():
+            if res.get("Type") != "AWS::SNS::Topic":
+                continue
+            props = res.get("Properties") or {}
+            name = props.get("TopicName")
+            if isinstance(name, str):
+                topic_by_logical[logical_id] = f"arn:aws:sns:{region}:{account}:{name}"
+            else:
+                topic_by_logical[logical_id] = fallback
+        for res in resources.values():
+            if res.get("Type") != "AWS::SNS::Subscription":
+                continue
+            props = res.get("Properties") or {}
+            resolved = _resolve_topic_arn_from_subscription_property(
+                props.get("TopicArn"),
+                topic_by_logical,
+                account,
+                region,
+            )
+            if resolved is not None:
+                return resolved
+    return fallback
+
+
+def probe_values_for_handler_checks(
+    base: dict[str, str],
+    *,
+    dev_templates: Iterable[dict[str, Any]] | None,
+    account: str,
+    region: str,
+) -> dict[str, str]:
+    values = dict(base)
+    values["sns_subscription_topic_arn"] = resolve_sns_subscription_topic_arn(
+        dev_templates, account, region
+    )
+    return values
+
+
 def default_probe_values(
     account: str,
     region: str,
@@ -848,8 +941,6 @@ def probe_resource_for_handler(
             f"arn:aws:iam::{account}:role/aws-service-role/"
             f"{_service_linked_name(cfn_type)}"
         )
-    if action in ("events:PutPermission", "events:RemovePermission"):
-        return f"arn:aws:events:{region}:{account}:event-bus/oerf-dev-events"
     if action == "kms:ReEncrypt":
         return f"arn:aws:kms:{region}:{account}:key/00000000-0000-0000-0000-000000000001"
     probe_values = dict(values)
@@ -857,6 +948,13 @@ def probe_resource_for_handler(
         probe_values["_apigateway_prefer"] = "/apis/"
     elif cfn_type and cfn_type.startswith("AWS::ApiGateway::"):
         probe_values["_apigateway_prefer"] = "/restapis/"
+    if (
+        cfn_type == "AWS::SNS::Subscription"
+        and action in _SNS_SUBSCRIPTION_TOPIC_ACTIONS
+    ):
+        return values.get("sns_subscription_topic_arn") or (
+            f"arn:aws:sns:{region}:{account}:{_DEV_INBOUND_TOPIC_PROBE}"
+        )
     hint = _CFN_RESOURCE_TYPE_HINT.get(cfn_type or "")
     svc = action.split(":", 1)[0]
     if svc == "s3":
@@ -1108,7 +1206,12 @@ def check_handler_permissions(
                 skipped.append((cfn_type, action, na_reason))
                 continue
 
-            probe_values = dict(values)
+            probe_values = probe_values_for_handler_checks(
+                values,
+                dev_templates=dev_templates,
+                account=account,
+                region=region,
+            )
             resource = probe_resource_for_handler(action, probe_values, cfn_type=cfn_type)
             context = _boundary_context_for_probe(
                 action, resource, probe_values, cfn_type=cfn_type
@@ -1191,7 +1294,12 @@ def handler_permission_checks(
                 skipped.append((cfn_type, action, na_reason))
                 continue
 
-            probe_values = dict(values)
+            probe_values = probe_values_for_handler_checks(
+                values,
+                dev_templates=dev_templates,
+                account=account,
+                region=region,
+            )
             resource = probe_resource_for_handler(action, probe_values, cfn_type=cfn_type)
             context = _boundary_context_for_probe(
                 action, resource, probe_values, cfn_type=cfn_type
