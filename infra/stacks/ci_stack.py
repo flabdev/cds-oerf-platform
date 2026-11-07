@@ -12,11 +12,13 @@ from constructs import Construct
 from infra.dev_boundary import (
     BOUNDARY_POLICY_NAME,
     EXEC_DENY_POLICY_NAME,
+    EXEC_POLICY2_NAME,
     EXEC_POLICY_NAME,
     GUARDRAIL_ARN_CONTEXT,
     boundary_policy,
     execution_deny_policy,
     execution_policy,
+    execution_policy2,
     parse_guardrail_arn,
 )
 from infra.naming import Stage, qualify_dev_names
@@ -92,8 +94,15 @@ def _dev_boundary_policies(stack: Stack) -> None:
         stack,
         "DevCfnExecPolicy",
         managed_policy_name=EXEC_POLICY_NAME,
-        description="CloudFormation execution allows for the oerfdev dev stage",
+        description="CloudFormation execution allows for the oerfdev dev stage (dev-scoped)",
         policy_document=execution_policy(stack.account, stack.region, guardrail_arn),
+    )
+    exec_policy2 = iam.CfnManagedPolicy(
+        stack,
+        "DevCfnExecPolicy2",
+        managed_policy_name=EXEC_POLICY2_NAME,
+        description="CloudFormation execution allows for the oerfdev dev stage (unscoped)",
+        policy_document=execution_policy2(stack.account, stack.region, guardrail_arn),
     )
     exec_denies = iam.CfnManagedPolicy(
         stack,
@@ -110,6 +119,7 @@ def _dev_boundary_policies(stack: Stack) -> None:
         policy_document=boundary_policy(stack.account, stack.region, guardrail_arn),
     )
     CfnOutput(stack, "DevCfnExecPolicyArn", value=exec_policy.ref)
+    CfnOutput(stack, "DevCfnExecPolicy2Arn", value=exec_policy2.ref)
     CfnOutput(stack, "DevCfnExecDeniesArn", value=exec_denies.ref)
     CfnOutput(stack, "DevWorkloadBoundaryArn", value=boundary.ref)
 
