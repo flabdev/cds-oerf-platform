@@ -1,6 +1,6 @@
 """CloudFormation handler permission coverage for dev deploy policies.
 
-Loads ``infra/bootstrap/cfn-handler-permissions/*.json`` and checks that
+Loads ``infra/bootstrap/iam-fixtures/cfn-handler-permissions.json`` and checks that
 ``intersection_allows`` succeeds for every IAM action the handlers need,
 using dev-scoped probe ARNs and the same tag contexts as
 ``scripts/check_dev_boundary.TAGGED_POLICY_CHECKS`` where the boundary is
@@ -33,6 +33,16 @@ from infra.service_reference_probes import probe_arn_from_service_reference
 
 # Invoked via provider Lambda only; CFN has no handler policy for this type.
 CUSTOM_RESOURCE_CFN_TYPE = "AWS::CloudFormation::CustomResource"
+_SNS_SUBSCRIPTION_TOPIC_ACTIONS = frozenset(
+    {
+        "sns:GetSubscriptionAttributes",
+        "sns:SetSubscriptionAttributes",
+        "sns:Unsubscribe",
+    }
+)
+
+_DEV_INBOUND_TOPIC_PROBE = "OerfComputeStack-dev-InboundTopic-probe"
+
 _CUSTOM_RESOURCE_SKIP = (
     "not checked: CustomResource has no handler permissions; "
     "provider Lambda uses AWS::Lambda::Function allows"
@@ -98,9 +108,39 @@ _DEV_REQUEST_TAG = {_REQUEST_TAG: "dev"}
 _CD_INDEX = re.compile(r":cd[0-9]+$", re.IGNORECASE)
 
 
-def handler_permission_dir(repo_root: Path | None = None) -> Path:
+def iam_fixtures_dir(repo_root: Path | None = None) -> Path:
     root = repo_root or Path(__file__).resolve().parents[1]
-    return root / "infra" / "bootstrap" / "cfn-handler-permissions"
+    return root / "infra" / "bootstrap" / "iam-fixtures"
+
+
+def handler_permissions_fixture(repo_root: Path | None = None) -> Path:
+    return iam_fixtures_dir(repo_root) / "cfn-handler-permissions.json"
+
+
+def service_reference_fixture(repo_root: Path | None = None) -> Path:
+    return iam_fixtures_dir(repo_root) / "service-reference.json"
+
+
+def handler_permission_dir(repo_root: Path | None = None) -> Path:
+    """Default path for handler fixture data (consolidated JSON)."""
+
+    return handler_permissions_fixture(repo_root)
+
+
+def dev_template_resource_types(template: dict[str, Any]) -> set[str]:
+    """``AWS::…`` types declared in one synthesized CloudFormation template."""
+
+    found: set[str] = set()
+    resources = template.get("Resources")
+    if not isinstance(resources, dict):
+        return found
+    for resource in resources.values():
+        if not isinstance(resource, dict):
+            continue
+        cfn_type = resource.get("Type")
+        if isinstance(cfn_type, str) and cfn_type.startswith("AWS::"):
+            found.add(cfn_type)
+    return found
 
 
 def type_to_filename(cfn_type: str) -> str:
@@ -108,24 +148,26 @@ def type_to_filename(cfn_type: str) -> str:
 
 
 def load_handler_files(
-    directory: Path,
+    fixture: Path,
     *,
     types: Iterable[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Load JSON files; keys are CloudFormation type names."""
+    """Load handler permissions; keys are CloudFormation type names."""
 
     want = frozenset(types) if types is not None else None
     out: dict[str, dict[str, Any]] = {}
-    for path in sorted(directory.glob("*.json")):
-        if path.stat().st_size == 0:
-            continue
-        data = json.loads(path.read_text(encoding="utf-8"))
-        cfn_type = data.get("type")
-        if not isinstance(cfn_type, str):
-            continue
+    if not fixture.is_file():
+        return out
+    blob = json.loads(fixture.read_text(encoding="utf-8"))
+    if not isinstance(blob, dict):
+        return out
+    for cfn_type in sorted(blob):
         if want is not None and cfn_type not in want:
             continue
-        out[cfn_type] = data
+        handlers = blob[cfn_type]
+        if not isinstance(handlers, dict):
+            continue
+        out[cfn_type] = {"type": cfn_type, "handlers": handlers}
     return out
 
 
@@ -144,19 +186,19 @@ def iter_handler_list_actions(data: dict[str, Any]) -> list[str]:
 
 
 def collect_handler_list_permissions(
-    handler_dir: Path,
+    handler_fixture: Path,
     *,
     types: Iterable[str] | None = None,
 ) -> list[tuple[str, str]]:
     """``(cfn_type, action)`` pairs from ``list`` handlers only."""
 
     load_types = frozenset(types) if types is not None else _DEV_APP_TEMPLATE_TYPES
+    documents = load_handler_files(handler_fixture, types=load_types)
     out: list[tuple[str, str]] = []
     for cfn_type in sorted(load_types):
-        path = handler_dir / type_to_filename(cfn_type)
-        if not path.is_file() or path.stat().st_size == 0:
+        data = documents.get(cfn_type)
+        if data is None:
             continue
-        data = json.loads(path.read_text(encoding="utf-8"))
         for action in iter_handler_list_actions(data):
             out.append((cfn_type, action))
     return out
@@ -449,6 +491,10 @@ def _skip_lambda_runtime_alias(templates: Iterable[dict[str, Any]]) -> bool:
     return True
 
 
+def _skip_event_bus_policy(templates: Iterable[dict[str, Any]]) -> bool:
+    return not _any_cfn_resource_has_property(templates, "AWS::Events::EventBus", "Policy")
+
+
 def _skip_logs_index_policy(templates: Iterable[dict[str, Any]]) -> bool:
     for res in _resources_of_type(templates, "AWS::Logs::LogGroup"):
         props = res.get("Properties") or {}
@@ -580,6 +626,18 @@ def template_property_rules() -> tuple[TemplatePropertyRule, ...]:
             "logs:*IndexPolic*",
             "IndexPolicy",
             _skip_logs_index_policy,
+        ),
+        TemplatePropertyRule(
+            "AWS::Events::EventBus",
+            "events:PutPermission",
+            "Policy",
+            _skip_event_bus_policy,
+        ),
+        TemplatePropertyRule(
+            "AWS::Events::EventBus",
+            "events:RemovePermission",
+            "Policy",
+            _skip_event_bus_policy,
         ),
     )
 
@@ -757,6 +815,73 @@ def synth_dev_application_templates(
     return [Template.from_stack(stack).to_json() for stack in stacks]
 
 
+def _resolve_topic_arn_from_subscription_property(
+    topic_arn: Any,
+    topic_by_logical: dict[str, str],
+    account: str,
+    region: str,
+) -> str | None:
+    if isinstance(topic_arn, str) and topic_arn.startswith("arn:aws:sns:"):
+        return topic_arn
+    if not isinstance(topic_arn, dict):
+        return None
+    ref = topic_arn.get("Ref")
+    if isinstance(ref, str) and ref in topic_by_logical:
+        return topic_by_logical[ref]
+    return None
+
+
+def resolve_sns_subscription_topic_arn(
+    templates: Iterable[dict[str, Any]] | None,
+    account: str,
+    region: str,
+) -> str:
+    """Topic ARN used by ``AWS::SNS::Subscription`` (main inbound or dev topic)."""
+
+    fallback = f"arn:aws:sns:{region}:{account}:{_DEV_INBOUND_TOPIC_PROBE}"
+    if templates is None:
+        return fallback
+    for template in templates:
+        resources = template.get("Resources") or {}
+        topic_by_logical: dict[str, str] = {}
+        for logical_id, res in resources.items():
+            if res.get("Type") != "AWS::SNS::Topic":
+                continue
+            props = res.get("Properties") or {}
+            name = props.get("TopicName")
+            if isinstance(name, str):
+                topic_by_logical[logical_id] = f"arn:aws:sns:{region}:{account}:{name}"
+            else:
+                topic_by_logical[logical_id] = fallback
+        for res in resources.values():
+            if res.get("Type") != "AWS::SNS::Subscription":
+                continue
+            props = res.get("Properties") or {}
+            resolved = _resolve_topic_arn_from_subscription_property(
+                props.get("TopicArn"),
+                topic_by_logical,
+                account,
+                region,
+            )
+            if resolved is not None:
+                return resolved
+    return fallback
+
+
+def probe_values_for_handler_checks(
+    base: dict[str, str],
+    *,
+    dev_templates: Iterable[dict[str, Any]] | None,
+    account: str,
+    region: str,
+) -> dict[str, str]:
+    values = dict(base)
+    values["sns_subscription_topic_arn"] = resolve_sns_subscription_topic_arn(
+        dev_templates, account, region
+    )
+    return values
+
+
 def default_probe_values(
     account: str,
     region: str,
@@ -816,8 +941,6 @@ def probe_resource_for_handler(
             f"arn:aws:iam::{account}:role/aws-service-role/"
             f"{_service_linked_name(cfn_type)}"
         )
-    if action in ("events:PutPermission", "events:RemovePermission"):
-        return f"arn:aws:events:{region}:{account}:event-bus/oerf-dev-events"
     if action == "kms:ReEncrypt":
         return f"arn:aws:kms:{region}:{account}:key/00000000-0000-0000-0000-000000000001"
     probe_values = dict(values)
@@ -825,6 +948,13 @@ def probe_resource_for_handler(
         probe_values["_apigateway_prefer"] = "/apis/"
     elif cfn_type and cfn_type.startswith("AWS::ApiGateway::"):
         probe_values["_apigateway_prefer"] = "/restapis/"
+    if (
+        cfn_type == "AWS::SNS::Subscription"
+        and action in _SNS_SUBSCRIPTION_TOPIC_ACTIONS
+    ):
+        return values.get("sns_subscription_topic_arn") or (
+            f"arn:aws:sns:{region}:{account}:{_DEV_INBOUND_TOPIC_PROBE}"
+        )
     hint = _CFN_RESOURCE_TYPE_HINT.get(cfn_type or "")
     svc = action.split(":", 1)[0]
     if svc == "s3":
@@ -1043,32 +1173,30 @@ def check_handler_permissions(
     region: str,
     guardrail_arn: str,
     types: Iterable[str] | None = None,
-    handler_dir: Path | None = None,
+    handler_fixture: Path | None = None,
     kms_key_arn_set: bool = False,
     dev_templates: Iterable[dict[str, Any]] | None = None,
+    handler_dir: Path | None = None,
 ) -> HandlerPermissionResult:
     """Check each applicable handler action; return failures and skipped rows."""
 
     values = default_probe_values(account, region, guardrail_arn=guardrail_arn)
-    directory = handler_dir or handler_permission_dir()
+    fixture = handler_fixture or handler_dir or handler_permission_dir()
     load_types = frozenset(types) if types is not None else _DEV_APP_TEMPLATE_TYPES
-    documents = load_handler_files(directory, types=load_types)
+    documents = load_handler_files(fixture, types=load_types)
     failures: list[str] = []
     skipped: list[tuple[str, str, str]] = []
 
     for cfn_type in sorted(load_types):
-        path = directory / type_to_filename(cfn_type)
         if cfn_type == CUSTOM_RESOURCE_CFN_TYPE:
             skipped.append((cfn_type, "*", _CUSTOM_RESOURCE_SKIP))
             continue
-        if not path.exists():
-            failures.append(f"{cfn_type} <missing JSON {path.name}>")
-            continue
-        if path.stat().st_size == 0:
-            continue
         data = documents.get(cfn_type)
         if data is None:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            failures.append(f"{cfn_type} <missing in {fixture.name}>")
+            continue
+        if not _split_handler_actions(data)[0] and not _split_handler_actions(data)[1]:
+            continue
 
         for action in iter_handler_actions(data):
             na_reason = _bedrock_kms_skipped_reason(
@@ -1078,7 +1206,12 @@ def check_handler_permissions(
                 skipped.append((cfn_type, action, na_reason))
                 continue
 
-            probe_values = dict(values)
+            probe_values = probe_values_for_handler_checks(
+                values,
+                dev_templates=dev_templates,
+                account=account,
+                region=region,
+            )
             resource = probe_resource_for_handler(action, probe_values, cfn_type=cfn_type)
             context = _boundary_context_for_probe(
                 action, resource, probe_values, cfn_type=cfn_type
@@ -1126,9 +1259,10 @@ def handler_permission_checks(
     region: str,
     guardrail_arn: str,
     types: Iterable[str] | None = None,
-    handler_dir: Path | None = None,
+    handler_fixture: Path | None = None,
     kms_key_arn_set: bool = False,
     dev_templates: Iterable[dict[str, Any]] | None = None,
+    handler_dir: Path | None = None,
 ) -> tuple[
     list[tuple[str, str, str, bool, dict[str, str]]],
     list[tuple[str, str, str]],
@@ -1136,20 +1270,21 @@ def handler_permission_checks(
     """Rows for IAM simulation: (cfn_type, action, resource, expect_allow, context)."""
 
     values = default_probe_values(account, region, guardrail_arn=guardrail_arn)
-    directory = handler_dir or handler_permission_dir()
+    fixture = handler_fixture or handler_dir or handler_permission_dir()
     load_types = frozenset(types) if types is not None else _DEV_APP_TEMPLATE_TYPES
-    documents = load_handler_files(directory, types=load_types)
+    documents = load_handler_files(fixture, types=load_types)
     rows: list[tuple[str, str, str, bool, dict[str, str]]] = []
     skipped: list[tuple[str, str, str]] = []
 
     for cfn_type in sorted(load_types):
-        path = directory / type_to_filename(cfn_type)
         if cfn_type == CUSTOM_RESOURCE_CFN_TYPE:
             skipped.append((cfn_type, "*", _CUSTOM_RESOURCE_SKIP))
             continue
-        if not path.exists() or path.stat().st_size == 0:
+        data = documents.get(cfn_type)
+        if data is None:
             continue
-        data = documents.get(cfn_type) or json.loads(path.read_text(encoding="utf-8"))
+        if not _split_handler_actions(data)[0] and not _split_handler_actions(data)[1]:
+            continue
 
         for action in iter_handler_actions(data):
             na_reason = _bedrock_kms_skipped_reason(
@@ -1159,7 +1294,12 @@ def handler_permission_checks(
                 skipped.append((cfn_type, action, na_reason))
                 continue
 
-            probe_values = dict(values)
+            probe_values = probe_values_for_handler_checks(
+                values,
+                dev_templates=dev_templates,
+                account=account,
+                region=region,
+            )
             resource = probe_resource_for_handler(action, probe_values, cfn_type=cfn_type)
             context = _boundary_context_for_probe(
                 action, resource, probe_values, cfn_type=cfn_type

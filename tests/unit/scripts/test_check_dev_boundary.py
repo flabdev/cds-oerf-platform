@@ -13,7 +13,11 @@ os.environ.setdefault(
 )
 
 from infra.dev_boundary import intersection_allows  # noqa: E402
-from scripts.check_dev_boundary import main  # noqa: E402
+from scripts.check_dev_boundary import (  # noqa: E402
+    LIVE_IAM_SNS_TOPIC_ARN_UNVERIFIABLE,
+    _handler_live_expect,
+    main,
+)
 
 _ACCOUNT = "000000000000"
 _REGION = "us-east-1"
@@ -87,6 +91,40 @@ def test_handler_permissions_mode_runs_with_only_dev_guardrail(monkeypatch) -> N
         ]
     )
     assert code == 0
+
+
+def test_handler_live_sns_simulator_unverifiable(capsys) -> None:
+    """Known SNS topic-ARN simulator gaps are UNVERIFIABLE, not FAIL."""
+
+    topic = (
+        f"arn:aws:sns:{_REGION}:{_ACCOUNT}:OerfComputeStack-InboundTopic89167089"
+    )
+    for cfn_type, action in LIVE_IAM_SNS_TOPIC_ARN_UNVERIFIABLE:
+        inc, unverifiable = _handler_live_expect(
+            cfn_type=cfn_type,
+            action=action,
+            resource=topic,
+            expect_allow=True,
+            decision="implicitDeny",
+        )
+        assert inc == 0
+        assert unverifiable is True
+    out = capsys.readouterr().out
+    assert "UNVERIFIABLE (simulator does not model topic resource for this action)" in out
+    assert out.count("UNVERIFIABLE") == len(LIVE_IAM_SNS_TOPIC_ARN_UNVERIFIABLE)
+
+
+def test_handler_live_implicit_deny_outside_sns_residual_stays_fail(capsys) -> None:
+    inc, unverifiable = _handler_live_expect(
+        cfn_type="AWS::SNS::Topic",
+        action="sns:DeleteTopic",
+        resource=f"arn:aws:sns:{_REGION}:{_ACCOUNT}:other-topic",
+        expect_allow=True,
+        decision="implicitDeny",
+    )
+    assert inc == 1
+    assert unverifiable is False
+    assert "FAIL" in capsys.readouterr().out
 
 
 def test_handler_permissions_repo_only_skips_live_iam(monkeypatch) -> None:

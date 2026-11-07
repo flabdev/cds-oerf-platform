@@ -1,4 +1,4 @@
-"""IAM probe ARNs from ``infra/bootstrap/service-reference`` JSON."""
+"""IAM probe ARNs from ``infra/bootstrap/iam-fixtures/service-reference.json``."""
 
 from __future__ import annotations
 
@@ -8,7 +8,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-_REFERENCE_DIR = Path(__file__).resolve().parents[1] / "infra" / "bootstrap" / "service-reference"
+_FIXTURE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "infra"
+    / "bootstrap"
+    / "iam-fixtures"
+    / "service-reference.json"
+)
 
 # IAM prefix -> service-reference file stem (``{stem}.json`` on disk).
 _SERVICE_FILES: dict[str, str] = {
@@ -34,7 +40,7 @@ _SERVICE_FILES: dict[str, str] = {
     "xray": "xray",
 }
 
-# Services used by handlers but not vendored in service-reference/.
+# Services used by handlers but not present in the trimmed service-reference fixture.
 _FALLBACK_PROBE_BUILDERS: dict[str, Any] = {}
 
 _DEV_SUFFIX = "-dev-probe"
@@ -115,12 +121,19 @@ def _fill_arn_format(template: str, placeholders: dict[str, str]) -> str:
     return _PLACEHOLDER_RE.sub(repl, template)
 
 
+@lru_cache(maxsize=1)
+def _load_service_reference_blob() -> dict[str, Any]:
+    if not _FIXTURE_PATH.is_file():
+        return {}
+    data = json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
+    return data if isinstance(data, dict) else {}
+
+
 @lru_cache(maxsize=64)
 def _load_service(file_stem: str) -> dict[str, Any] | None:
-    path = _REFERENCE_DIR / f"{file_stem}.json"
-    if not path.is_file():
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    blob = _load_service_reference_blob()
+    doc = blob.get(file_stem)
+    return doc if isinstance(doc, dict) else None
 
 
 def _iam_action_name(action: str) -> tuple[str, str]:

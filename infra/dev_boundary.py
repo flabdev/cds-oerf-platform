@@ -372,11 +372,6 @@ def execution_policy(account: str, region: str, guardrail_arn: str) -> dict[str,
                 ],
             ),
             _allow(
-                "EVP",
-                ["events:PutPermission", "events:RemovePermission"],
-                f"arn:aws:events:*:{account}:event-bus/*-dev-*",
-            ),
-            _allow(
                 "CRB",
                 _ROLE_CREATE_ACTIONS,
                 _role_pattern(account),

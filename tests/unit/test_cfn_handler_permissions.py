@@ -14,7 +14,6 @@ from infra.cfn_handler_permission_tests import (
     check_handler_permissions,
     iter_handler_actions,
     load_handler_files,
-    type_to_filename,
 )
 from infra.dev_boundary import apply_to_stack
 from infra.naming import Stage
@@ -68,27 +67,32 @@ def test_dev_templates_match_handler_fixture_types() -> None:
 
     assert synth_types == _DEV_APP_TEMPLATE_TYPES, (
         "Update infra/cfn_handler_permission_tests._DEV_APP_TEMPLATE_TYPES and add "
-        f"infra/bootstrap/cfn-handler-permissions JSON for new types. "
+        f"infra/bootstrap/iam-fixtures/cfn-handler-permissions.json for new types. "
         f"only_in_fixture={sorted(_DEV_APP_TEMPLATE_TYPES - synth_types)} "
         f"only_in_synth={sorted(synth_types - _DEV_APP_TEMPLATE_TYPES)}"
     )
 
 
 def test_handler_json_exists_for_every_dev_template_type() -> None:
-    directory = (
-        Path(__file__).resolve().parents[2] / "infra" / "bootstrap" / "cfn-handler-permissions"
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "infra"
+        / "bootstrap"
+        / "iam-fixtures"
+        / "cfn-handler-permissions.json"
     )
-    missing = []
-    for cfn_type in sorted(_DEV_APP_TEMPLATE_TYPES):
-        path = directory / type_to_filename(cfn_type)
-        if not path.exists():
-            missing.append(cfn_type)
-    assert not missing, f"Missing handler JSON for: {missing}"
+    documents = load_handler_files(fixture, types=_DEV_APP_TEMPLATE_TYPES)
+    missing = sorted(_DEV_APP_TEMPLATE_TYPES - set(documents))
+    assert not missing, f"Missing handler entry for: {missing}"
 
 
 def test_handler_files_cover_at_least_one_action_or_are_custom_resource_empty() -> None:
     directory = (
-        Path(__file__).resolve().parents[2] / "infra" / "bootstrap" / "cfn-handler-permissions"
+        Path(__file__).resolve().parents[2]
+        / "infra"
+        / "bootstrap"
+        / "iam-fixtures"
+        / "cfn-handler-permissions.json"
     )
     documents = load_handler_files(directory, types=_DEV_APP_TEMPLATE_TYPES)
     for cfn_type, data in documents.items():

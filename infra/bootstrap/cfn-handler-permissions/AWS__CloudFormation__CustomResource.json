@@ -1,4 +1,0 @@
-{
-  "type": "AWS::CloudFormation::CustomResource",
-  "handlers": {}
-}
