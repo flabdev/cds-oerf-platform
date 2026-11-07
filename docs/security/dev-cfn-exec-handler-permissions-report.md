@@ -2,6 +2,8 @@
 
 Credential-free checks: `infra/cfn_handler_permission_tests.py`,
 `infra/service_reference_probes.py`, `tests/unit/test_cfn_handler_permissions.py`.
+Fixtures: `infra/bootstrap/iam-fixtures/cfn-handler-permissions.json` and
+`service-reference.json` (refresh: `./scripts/refresh_iam_fixtures.sh`).
 Live/repo parity: `scripts/check_dev_boundary.py --handler-permissions` evaluates
 **`OerfDevCfnExecPolicy` + `OerfDevCfnExecPolicy2` + `OerfDevCfnExecDenies`**
 with `OerfDevWorkloadBoundary`.
@@ -40,7 +42,14 @@ is currently unused.
 
 ## Handler check
 
-**468** deploy simulations, **51** skips, **0** gaps after service-reference probes.
+**468** deploy simulations, **51** skips, **47** list-informational, **0** gaps (unchanged after fixture consolidation).
+
+### Fixture size (consolidation)
+
+| Artifact | Before (dirs) | After (single file) |
+| --- | ---: | ---: |
+| Handler permissions | 40,570 B (50 files) | 37,976 B |
+| Service reference | 2,819,567 B (21 files) | 148,910 B |
 
 ```bash
 JSII_RUNTIME_PACKAGE_CACHE_ROOT="$(pwd)/.jsii-cache" \

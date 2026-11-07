@@ -19,24 +19,22 @@ When the CDK CLI is upgraded, run `cdk bootstrap --show-template`, diff it again
 
 ## CloudFormation handler permissions (repo fixtures)
 
-The folder `infra/bootstrap/cfn-handler-permissions/` stores one JSON file per CloudFormation resource type the four dev application stacks use. Each file has a top-level `"type"` and a `"handlers"` object whose keys are `create`, `read`, `update`, `delete`, and `list`; each value is the list of IAM actions the handler performs (from the registered type schema).
+Two generated files live in `infra/bootstrap/iam-fixtures/`:
 
-**Refresh when:** you add a new `AWS::…` type to a dev app template, or AWS publishes new handler actions for a type you already use.
+- `cfn-handler-permissions.json` — object keyed by `AWS::…` type name. Each value has sorted, de-duplicated `create`, `read`, `update`, `delete`, and `list` action lists (from the CloudFormation type schema). Types are only those present in the four dev application stacks (no `AWS::CDK::Metadata`).
+- `service-reference.json` — trimmed IAM Service Reference data for probes: per service, action names with resource types (and `Required` when present) plus condition keys, and ARN formats for resource types those actions need.
 
-**How to refresh:** for each type name `T` (for example `AWS::Bedrock::Guardrail`), fetch the resource type schema and copy the handler permission lists into `infra/bootstrap/cfn-handler-permissions/<T with :: replaced by __>.json`. A typical loop uses the CloudFormation API, for example:
+**Refresh when:** you add a new `AWS::…` type to a dev app template, update `_DEV_APP_TEMPLATE_TYPES` in `infra/cfn_handler_permission_tests.py`, or AWS publishes new handler actions for a type you already use.
+
+**How to refresh (requires AWS credentials for `cloudformation:DescribeType` and HTTPS to `servicereference.us-east-1.amazonaws.com`):**
 
 ```bash
-for TYPE in AWS::Service::ResourceType AWS::Other::Type; do
-  SAFE=${TYPE//::/__}
-  aws cloudformation describe-type \
-    --type RESOURCE \
-    --type-name "$TYPE" \
-    --query 'Schema' \
-    --output text | jq . > "infra/bootstrap/cfn-handler-permissions/${SAFE}.json"
-done
+export JSII_RUNTIME_PACKAGE_CACHE_ROOT="$(pwd)/.jsii-cache"
+AWS_PROFILE=your-profile AWS_REGION=us-east-1 ACCOUNT=000000000000 \
+  ./scripts/refresh_iam_fixtures.sh
 ```
 
-Adjust the `TYPE` list to match the union of resource types in the dev synth. Merge or edit the saved JSON so it matches the shape above (`type` + `handlers` with IAM action strings) if the raw schema differs.
+The script synthesizes the dev application stacks (same context flags as the unit test), calls `DescribeType` for every listed `AWS::…` type, downloads and trims service-reference JSON for services those handlers touch, and rewrites both fixture files. Pass `--from-legacy` only to merge old per-file trees locally (no AWS).
 
 **What the check does not simulate**
 
@@ -53,10 +51,10 @@ Adjust the `TYPE` list to match the union of resource types in the dev synth. Me
   --region us-east-1 \
   --account 906048429638 \
   --dev-guardrail-arn "arn:aws:bedrock:us-east-1:906048429638:guardrail/<id>" \
-  --handler-permissions infra/bootstrap/cfn-handler-permissions
+  --handler-permissions
 ```
 
-You can omit the path and use `--handler-permissions` alone (default directory). `--main-guardrail-arn` is optional in this mode; other router or channel flags are not required.
+You can omit the path and use `--handler-permissions` alone (default: `infra/bootstrap/iam-fixtures/cfn-handler-permissions.json`). `--main-guardrail-arn` is optional in this mode; other router or channel flags are not required.
 
 **Repo vs live:** each applicable handler action is checked twice: `repo-exec` evaluates `infra/dev_boundary.py` locally (no IAM API). `live-exec` calls `iam:SimulatePrincipalPolicy` on the deployed `cdk-oerfdev-cfn-exec-role` and needs valid credentials (`aws sso login` when using SSO). If credentials are expired, refresh the profile or add `--handler-repo-only` to run only the local check.
 

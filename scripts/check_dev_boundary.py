@@ -436,7 +436,7 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help=(
             "Only run IAM simulations for CloudFormation handler permissions "
-            "in this directory (default: infra/bootstrap/cfn-handler-permissions). "
+            "fixture (default: infra/bootstrap/iam-fixtures/cfn-handler-permissions.json). "
             "Requires the same exec role ARN and policies as the unit test. "
             "Other checks are skipped."
         ),

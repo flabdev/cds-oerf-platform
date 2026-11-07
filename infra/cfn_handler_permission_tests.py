@@ -1,6 +1,6 @@
 """CloudFormation handler permission coverage for dev deploy policies.
 
-Loads ``infra/bootstrap/cfn-handler-permissions/*.json`` and checks that
+Loads ``infra/bootstrap/iam-fixtures/cfn-handler-permissions.json`` and checks that
 ``intersection_allows`` succeeds for every IAM action the handlers need,
 using dev-scoped probe ARNs and the same tag contexts as
 ``scripts/check_dev_boundary.TAGGED_POLICY_CHECKS`` where the boundary is
@@ -98,9 +98,39 @@ _DEV_REQUEST_TAG = {_REQUEST_TAG: "dev"}
 _CD_INDEX = re.compile(r":cd[0-9]+$", re.IGNORECASE)
 
 
-def handler_permission_dir(repo_root: Path | None = None) -> Path:
+def iam_fixtures_dir(repo_root: Path | None = None) -> Path:
     root = repo_root or Path(__file__).resolve().parents[1]
-    return root / "infra" / "bootstrap" / "cfn-handler-permissions"
+    return root / "infra" / "bootstrap" / "iam-fixtures"
+
+
+def handler_permissions_fixture(repo_root: Path | None = None) -> Path:
+    return iam_fixtures_dir(repo_root) / "cfn-handler-permissions.json"
+
+
+def service_reference_fixture(repo_root: Path | None = None) -> Path:
+    return iam_fixtures_dir(repo_root) / "service-reference.json"
+
+
+def handler_permission_dir(repo_root: Path | None = None) -> Path:
+    """Default path for handler fixture data (consolidated JSON)."""
+
+    return handler_permissions_fixture(repo_root)
+
+
+def dev_template_resource_types(template: dict[str, Any]) -> set[str]:
+    """``AWS::…`` types declared in one synthesized CloudFormation template."""
+
+    found: set[str] = set()
+    resources = template.get("Resources")
+    if not isinstance(resources, dict):
+        return found
+    for resource in resources.values():
+        if not isinstance(resource, dict):
+            continue
+        cfn_type = resource.get("Type")
+        if isinstance(cfn_type, str) and cfn_type.startswith("AWS::"):
+            found.add(cfn_type)
+    return found
 
 
 def type_to_filename(cfn_type: str) -> str:
@@ -108,24 +138,26 @@ def type_to_filename(cfn_type: str) -> str:
 
 
 def load_handler_files(
-    directory: Path,
+    fixture: Path,
     *,
     types: Iterable[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Load JSON files; keys are CloudFormation type names."""
+    """Load handler permissions; keys are CloudFormation type names."""
 
     want = frozenset(types) if types is not None else None
     out: dict[str, dict[str, Any]] = {}
-    for path in sorted(directory.glob("*.json")):
-        if path.stat().st_size == 0:
-            continue
-        data = json.loads(path.read_text(encoding="utf-8"))
-        cfn_type = data.get("type")
-        if not isinstance(cfn_type, str):
-            continue
+    if not fixture.is_file():
+        return out
+    blob = json.loads(fixture.read_text(encoding="utf-8"))
+    if not isinstance(blob, dict):
+        return out
+    for cfn_type in sorted(blob):
         if want is not None and cfn_type not in want:
             continue
-        out[cfn_type] = data
+        handlers = blob[cfn_type]
+        if not isinstance(handlers, dict):
+            continue
+        out[cfn_type] = {"type": cfn_type, "handlers": handlers}
     return out
 
 
@@ -144,19 +176,19 @@ def iter_handler_list_actions(data: dict[str, Any]) -> list[str]:
 
 
 def collect_handler_list_permissions(
-    handler_dir: Path,
+    handler_fixture: Path,
     *,
     types: Iterable[str] | None = None,
 ) -> list[tuple[str, str]]:
     """``(cfn_type, action)`` pairs from ``list`` handlers only."""
 
     load_types = frozenset(types) if types is not None else _DEV_APP_TEMPLATE_TYPES
+    documents = load_handler_files(handler_fixture, types=load_types)
     out: list[tuple[str, str]] = []
     for cfn_type in sorted(load_types):
-        path = handler_dir / type_to_filename(cfn_type)
-        if not path.is_file() or path.stat().st_size == 0:
+        data = documents.get(cfn_type)
+        if data is None:
             continue
-        data = json.loads(path.read_text(encoding="utf-8"))
         for action in iter_handler_list_actions(data):
             out.append((cfn_type, action))
     return out
@@ -1043,32 +1075,30 @@ def check_handler_permissions(
     region: str,
     guardrail_arn: str,
     types: Iterable[str] | None = None,
-    handler_dir: Path | None = None,
+    handler_fixture: Path | None = None,
     kms_key_arn_set: bool = False,
     dev_templates: Iterable[dict[str, Any]] | None = None,
+    handler_dir: Path | None = None,
 ) -> HandlerPermissionResult:
     """Check each applicable handler action; return failures and skipped rows."""
 
     values = default_probe_values(account, region, guardrail_arn=guardrail_arn)
-    directory = handler_dir or handler_permission_dir()
+    fixture = handler_fixture or handler_dir or handler_permission_dir()
     load_types = frozenset(types) if types is not None else _DEV_APP_TEMPLATE_TYPES
-    documents = load_handler_files(directory, types=load_types)
+    documents = load_handler_files(fixture, types=load_types)
     failures: list[str] = []
     skipped: list[tuple[str, str, str]] = []
 
     for cfn_type in sorted(load_types):
-        path = directory / type_to_filename(cfn_type)
         if cfn_type == CUSTOM_RESOURCE_CFN_TYPE:
             skipped.append((cfn_type, "*", _CUSTOM_RESOURCE_SKIP))
             continue
-        if not path.exists():
-            failures.append(f"{cfn_type} <missing JSON {path.name}>")
-            continue
-        if path.stat().st_size == 0:
-            continue
         data = documents.get(cfn_type)
         if data is None:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            failures.append(f"{cfn_type} <missing in {fixture.name}>")
+            continue
+        if not _split_handler_actions(data)[0] and not _split_handler_actions(data)[1]:
+            continue
 
         for action in iter_handler_actions(data):
             na_reason = _bedrock_kms_skipped_reason(
@@ -1126,9 +1156,10 @@ def handler_permission_checks(
     region: str,
     guardrail_arn: str,
     types: Iterable[str] | None = None,
-    handler_dir: Path | None = None,
+    handler_fixture: Path | None = None,
     kms_key_arn_set: bool = False,
     dev_templates: Iterable[dict[str, Any]] | None = None,
+    handler_dir: Path | None = None,
 ) -> tuple[
     list[tuple[str, str, str, bool, dict[str, str]]],
     list[tuple[str, str, str]],
@@ -1136,20 +1167,21 @@ def handler_permission_checks(
     """Rows for IAM simulation: (cfn_type, action, resource, expect_allow, context)."""
 
     values = default_probe_values(account, region, guardrail_arn=guardrail_arn)
-    directory = handler_dir or handler_permission_dir()
+    fixture = handler_fixture or handler_dir or handler_permission_dir()
     load_types = frozenset(types) if types is not None else _DEV_APP_TEMPLATE_TYPES
-    documents = load_handler_files(directory, types=load_types)
+    documents = load_handler_files(fixture, types=load_types)
     rows: list[tuple[str, str, str, bool, dict[str, str]]] = []
     skipped: list[tuple[str, str, str]] = []
 
     for cfn_type in sorted(load_types):
-        path = directory / type_to_filename(cfn_type)
         if cfn_type == CUSTOM_RESOURCE_CFN_TYPE:
             skipped.append((cfn_type, "*", _CUSTOM_RESOURCE_SKIP))
             continue
-        if not path.exists() or path.stat().st_size == 0:
+        data = documents.get(cfn_type)
+        if data is None:
             continue
-        data = documents.get(cfn_type) or json.loads(path.read_text(encoding="utf-8"))
+        if not _split_handler_actions(data)[0] and not _split_handler_actions(data)[1]:
+            continue
 
         for action in iter_handler_actions(data):
             na_reason = _bedrock_kms_skipped_reason(
