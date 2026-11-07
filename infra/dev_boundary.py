@@ -3,8 +3,9 @@
 ``OerfDevCfnExecPolicy``, ``OerfDevCfnExecPolicy2``, and ``OerfDevCfnExecDenies``
 replace AdministratorAccess on ``cdk-oerfdev-cfn-exec-role``. Dev name patterns
 and star-resource allows do not fit in one managed policy, so allows are split
-across two identity policies and the denies are the third. ``OerfDevWorkloadBoundary`` is attached to that
-role by the bootstrap and to every role the four dev application stacks
+across two identity policies and the denies are the third.
+``OerfDevWorkloadBoundary`` is attached to that role by the bootstrap and to
+every role the four dev application stacks
 create. The documents are built from the stack account and region.
 
 The boundary is ``Allow *`` plus a ``Deny`` on anything that is not a dev name,
