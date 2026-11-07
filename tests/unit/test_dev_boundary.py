@@ -376,6 +376,36 @@ def test_unscoped_star_action_is_allowed_and_a_scoped_star_is_not() -> None:
     assert runtime_violations(blocked, ACCOUNT, REGION)
 
 
+# Pinned to deployed ``OerfCiStack-dev`` values. On ``AWS::IAM::ManagedPolicy``,
+# changing ``Description`` or ``ManagedPolicyName`` forces replacement; a second
+# policy with the same name then fails with IAM 409 (AlreadyExists).
+_PINNED_CI_MANAGED_POLICY_DESCRIPTIONS: dict[str, str] = {
+    EXEC_POLICY_NAME: "CloudFormation execution allows for the oerfdev dev stage",
+    EXEC_DENY_POLICY_NAME: "CloudFormation execution denies for the oerfdev dev stage",
+    BOUNDARY_POLICY_NAME: "Permissions boundary for dev workload roles and the execution role",
+}
+
+
+def test_ci_stack_existing_managed_policies_pin_name_and_description() -> None:
+    app = cdk.App(context=_CI_CONTEXT)
+    stack = OerfCiStack(
+        app,
+        "OerfCiStack-dev",
+        stage=Stage("dev"),
+        env=cdk.Environment(account=ACCOUNT, region=REGION),
+    )
+    template = Template.from_stack(stack).to_json()
+    policies = {
+        resource["Properties"]["ManagedPolicyName"]: resource["Properties"]
+        for resource in template["Resources"].values()
+        if resource["Type"] == "AWS::IAM::ManagedPolicy"
+    }
+    for name, description in _PINNED_CI_MANAGED_POLICY_DESCRIPTIONS.items():
+        assert name in policies, name
+        assert policies[name]["ManagedPolicyName"] == name
+        assert policies[name]["Description"] == description
+
+
 def test_ci_stack_policies_and_github_role_untouched() -> None:
     app = cdk.App(context=_CI_CONTEXT)
     stack = OerfCiStack(
