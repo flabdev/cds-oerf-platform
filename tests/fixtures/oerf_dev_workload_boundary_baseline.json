@@ -1,0 +1,311 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "A",
+      "Effect": "Allow",
+      "Action": "*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "NOD",
+      "Effect": "Deny",
+      "NotAction": [
+        "apigateway:*",
+        "apigatewayv2:*",
+        "cloudfront:*",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:PutMetricData",
+        "cognito-idp:*",
+        "dynamodb:ListStreams",
+        "ecr:GetAuthorizationToken",
+        "lambda:*EventSourceMapping*",
+        "logs:*LogDeliver*",
+        "logs:*ResourcePolic*",
+        "logs:Describe*",
+        "sns:Publish",
+        "states:SendTaskSuccess",
+        "xray:*",
+        "kms:Decrypt",
+        "kms:DescribeKey",
+        "kms:Encrypt",
+        "kinesis:*",
+        "firehose:TagDeliveryStream",
+        "bedrock:CreateGuardrail",
+        "ec2:Describe*",
+        "iam:ListRoles",
+        "bedrock:ListTagsForResource",
+        "bedrock-agentcore:CreateAgentRuntime",
+        "s3:REST.PUT.OBJECT",
+        "bedrock:ApplyGuardrail",
+        "bedrock:CreateGuardrailVersion",
+        "bedrock:DeleteGuardrail",
+        "bedrock:GetGuardrail",
+        "bedrock:ListGuardrails",
+        "bedrock:*agResource",
+        "bedrock:UpdateGuardrail",
+        "kms:*",
+        "iam:CreateServiceLinkedRole"
+      ],
+      "NotResource": [
+        "arn:aws:cloudwatch:*:000000000000:*-dev-*",
+        "arn:aws:dynamodb:*:000000000000:*-dev-*",
+        "arn:aws:events:*:000000000000:*-dev-*",
+        "arn:aws:kinesis:*:000000000000:*-dev-*",
+        "arn:aws:lambda:*:000000000000:*-dev-*",
+        "arn:aws:logs:*:000000000000:*-dev-*",
+        "arn:aws:sns:*:000000000000:*-dev-*",
+        "arn:aws:sqs:*:000000000000:*-dev-*",
+        "arn:aws:states:*:000000000000:*-dev-*",
+        "arn:aws:logs:*:000000000000:*_dev_*",
+        "arn:aws:logs:*:000000000000:*Stackdev*",
+        "arn:aws:bedrock-agentcore:*:000000000000:*_dev_*",
+        "arn:aws:ecr:*:000000000000:*oerfdev*",
+        "arn:aws:ssm:*:000000000000:parameter/oerf/dev/*",
+        "arn:aws:s3:::*-dev-*",
+        "arn:aws:s3:::*oerfdev*",
+        "arn:aws:iam::000000000000:role/*-dev-*",
+        "arn:aws:sns:us-east-1:000000000000:OerfComputeStack-InboundTopic*",
+        "arn:aws:events:us-east-1:000000000000:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule",
+        "arn:aws:logs:us-east-1:000000000000:log-group:/aws/bedrock-agentcore/runtimes/*",
+        "arn:aws:execute-api:us-east-1:000000000000:*",
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:*:*:guardrail-profile/*",
+        "arn:aws:bedrock-agentcore:us-east-1:000000000000:workload-identity-directory/*",
+        "arn:aws:social-messaging:us-east-1:000000000000:phone-number-id/*",
+        "arn:aws:ssm:us-east-1:000000000000:parameter/cdk-bootstrap/oerfdev/*"
+      ]
+    },
+    {
+      "Sid": "NMT",
+      "Effect": "Deny",
+      "NotAction": [
+        "sns:GetSubscriptionAttributes",
+        "sns:GetTopicAttributes",
+        "sns:SetSubscriptionAttributes",
+        "sns:Subscribe",
+        "sns:Unsubscribe"
+      ],
+      "Resource": "arn:aws:sns:us-east-1:000000000000:OerfComputeStack-InboundTopic*"
+    },
+    {
+      "Sid": "TD",
+      "Effect": "Deny",
+      "Action": [
+        "cognito-idp:*",
+        "apigateway:*",
+        "apigatewayv2:*",
+        "cloudfront:*"
+      ],
+      "Resource": [
+        "arn:aws:cognito-idp:*:*:userpool/*",
+        "arn:aws:apigateway:*::/restapis/*",
+        "arn:aws:apigateway:*::/apis/*",
+        "arn:aws:cloudfront::*:distribution/*"
+      ],
+      "Condition": {
+        "StringNotEqualsIfExists": {
+          "aws:ResourceTag/oerf:stage": "dev"
+        }
+      }
+    },
+    {
+      "Sid": "RT",
+      "Effect": "Deny",
+      "Action": [
+        "cognito-idp:CreateUserPool",
+        "apigatewayv2:CreateApi",
+        "apigatewayv2:ImportApi",
+        "apigatewayv2:ReimportApi",
+        "cloudfront:CreateDistribution",
+        "bedrock:CreateGuardrail"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEqualsIfExists": {
+          "aws:RequestTag/oerf:stage": "dev"
+        }
+      }
+    },
+    {
+      "Sid": "TAP",
+      "Effect": "Deny",
+      "Action": "apigateway:POST",
+      "Resource": [
+        "arn:aws:apigateway:*::/restapis",
+        "arn:aws:apigateway:*::/apis"
+      ],
+      "Condition": {
+        "StringNotEqualsIfExists": {
+          "aws:RequestTag/oerf:stage": "dev"
+        }
+      }
+    },
+    {
+      "Sid": "NAU",
+      "Effect": "Deny",
+      "Action": "cognito-idp:AdminCreateUser",
+      "Resource": "*"
+    },
+    {
+      "Sid": "GA",
+      "Effect": "Deny",
+      "Action": [
+        "bedrock:ApplyGuardrail",
+        "bedrock:CreateGuardrailVersion",
+        "bedrock:DeleteGuardrail",
+        "bedrock:GetGuardrail",
+        "bedrock:ListTagsForResource",
+        "bedrock:*agResource",
+        "bedrock:UpdateGuardrail"
+      ],
+      "NotResource": [
+        "arn:aws:bedrock:us-east-1:000000000000:guardrail/evalguardrail",
+        "arn:aws:bedrock:us-east-1:000000000000:guardrail/evalguardrail:*",
+        "arn:aws:bedrock:*:000000000000:guardrail-profile/*"
+      ]
+    },
+    {
+      "Sid": "DAT",
+      "Effect": "Deny",
+      "Action": "apigateway:*",
+      "Resource": "arn:aws:apigateway:*::/tags/*"
+    },
+    {
+      "Sid": "NPE",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreatePolicy",
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicy",
+        "iam:DeletePolicyVersion",
+        "iam:SetDefaultPolicyVersion"
+      ],
+      "Resource": [
+        "arn:aws:iam::000000000000:policy/OerfDevWorkloadBoundary",
+        "arn:aws:iam::000000000000:policy/OerfDevCfnExec*"
+      ]
+    },
+    {
+      "Sid": "NU",
+      "Effect": "Deny",
+      "Action": [
+        "iam:AddUserToGroup",
+        "iam:AttachGroupPolicy",
+        "iam:AttachUserPolicy",
+        "iam:CreateAccessKey",
+        "iam:CreateLoginProfile",
+        "iam:CreateUser",
+        "iam:DeleteGroupPolicy",
+        "iam:DeleteRolePermissionsBoundary",
+        "iam:DeleteUserPermissionsBoundary",
+        "iam:DeleteUserPolicy",
+        "iam:DetachGroupPolicy",
+        "iam:DetachUserPolicy",
+        "iam:PutGroupPolicy",
+        "iam:PutUserPolicy",
+        "iam:RemoveUserFromGroup",
+        "kms:Schedule*",
+        "kms:PutKeyPolicy",
+        "kms:Disable*",
+        "kms:Delete*",
+        "kms:Update*",
+        "kms:CreateKey",
+        "kms:CreateAlias"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NPR",
+      "Effect": "Deny",
+      "Action": "iam:*",
+      "Resource": [
+        "arn:aws:iam::000000000000:role/cdk-hnb659fds-*",
+        "arn:aws:iam::000000000000:role/cdk-oerfdev-*",
+        "arn:aws:iam::000000000000:role/OerfGitHubDeployRole",
+        "arn:aws:iam::000000000000:role/OerfGitHubDeployRole-dev"
+      ]
+    },
+    {
+      "Sid": "NRB",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreateRole",
+        "iam:PutRolePermissionsBoundary"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEqualsIfExists": {
+          "iam:PermissionsBoundary": "arn:aws:iam::000000000000:policy/OerfDevWorkloadBoundary"
+        }
+      }
+    },
+    {
+      "Sid": "NCP",
+      "Effect": "Deny",
+      "Action": "iam:CreatePolicy",
+      "Resource": [
+        "arn:aws:iam::000000000000:policy/*",
+        "*"
+      ]
+    },
+    {
+      "Sid": "NIOD",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreateRole",
+        "iam:PutRolePermissionsBoundary",
+        "iam:PutRolePolicy",
+        "iam:AttachRolePolicy",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:TagRole",
+        "iam:DeleteRole",
+        "iam:DeleteRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:PassRole",
+        "iam:UpdateRole"
+      ],
+      "NotResource": [
+        "arn:aws:iam::000000000000:role/*-dev-*"
+      ]
+    },
+    {
+      "Sid": "NBA",
+      "Effect": "Deny",
+      "Action": [
+        "iam:AttachRolePolicy",
+        "iam:AttachUserPolicy"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnEquals": {
+          "iam:PolicyARN": [
+            "arn:aws:iam::aws:policy/AdministratorAccess",
+            "arn:aws:iam::aws:policy/IAMFullAccess",
+            "arn:aws:iam::aws:policy/PowerUserAccess"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "NO",
+      "Effect": "Deny",
+      "Action": [
+        "account:*",
+        "organizations:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NAOD",
+      "Effect": "Deny",
+      "Action": [
+        "sts:AssumeRole",
+        "sts:AssumeRoleWithWebIdentity"
+      ],
+      "NotResource": [
+        "arn:aws:iam::000000000000:role/*-dev-*"
+      ]
+    }
+  ]
+}
