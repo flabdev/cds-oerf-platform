@@ -101,9 +101,6 @@ STAR_ACTION_REASONS: list[str] = [
     "sns:Publish",
     "states:SendTaskSuccess",
     "xray:*",
-    "kms:Decrypt",
-    "kms:DescribeKey",
-    "kms:Encrypt",
     "kinesis:*",
     "firehose:TagDeliveryStream",
     "bedrock:CreateGuardrail",
@@ -117,7 +114,6 @@ STAR_ACTION_REASONS: list[str] = [
 _OUTSIDE_DEV_NOT_ACTION_EXTRA: tuple[str, ...] = (
     "kms:*",
     "iam:CreateServiceLinkedRole",
-    "iam:ListRoles",
 )
 
 # Granted to the execution role on "*". Workload-only star actions stay off
@@ -232,9 +228,10 @@ def exec_policy_resource_star_rows() -> list[tuple[str, str, str]]:
 # Excluded from the name deny. The guardrail ARN deny fences these except
 # CreateGuardrail, which stays on aws:RequestTag. ApplyGuardrail is
 # workload-only, so it is not in the execution allow.
+# Do not replace with ``bedrock:*Guardrail*``: it would exempt future
+# account-level guardrail-check APIs on ``*`` that stay outside ``NotResource``.
 _GUARDRAIL_EXEMPT_ACTIONS = [
     "bedrock:ApplyGuardrail",
-    "bedrock:CreateGuardrail",
     "bedrock:CreateGuardrailVersion",
     "bedrock:DeleteGuardrail",
     "bedrock:GetGuardrail",
@@ -261,7 +258,7 @@ _GUARDRAIL_ARN_ACTIONS = [
 def _outside_dev_not_actions() -> list[str]:
     """Stable union for NOD ``NotAction`` without per-entry doc strings."""
 
-    return list(
+    merged = list(
         dict.fromkeys(
             [
                 *STAR_ACTION_REASONS,
@@ -270,6 +267,60 @@ def _outside_dev_not_actions() -> list[str]:
             ]
         )
     )
+    return _compact_action_patterns(merged)
+
+
+def service_reference_iam_actions() -> list[str]:
+    """Every ``service`` / ``prefix:Action`` pair in ``service-reference.json``."""
+
+    from infra.service_reference_probes import _load_service_reference_blob
+
+    blob = _load_service_reference_blob()
+    actions: list[str] = []
+    for stem, doc in blob.items():
+        if not isinstance(doc, dict):
+            continue
+        for entry in doc.get("Actions", []):
+            name = entry.get("Name")
+            if not isinstance(name, str) or not name:
+                continue
+            if stem == "s3":
+                actions.append(f"s3:{name}")
+            else:
+                actions.append(f"{stem}:{name}")
+    return actions
+
+
+def notaction_exemption_patterns() -> list[str]:
+    """All ``NotAction`` lists (NOD union and main-topic NMT)."""
+
+    return [*_outside_dev_not_actions(), *_MAIN_TOPIC_ALLOWED]
+
+
+def _service_reference_iam_actions() -> list[str]:
+    return service_reference_iam_actions()
+
+
+def _compact_action_patterns(patterns: list[str]) -> list[str]:
+    """Drop NotAction entries another entry already subsumes (service-reference safe)."""
+
+    actions = _service_reference_iam_actions()
+    keep: list[str] = []
+    for index, pattern in enumerate(patterns):
+        matched = [action for action in actions if _glob(pattern, action)]
+        if not matched:
+            keep.append(pattern)
+            continue
+        subsumed = False
+        for other_index, other in enumerate(patterns):
+            if other_index == index:
+                continue
+            if all(_glob(other, action) for action in matched):
+                subsumed = True
+                break
+        if not subsumed:
+            keep.append(pattern)
+    return keep
 
 
 GUARDRAIL_ARN_CONTEXT = "dev:guardrailArn"
@@ -469,10 +520,9 @@ def boundary_policy(account: str, region: str, guardrail_arn: str) -> dict[str, 
     document = {
         "Version": "2012-10-17",
         "Statement": [
-            _allow("A", "*", "*"),
+            _allow(None, "*", "*"),
             _outside_dev_deny(account, region),
             {
-                "Sid": "NMT",
                 "Effect": "Deny",
                 "NotAction": _MAIN_TOPIC_ALLOWED,
                 "Resource": _main_topic(account, region),
@@ -521,12 +571,23 @@ def boundary_permits(
     """True when the workload boundary does not deny this call."""
 
     arn = guardrail_arn or evaluation_guardrail_arn(account, region)
-    return not _any_deny(
+    return boundary_permits_from_statements(
         boundary_policy(account, region, arn)["Statement"],
         action,
         resource,
-        context or {},
+        context,
     )
+
+
+def boundary_permits_from_statements(
+    statements: list[dict[str, Any]],
+    action: str,
+    resource: str,
+    context: dict[str, str] | None = None,
+) -> bool:
+    """True when these boundary statements do not deny this call."""
+
+    return not _any_deny(statements, action, resource, context or {})
 
 
 def intersection_allows(
@@ -718,15 +779,10 @@ def _outside_dev_deny(account: str, region: str) -> dict[str, Any]:
 def _not_resources(account: str, region: str) -> list[str]:
     """Dev names plus shared ARNs the name styles do not cover."""
 
-    runtime_logs = (
-        f"arn:aws:logs:{region}:{account}:log-group:/aws/bedrock-agentcore/runtimes/*"
-    )
     return [
         *dev_name_patterns(account),
         _main_topic(account, region),
         _arn("events", region, account, f"rule/{_SHARED_EVENTS_RULE}"),
-        # ``*`` at the end of the ARN also matches the log-stream suffix.
-        runtime_logs,
         _arn("execute-api", region, account, "*"),
         "arn:aws:bedrock:*::foundation-model/*",
         "arn:aws:bedrock:*:*:guardrail-profile/*",
@@ -802,7 +858,7 @@ def _guardrail_arn_deny(account: str, guardrail_arn: str) -> dict[str, Any]:
     return {
         "Sid": "GA",
         "Effect": "Deny",
-        "Action": list(_GUARDRAIL_ARN_ACTIONS),
+        "Action": _GUARDRAIL_ARN_ACTIONS,
         "NotResource": _guardrail_not_resources(account, guardrail_arn),
     }
 
@@ -871,7 +927,6 @@ def _tag_denies() -> list[dict[str, Any]]:
             "Condition": missing_request_tag,
         },
         {
-            "Sid": "TAP",
             "Effect": "Deny",
             "Action": "apigateway:POST",
             "Resource": [
@@ -881,7 +936,6 @@ def _tag_denies() -> list[dict[str, Any]]:
             "Condition": missing_request_tag,
         },
         {
-            "Sid": "NAU",
             "Effect": "Deny",
             "Action": "cognito-idp:AdminCreateUser",
             "Resource": "*",
@@ -927,7 +981,6 @@ _EXEC_DENY_SIDS = frozenset(
         "NCP",
         "NIOD",
         "NBA",
-        "NO",
     }
 )
 
@@ -945,10 +998,8 @@ def _boundary_denies(account: str) -> list[dict[str, Any]]:
             "Effect": "Deny",
             "Action": [
                 "iam:CreatePolicy",
-                "iam:CreatePolicyVersion",
                 "iam:DeletePolicy",
-                "iam:DeletePolicyVersion",
-                "iam:SetDefaultPolicyVersion",
+                "iam:*PolicyVersion",
             ],
             "Resource": protected,
         },
@@ -963,8 +1014,7 @@ def _boundary_denies(account: str) -> list[dict[str, Any]]:
                 "iam:CreateLoginProfile",
                 "iam:CreateUser",
                 "iam:DeleteGroupPolicy",
-                "iam:DeleteRolePermissionsBoundary",
-                "iam:DeleteUserPermissionsBoundary",
+                "iam:Delete*PermissionsBoundary",
                 "iam:DeleteUserPolicy",
                 "iam:DetachGroupPolicy",
                 "iam:DetachUserPolicy",
@@ -972,6 +1022,8 @@ def _boundary_denies(account: str) -> list[dict[str, Any]]:
                 "iam:PutUserPolicy",
                 "iam:RemoveUserFromGroup",
                 *_KMS_KEY_ADMIN_DENY_ACTIONS,
+                "account:*",
+                "organizations:*",
             ],
             "Resource": "*",
         },
@@ -982,8 +1034,7 @@ def _boundary_denies(account: str) -> list[dict[str, Any]]:
             "Resource": [
                 f"arn:aws:iam::{account}:role/cdk-hnb659fds-*",
                 f"arn:aws:iam::{account}:role/cdk-oerfdev-*",
-                f"arn:aws:iam::{account}:role/OerfGitHubDeployRole",
-                f"arn:aws:iam::{account}:role/OerfGitHubDeployRole-dev",
+                f"arn:aws:iam::{account}:role/OerfGitHubDeployRole*",
             ],
         },
         {
@@ -1005,7 +1056,11 @@ def _boundary_denies(account: str) -> list[dict[str, Any]]:
             "Action": list(
                 dict.fromkeys(
                     [
-                        *_ROLE_MUTATIONS,
+                        "iam:CreateRole",
+                        "iam:PutRole*",
+                        "iam:AttachRolePolicy",
+                        "iam:UpdateAssumeRolePolicy",
+                        "iam:TagRole",
                         "iam:DeleteRole",
                         "iam:DeleteRolePolicy",
                         "iam:DetachRolePolicy",
@@ -1022,12 +1077,6 @@ def _boundary_denies(account: str) -> list[dict[str, Any]]:
             "Action": ["iam:AttachRolePolicy", "iam:AttachUserPolicy"],
             "Resource": "*",
             "Condition": {"ArnEquals": {"iam:PolicyARN": _BROAD_MANAGED_POLICIES}},
-        },
-        {
-            "Sid": "NO",
-            "Effect": "Deny",
-            "Action": ["account:*", "organizations:*"],
-            "Resource": "*",
         },
     ]
 
@@ -1061,7 +1110,6 @@ def _sts_deny(account: str) -> dict[str, Any]:
     """
 
     return {
-        "Sid": "NAOD",
         "Effect": "Deny",
         "Action": ["sts:AssumeRole", "sts:AssumeRoleWithWebIdentity"],
         "NotResource": [_role_pattern(account)],
@@ -1133,17 +1181,18 @@ def _kms_via_service_allow(account: str, region: str) -> dict[str, Any]:
 
 
 def _allow(
-    sid: str,
+    sid: str | None,
     action: str | list[str],
     resource: str | list[str],
     condition: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     statement: dict[str, Any] = {
-        "Sid": sid,
         "Effect": "Allow",
         "Action": action,
         "Resource": resource,
     }
+    if sid:
+        statement["Sid"] = sid
     if condition:
         statement["Condition"] = condition
     return statement

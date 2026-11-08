@@ -218,7 +218,7 @@ def test_short_wildcards_cover_the_same_star_actions() -> None:
 
     stream = (
         f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:"
-        "/aws/bedrock-agentcore/runtimes/example:*"
+        "/aws/bedrock-agentcore/runtimes/oerf_dev_agent:*"
     )
     assert boundary_permits("logs:CreateLogStream", stream, ACCOUNT, REGION)
     assert boundary_permits("logs:PutLogEvents", stream, ACCOUNT, REGION)
@@ -263,7 +263,7 @@ def test_policy_documents_fit_the_managed_policy_quota() -> None:
     assert 6144 - exec_size >= 500, f"OerfDevCfnExecPolicy slack too low: {6144 - exec_size}"
     assert 6144 - exec2_size >= 500, f"OerfDevCfnExecPolicy2 slack too low: {6144 - exec2_size}"
     slack = 6144 - boundary_size
-    assert slack >= 3, f"OerfDevWorkloadBoundary slack below 3 chars: {slack}"
+    assert slack >= 440, f"OerfDevWorkloadBoundary slack below 440 chars: {slack}"
 
 
 def test_exec_policy_resource_star_rows_cover_u_ec2d_kfh() -> None:
@@ -742,10 +742,9 @@ def _assert_role_mutation_conditions(document: dict) -> None:
 def _assert_required_denies(document: dict) -> None:
     blob = json.dumps(document)
     for action in (
-        "iam:DeleteRolePermissionsBoundary",
-        "iam:CreatePolicyVersion",
+        "iam:Delete*PermissionsBoundary",
+        "iam:*PolicyVersion",
         "iam:DeletePolicy",
-        "iam:SetDefaultPolicyVersion",
         "iam:CreateUser",
         "iam:CreateAccessKey",
         "iam:CreateLoginProfile",
@@ -825,7 +824,8 @@ def _assert_tag_denies(document: dict) -> None:
     blob = json.dumps(document)
     assert "TD" in blob
     assert "RT" in blob
-    assert "NAU" in blob
+    assert "cognito-idp:AdminCreateUser" in blob
+    assert "apigateway:POST" in blob
     assert "aws:ResourceTag/oerf:stage" in blob
     assert "aws:RequestTag/oerf:stage" in blob
     for service in ("cognito-idp", "apigatewayv2", "cloudfront", "bedrock"):
