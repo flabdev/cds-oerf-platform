@@ -31,6 +31,7 @@ from oerf.platform.channels.devices import register_device
 from oerf.platform.storage.dynamo import device_pk, key
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 from oerf.platform.tenancy.publisher import ConfigPublisher
+from scripts._stage import add_stage_argument, remember_stage, require_stack, resolve_stage
 from sim.seed.load import load_seed
 
 REGION = "us-east-1"
@@ -148,10 +149,18 @@ def main(
     """Parse, refuse an unconfirmed ``all``, then reset. No AWS client before the refusal."""
 
     args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
+    target = remember_stage(resolve_stage(args.stage))
     tenants = tenants_for(args.tenant, yes_all=args.yes_all)
     factory = session_factory or _session
     session = factory(args.profile)
-    clients = clients_from_session(session, args.stack)
+    clients = clients_from_session(session, require_stack(args.stack, target.data_stack))
+    target.announce(
+        tables={
+            "incident": clients.incident_table,
+            "routing": clients.routing_table,
+            "tenant": clients.tenant_table,
+        }
+    )
     mode = "applied" if args.yes else "dry-run"
     for tenant_id in tenants:
         counts = reset_tenant(clients, tenant_id, apply=args.yes, reseed=args.reseed)
@@ -184,7 +193,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--yes", action="store_true")
     parser.add_argument("--yes-all", action="store_true")
     parser.add_argument("--reseed", action="store_true")
-    parser.add_argument("--stack", default=STACK)
+    parser.add_argument("--stack", default=None, help="Must be this stage's data stack")
+    add_stage_argument(parser)
     return parser
 
 

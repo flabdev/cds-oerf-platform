@@ -26,36 +26,28 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from oerf.platform.agent.context import DOMAIN
-from oerf.platform.channels.address import driver_demo_number_name
 from oerf.platform.ingest.handler import DETAIL_TYPE, SOURCE
 from oerf.platform.storage.dynamo import incident_pk, iso_z, key
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
+from scripts._stage import (
+    add_stage_argument,
+    remember_stage,
+    resolve_stage,
+)
 from scripts.demo_reply import (
-    ROUTER_FUNCTION,
     channels_live_from_configuration,
     main as post_reply,
 )
-from scripts.reset import REGION, STACK as DATA_STACK, clients_from_session, reset_tenant
+from scripts.reset import REGION, clients_from_session, reset_tenant
 from scripts.seed_runtime import seed_runtime, tenants_for
 from sim.seed.load import load_seed
 
-EVENT_BUS = "oerf-events"
 EVENT_GAP = timedelta(seconds=30)
 SENSOR_TIMEOUT = 30.0
 REPLY_TIMEOUT = 120.0
 POLL_SECONDS = 1.0
 READING_LAT = 17.44
 READING_LON = 78.38
-STACKS = (
-    "OerfDataStack",
-    "OerfComputeStack",
-    "OerfApiStack",
-    "OerfObservabilityStack",
-)
-MACHINES = (
-    ("ColdChainStateMachineArn", "oerf-cold-chain"),
-    ("EngagePartyStateMachineArn", "oerf-engage-party"),
-)
 PROMPT_STATE = "SendViaRouter"
 _LEAK = re.compile(r"arn:aws|\+\d{8,}|tasktoken|task token|EventId|DetailType", re.IGNORECASE)
 _INCIDENT_NAME = re.compile(r"INC-\d{6}")
@@ -96,6 +88,8 @@ def main(
 
     args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
     try:
+        target = remember_stage(resolve_stage(args.stage))
+        target.announce()
         account = parse_account(args.account)
         tenant_id = tenants_for(args.tenant)[0]
         shipment_id, device_id = resolve_subject(tenant_id, args.shipment, args.device)
@@ -111,17 +105,30 @@ def main(
         if args.command == "prep":
             _prepare_session(session, tenant_id)
         elif args.command == "sensor":
-            publish_excursion(
-                _resources(session),
-                _client(session, "events"),
-                tenant_id,
-                shipment_id,
-                device_id,
-                parse_temps(args.temps),
-                parse_pause(args.pause),
-                now,
-                pause_for,
-            )
+            resources = _resources(session)
+            if args.scenario:
+                publish_scenario(
+                    resources,
+                    _client(session, "events"),
+                    tenant_id,
+                    shipment_id,
+                    device_id,
+                    args.scenario,
+                    target.event_bus,
+                )
+            else:
+                publish_excursion(
+                    resources,
+                    _client(session, "events"),
+                    tenant_id,
+                    shipment_id,
+                    device_id,
+                    parse_temps(args.temps),
+                    parse_pause(args.pause),
+                    now,
+                    pause_for,
+                    event_bus=target.event_bus,
+                )
         elif args.command == "reply":
             post_driver_reply(
                 _resources(session),
@@ -234,7 +241,8 @@ def preflight(session: Any, tenant_id: str, *, account: str, live: bool) -> int:
     failed = False
     formed = _client(session, "cloudformation")
     outputs: dict[str, str] = {}
-    for name in STACKS:
+    stage = resolve_stage()
+    for name in stage.stacks:
         status, found = read_stack(formed, name)
         if status is not None and status.endswith("_COMPLETE"):
             say(f"PASS stack {name}")
@@ -244,10 +252,14 @@ def preflight(session: Any, tenant_id: str, *, account: str, live: bool) -> int:
         else:
             say(f"FAIL stack {name} {status}")
             failed = True
-        if name == DATA_STACK:
+        if name == stage.data_stack:
             outputs = found
     steps = _client(session, "stepfunctions")
-    for output_key, machine in MACHINES:
+    machines = (
+        ("ColdChainStateMachineArn", stage.cold_chain),
+        ("EngagePartyStateMachineArn", stage.engage_party),
+    )
+    for output_key, machine in machines:
         arn = outputs.get(output_key) or ""
         if arn and machine_active(steps, arn, machine):
             say(f"PASS state machine {machine}")
@@ -349,10 +361,12 @@ def reading_entry(
     moment: datetime,
     temperature_c: float,
     seq: int,
+    event_bus: str | None = None,
 ) -> dict[str, Any]:
     """One ``sim.reefer`` reading in the run-sheet detail shape."""
 
     stamp = iso_z(moment)
+    bus = event_bus if event_bus is not None else resolve_stage().event_bus
     detail = {
         "tenant_id": tenant_id,
         "shipment_id": shipment_id,
@@ -366,7 +380,7 @@ def reading_entry(
     return {
         "Source": SOURCE,
         "DetailType": DETAIL_TYPE,
-        "EventBusName": EVENT_BUS,
+        "EventBusName": bus,
         "Time": moment.astimezone(UTC),
         "Detail": json.dumps(detail),
     }
@@ -383,9 +397,11 @@ def publish_excursion(
     clock: Clock,
     sleep: Sleeper,
     timeout: float = SENSOR_TIMEOUT,
+    event_bus: str | None = None,
 ) -> str:
     """Publish the readings and wait until a new cold-chain execution exists."""
 
+    bus = event_bus if event_bus is not None else resolve_stage().event_bus
     low, high = safe_range(clients.dynamodb, clients.tenant_table, tenant_id, shipment_id)
     say(
         "OERF reefer simulator · "
@@ -412,6 +428,7 @@ def publish_excursion(
                 moment=moment,
                 temperature_c=temperature,
                 seq=index + 1,
+                event_bus=bus,
             ),
         )
         say(
@@ -442,6 +459,78 @@ def publish_excursion(
         raise DemoError(f"no cold-chain execution opened for {tenant_id}")
     say(incident_line(clock(), incident_id))
     return incident_id
+
+
+def publish_scenario(
+    clients: Any,
+    events: Any,
+    tenant_id: str,
+    shipment_id: str,
+    device_id: str,
+    scenario: str,
+    event_bus: str,
+) -> int:
+    """Publish one named scenario onto this stage's bus. It does not wait for an incident."""
+
+    generated = _scenario_events(
+        scenario,
+        tenant_id=tenant_id,
+        shipment_id=shipment_id,
+        device_id=device_id,
+        event_bus=event_bus,
+    )
+    for event in generated:
+        detail = event.get("Detail")
+        if not isinstance(detail, dict):
+            raise DemoError("scenario event has no detail")
+        moment = datetime.strptime(str(detail["ts"]), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+        accept_reading(
+            events,
+            reading_entry(
+                tenant_id=tenant_id,
+                shipment_id=shipment_id,
+                device_id=device_id,
+                moment=moment,
+                temperature_c=float(detail["temperature_c"]),
+                seq=int(detail["seq"]),
+                event_bus=event_bus,
+            ),
+        )
+    say(f"published {len(generated)} readings on {event_bus}")
+    return len(generated)
+
+
+def _scenario_events(
+    scenario: str,
+    *,
+    tenant_id: str,
+    shipment_id: str,
+    device_id: str,
+    event_bus: str,
+) -> list[dict[str, Any]]:
+    from sim.temperature import SCENARIOS, generate_temperature_events
+
+    if scenario in SCENARIOS:
+        return generate_temperature_events(
+            tenant_id=tenant_id,
+            shipment_id=shipment_id,
+            scenario=scenario,
+            device_id=device_id,
+            event_bus=event_bus,
+        )
+    from sim.scenarios import scenario_events
+
+    try:
+        generated = scenario_events(
+            tenant_id=tenant_id,
+            shipment_id=shipment_id,
+            scenario=scenario,
+            device_id=device_id,
+            event_bus=event_bus,
+        )
+    except ValueError as exc:
+        raise DemoError(str(exc)) from None
+    return generated
 
 
 def post_driver_reply(
@@ -604,8 +693,9 @@ def driver_parameter_exists(ssm: Any, tenant_id: str) -> bool:
     ]
     if not drivers:
         return False
+    stage = resolve_stage()
     for contact_id in drivers:
-        parameter_name = driver_demo_number_name(tenant_id, contact_id)
+        parameter_name = stage.driver_demo_number_name(tenant_id, contact_id)
         try:
             found = ssm.get_parameter(Name=parameter_name, WithDecryption=True)
         except Exception as exc:
@@ -762,26 +852,28 @@ def incident_state(dynamodb: Any, table: str, tenant_id: str, incident_id: str) 
     return state
 
 
-def router_is_live(lambda_client: Any) -> bool:
+def router_is_live(lambda_client: Any, function_name: str | None = None) -> bool:
     """True when the deployed router has WhatsApp mock mode off."""
 
+    name = function_name or resolve_stage().router_function
     try:
-        configuration = lambda_client.get_function_configuration(FunctionName=ROUTER_FUNCTION)
+        configuration = lambda_client.get_function_configuration(FunctionName=name)
     except Exception:
-        raise DemoError(f"cannot read USE_MOCK_WHATSAPP on {ROUTER_FUNCTION}") from None
+        raise DemoError(f"cannot read USE_MOCK_WHATSAPP on {name}") from None
     variables = None
     if isinstance(configuration, dict):
         variables = configuration.get("Environment", {}).get("Variables")
     try:
-        return channels_live_from_configuration(variables)
+        return channels_live_from_configuration(variables, function_name=name)
     except SystemExit as exc:
         message = exc.code if isinstance(exc.code, str) else ""
-        raise DemoError(message or f"cannot read USE_MOCK_WHATSAPP on {ROUTER_FUNCTION}") from None
+        raise DemoError(message or f"cannot read USE_MOCK_WHATSAPP on {name}") from None
 
 
 def send_driver_reply(profile: str, tenant_id: str, shipment_id: str, button: str) -> None:
     """Post the driver button through ``scripts.demo_reply``."""
 
+    stage = resolve_stage()
     try:
         post_reply(
             [
@@ -795,6 +887,8 @@ def send_driver_reply(profile: str, tenant_id: str, shipment_id: str, button: st
                 "driver",
                 "--button",
                 button,
+                "--stage",
+                stage.name,
             ]
         )
     except SystemExit as exc:
@@ -992,12 +1086,13 @@ def _caller_account(session: Any) -> str:
 
 
 def _resources(session: Any) -> Any:
+    stack = resolve_stage().data_stack
     try:
-        return clients_from_session(session, DATA_STACK)
+        return clients_from_session(session, stack)
     except LookupError as exc:
         raise DemoError(f"stack outputs are missing: {exc}") from None
     except Exception:
-        raise DemoError(f"could not read stack {DATA_STACK}") from None
+        raise DemoError(f"could not read stack {stack}") from None
 
 
 def _text(item: Mapping[str, Any] | None, name: str) -> str:
@@ -1054,6 +1149,7 @@ def _parser() -> argparse.ArgumentParser:
         help="12-digit account id the caller must match.",
     )
     common.add_argument("--tenant", required=True)
+    add_stage_argument(common)
     common.add_argument("--shipment", default=None)
     common.add_argument("--device", default=None)
     common.add_argument(
@@ -1071,6 +1167,11 @@ def _parser() -> argparse.ArgumentParser:
     sensor = commands.add_parser("sensor", parents=[common], help="Publish the excursion readings.")
     sensor.add_argument("--temps", default="8.1,8.6")
     sensor.add_argument("--pause", type=float, default=4)
+    sensor.add_argument(
+        "--scenario",
+        default=None,
+        help="Publish this named scenario on the stage bus instead of --temps.",
+    )
     reply = commands.add_parser("reply", parents=[common], help="Post the mocked driver reply.")
     reply.add_argument("--button", default="running", choices=("running", "stopped"))
     commands.add_parser("status", parents=[common], help="Print the execution and incident.")

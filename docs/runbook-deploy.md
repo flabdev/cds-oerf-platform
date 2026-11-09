@@ -72,8 +72,8 @@ Simulator readings must be published with `aws events put-events` (a new EventBr
 The command stops that tenant's `RUNNING` executions of `oerf-engage-party` and then `oerf-cold-chain`. An execution is selected by `tenant_id` in its input. It deletes that tenant's incident items, shipment locks (including `ESCALATED`), debounce rows, the routing rows tied to its engagements, and one-way dedupe rows `TENANT#{tid}#OUTBOX#`. Evidence under `tenants/{tid}/` is deleted. `reports/{tid}/` is the audit record and is kept. The tenant-table counter `TENANT#{tid}` / `COUNTER#INCIDENT` is kept, so the next incident id continues. Tenant config, live websocket rows, `INGEST#` dedupe rows, and the platform table are kept.
 
 ```text
-make reset-test TENANT=t1 PROFILE=Fission-OERF
-make reset-demo TENANT=t1 PROFILE=Fission-OERF
+make reset-test TENANT=t1 PROFILE=Fission-OERF STAGE=main ALLOW_MAIN=1
+make reset-demo TENANT=t1 PROFILE=Fission-OERF STAGE=main ALLOW_MAIN=1
 ```
 
 `reset-test` is the dry run. `reset-demo` applies and reseeds. A second apply reports zero for every kind.
@@ -82,23 +82,25 @@ make reset-demo TENANT=t1 PROFILE=Fission-OERF
 
 `python -m scripts.demo` is the operator rehearsal. It is not a Lambda and it is not part of CI. It calls `scripts.reset`, `scripts.seed_runtime`, and `scripts.demo_reply` in process. `--profile` and `--account` are required. Region is `us-east-1`. `--tenant` is `t1`, `t2`, or `sbx`. The shipment and device default to that tenant's seed (`t1` is `PH-2841` and `RF-7781`). A failure prints one error and exits non-zero. The commands do not print phone numbers, task tokens, ARNs, account ids, or raw payloads.
 
+`STAGE` is `main` or `dev`. There is no default. `STAGE=main` also needs `ALLOW_MAIN=1`; without it the command stops before it calls AWS. Dev rehearsals use the `dev-*` targets. The command list and the live-rehearsal checklist are in [run-the-demo.md](run-the-demo.md).
+
 ```text
-make demo-preflight TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
-make demo-prep TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
-make demo-sensor TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
-make demo-reply TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> BUTTON=running
-make demo-status TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
-make demo-cleanup TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
-make demo-run TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
+make demo-preflight TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1
+make demo-prep TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1
+make demo-sensor TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1
+make demo-reply TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1 BUTTON=running
+make demo-status TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1
+make demo-cleanup TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1
+make demo-run TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1
 ```
 
 `demo-run` is prep, the sensor, the mocked driver reply, then status. `BUTTON` defaults to `running`. `demo-reply` also accepts `stopped`.
 
-Preflight prints one `PASS` or `FAIL` line per check. The caller must be the account passed as `--account`. Any other account stops the command before it reads another service. `OerfDataStack`, `OerfComputeStack`, `OerfApiStack`, and `OerfObservabilityStack` must be in a `*_COMPLETE` status. `oerf-cold-chain` and `oerf-engage-party` must exist. A runtime-seed dry run must report no changes. `--live` also requires the seeded drivers' parameters `/oerf/dev/demo-numbers/{tenant}/driver/{contact_id}`. The values are not printed.
+Preflight prints one `PASS` or `FAIL` line per check. The caller must be the account passed as `--account`. Any other account stops the command before it reads another service. The stage's four stacks must be in a `*_COMPLETE` status. On main those are `OerfDataStack`, `OerfComputeStack`, `OerfApiStack`, and `OerfObservabilityStack`. The stage state machines must exist (`oerf-cold-chain` and `oerf-engage-party` on main, `oerf-dev-cold-chain` and `oerf-dev-engage-party` on dev). A runtime-seed dry run must report no changes. `--live` also requires the seeded drivers' parameters under that stage's demo-number prefix, `{prefix}/{tenant}/driver/{contact_id}`. The values are not printed.
 
 Prep applies the tenant reset with reseed, writes the runtime seed, and requires the next reset dry run to report zero. It prints one summary line.
 
-The sensor is the on-camera command. It publishes two `sim.reefer` / `TemperatureReading` events on `oerf-events`, 8.1 °C then 8.6 °C, thirty seconds apart in event time and four seconds apart on the clock (`--temps`, `--pause`). The detail carries `tenant_id`, `shipment_id`, `device_id`, `ts`, `temperature_c`, `lat` 17.44, `lon` 78.38, and `seq`. It then polls `oerf-cold-chain` for up to 30 seconds for a new `{tenant}-INC-*` execution. `debounce_readings` is 2, so the second reading above 8 °C opens the incident. One reading opens nothing. A reset does not clear `INGEST#` rows, so each sensor run gets a new EventBridge id. Replaying the same reading id is ignored for 7 days. Direct Lambda invoke of the same JSON is deduped the same way.
+The sensor is the on-camera command. It publishes two `sim.reefer` / `TemperatureReading` events on the stage bus (`oerf-events` on main, `oerf-dev-events` on dev), 8.1 °C then 8.6 °C, thirty seconds apart in event time and four seconds apart on the clock (`--temps`, `--pause`). The detail carries `tenant_id`, `shipment_id`, `device_id`, `ts`, `temperature_c`, `lat` 17.44, `lon` 78.38, and `seq`. It then polls the stage cold-chain state machine for up to 30 seconds for a new `{tenant}-INC-*` execution. `debounce_readings` is 2, so the second reading above 8 °C opens the incident. One reading opens nothing. A reset does not clear `INGEST#` rows, so each sensor run gets a new EventBridge id. Replaying the same reading id is ignored for 7 days. Direct Lambda invoke of the same JSON is deduped the same way.
 
 `demo-reply` is for mocked channels only. It waits until the new `oerf-engage-party` execution is `RUNNING` in `SendViaRouter`, then posts the driver reply. It refuses `--live`. On a live router the driver replies on WhatsApp to template `oerf_driver_checkin`. `demo-run --live` skips the scripted reply. If the router is live and `--live` was not passed, the run stops instead of posting one. Mocked channels resolve the party from the contact registry. The runtime seed writes fictional 555-01xx numbers and does not read SSM.
 
@@ -126,7 +128,7 @@ Use profile `Fission-OERF`, Python 3.11 with `aws_cdk` importable, and the oerfd
 
 After deploy, `OerfApiStack-dev` output `DashboardUrl` is the desk. Open `<DashboardUrl>/config.json` and confirm `apiUrl` and `userPoolClientId` are set. Do not paste that file into a ticket. Dev does not use a hand-built `VITE_*` upload.
 
-Post-deploy checks (stack `*_COMPLETE`, `oerf-dev-cold-chain` and `oerf-dev-engage-party` exist, runtime seed dry-run) still need A6 to finish. `make demo-*` names on main (`oerf-cold-chain`) are not the dev names until A7.
+Operator commands take one stage. `make dev-preflight`, `dev-seed`, `dev-users`, `dev-sensor`, `dev-reply`, `dev-reset`, `dev-check`, `dev-diff`, and `dev-deploy` set `STAGE=dev` and resolve the dev names. `make demo-*` and `make reset-*` require `STAGE`. `STAGE=main` also needs `ALLOW_MAIN=1`. The targets and the live-rehearsal checklist (driver parameters, `live_contacts`, the dev desk user, `CHANNELS_LIVE`, Bedrock model access) are in [run-the-demo.md](run-the-demo.md).
 
 ## First deploy from main
 

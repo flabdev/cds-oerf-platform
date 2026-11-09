@@ -300,11 +300,17 @@ def _session(client: _RejectWrites, *, ssm_raises: bool = False) -> type:
 
 
 _LIVE = {
-    "/oerf/dev/demo-numbers/t1/driver/C-T1-DRV": "+15550100901",
+    "/oerf/demo-numbers/t1/driver/C-T1-DRV": "+15550100901",
     "/oerf/demo-numbers/t1/ops_manager": "15550100902",
     "/oerf/demo-numbers/t1/qa": "+15550100904",
     "/oerf/demo-numbers/t1/facility": "+15550100903",
 }
+
+
+@pytest.fixture(autouse=True)
+def _main_stage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STAGE", "main")
+    monkeypatch.setenv("ALLOW_MAIN", "1")
 
 
 class _Ssm:
@@ -332,7 +338,7 @@ def test_live_contacts_point_the_ssm_number_at_the_seeded_contact() -> None:
     assert counts == {"driver": 1, "ops_manager": 1, "qa": 1, "facility": 2}
     assert client.writes == written + 5
     assert ssm.calls == [
-        ("/oerf/dev/demo-numbers/t1/driver/C-T1-DRV", True),
+        ("/oerf/demo-numbers/t1/driver/C-T1-DRV", True),
         ("/oerf/demo-numbers/t1/ops_manager", True),
         ("/oerf/demo-numbers/t1/qa", True),
         ("/oerf/demo-numbers/t1/facility", True),
@@ -364,7 +370,7 @@ def test_live_contacts_excludes_seeded_opt_out_contacts(monkeypatch: pytest.Monk
     counts = seed_live_contacts(client, "routing", "t1", ssm, apply=True, roles=("driver",))
 
     assert counts == {"driver": 1}
-    assert ssm.calls == [("/oerf/dev/demo-numbers/t1/driver/C-T1-DRV", True)]
+    assert ssm.calls == [("/oerf/demo-numbers/t1/driver/C-T1-DRV", True)]
     assert client.writes == 1
 
 
@@ -375,7 +381,7 @@ def test_live_contacts_dry_run_reads_ssm_and_does_not_write() -> None:
 
     assert counts["driver"] == 1
     assert counts["facility"] == 2
-    assert ssm.calls[0] == ("/oerf/dev/demo-numbers/t1/driver/C-T1-DRV", True)
+    assert ssm.calls[0] == ("/oerf/demo-numbers/t1/driver/C-T1-DRV", True)
 
 
 def test_live_contacts_point_each_driver_parameter_at_its_own_contact(
@@ -456,7 +462,7 @@ def test_unreadable_demo_number_does_not_echo_the_value() -> None:
 
 def test_empty_demo_number_does_not_echo_the_value() -> None:
     raw = "not-a-phone"
-    ssm = _Ssm({"/oerf/dev/demo-numbers/t1/driver/C-T1-DRV": raw})
+    ssm = _Ssm({driver_demo_number_name("t1", "C-T1-DRV"): raw})
 
     parameter_name = driver_demo_number_name("t1", "C-T1-DRV")
     with pytest.raises(SystemExit, match=f"could not read {parameter_name}") as raised:
@@ -466,7 +472,7 @@ def test_empty_demo_number_does_not_echo_the_value() -> None:
 
 
 def test_blank_demo_number_exits() -> None:
-    ssm = _Ssm({"/oerf/dev/demo-numbers/t1/driver/C-T1-DRV": "   "})
+    ssm = _Ssm({driver_demo_number_name("t1", "C-T1-DRV"): "   "})
 
     parameter_name = driver_demo_number_name("t1", "C-T1-DRV")
     with pytest.raises(SystemExit, match=f"could not read {parameter_name}"):
@@ -478,7 +484,7 @@ def test_missing_parameter_is_skipped(
 ) -> None:
     client = FakeDynamoClient()
     present = {
-        "/oerf/dev/demo-numbers/t1/driver/C-T1-DRV": "+15550100901",
+        "/oerf/demo-numbers/t1/driver/C-T1-DRV": "+15550100901",
         "/oerf/demo-numbers/t1/ops_manager": "+15550100902",
         "/oerf/demo-numbers/t1/facility": "+15550100903",
     }
@@ -532,7 +538,7 @@ def test_roles_filter_reads_only_the_named_roles(
     )
 
     assert [name for name, decrypted in ssm.calls] == [
-        "/oerf/dev/demo-numbers/t1/driver/C-T1-DRV",
+        "/oerf/demo-numbers/t1/driver/C-T1-DRV",
         "/oerf/demo-numbers/t1/ops_manager",
     ]
     assert all(decrypted for _, decrypted in ssm.calls)

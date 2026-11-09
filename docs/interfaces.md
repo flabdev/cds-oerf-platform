@@ -1,6 +1,8 @@
 # OERF interface contract
 
-**FROZEN v1.41** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.42** — authored 2026-10-18 by OERF-304 (Ananda).
+
+- v1.42 (2026-11-09) Operator scripts take one stage (`--stage` or `STAGE`; `main` needs `ALLOW_MAIN=1`). Demo-number parameters for every role use that stage's prefix (`/oerf/dev/demo-numbers` on dev, `/oerf/demo-numbers` on main): drivers `{prefix}/{tenant}/driver/{contact_id}`, other roles `{prefix}/{tenant}/{role}`. `DEMO_NUMBERS_PREFIX`, when set, overrides that prefix and is logged. `scripts.seed_runtime --live-contacts` reads those names. The router still resolves the same shapes from `DEMO_NUMBERS_PREFIX` on the function.
 
 - v1.41 (2026-11-09) B2/B3 live driver addressing is contact-specific: router resolves `{DEMO_NUMBERS_PREFIX}/{tenant}/driver/{contact_id}` from the shipment's `driver` contact, where the prefix is stage-scoped (`/oerf/dev/demo-numbers` on dev, `/oerf/demo-numbers` on main). `scripts.seed_runtime --live-contacts` reads one `/oerf/dev/demo-numbers/{tenant}/driver/{contact_id}` parameter per seeded driver and writes its tenant/contact `PHONE#` ownership row. Non-driver parameters remain `/oerf/demo-numbers/{tenant}/{role}`. Inbound still correlates on the engagement's registered address or quoted message id and verifies sender ownership against the engagement contact. The three-driver t1 roster is pending B1; no live rollout is implied.
 

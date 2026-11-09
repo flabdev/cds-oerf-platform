@@ -19,6 +19,13 @@ from scripts.seed_demo_users import (
     user_pool_id,
 )
 
+
+@pytest.fixture(autouse=True)
+def _main_stage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STAGE", "main")
+    monkeypatch.setenv("ALLOW_MAIN", "1")
+
+
 POOL = "us-east-1_pool"
 TENANT = "tenant-a"
 EMAIL = "ops@example.com"

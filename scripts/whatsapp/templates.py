@@ -7,9 +7,13 @@ Operator tool. Never runs in Lambda or CI. Default action is a dry run.
     python -m scripts.whatsapp.templates submit --profile cds-oerf-poc [--only NAME ...] [--yes]
     python -m scripts.whatsapp.templates status --profile cds-oerf-poc
 
-The WABA id is read from --waba-id or SSM /oerf/whatsapp/waba-id (us-east-1).
+The WABA id is read from --waba-id or the stage SSM path
+(/oerf/whatsapp/waba-id on main, /oerf/dev/whatsapp/waba-id on dev).
+``--stage`` or ``STAGE`` is required. ``main`` also needs ``ALLOW_MAIN=1``.
 Templates with a URL button need --dashboard-base-url; without it they are skipped,
-because Meta fixes the link domain at approval time.
+because Meta fixes the link domain at approval time. Dev does not submit those
+templates. It needs copies whose button uses the dev desk URL and a
+stage-specific name, and the router must pick that name per stage.
 """
 
 from __future__ import annotations
@@ -23,9 +27,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from scripts._stage import REGION, add_stage_argument, remember_stage, resolve_stage
+
 DEFAULT_FILE = Path(__file__).with_name("templates.json")
-REGION = "us-east-1"
-WABA_PARAM = "/oerf/whatsapp/waba-id"
+URL_BUTTON_TEMPLATES = ("oerf_ops_escalation_options", "oerf_qa_report_ready")
 
 NAME_RE = re.compile(r"^[a-z0-9_]{1,512}$")
 VAR_RE = re.compile(r"\{\{(\d+)\}\}")
@@ -152,12 +157,35 @@ def _client(profile: str | None, service: str):
     return boto3.Session(profile_name=profile, region_name=REGION).client(service)
 
 
-def _waba_id(args: argparse.Namespace) -> str:
+def url_button_proposal(stage_name: str) -> str:
+    """What dev needs for the two templates whose button URL is fixed at approval.
+
+    This does not submit anything. The router today sends ``oerf_<logical_name>``
+    with no stage (``oerf.platform.channels.router._whatsapp_payload``).
+    """
+
+    listed = ", ".join(URL_BUTTON_TEMPLATES)
+    dev_names = "oerf_dev_ops_escalation_options, oerf_dev_qa_report_ready"
+    if stage_name == "dev":
+        return (
+            f"url-button templates {listed}: do not submit these names for dev. "
+            f"Dev needs copies named {dev_names} whose URL button uses the dev desk URL. "
+            "The router must pick that stage-specific name when the stage is dev. "
+            "Quick-reply templates have no fixed link and can keep their names."
+        )
+    return (
+        f"url-button templates {listed}: main keeps these names. "
+        f"Dev needs copies named {dev_names} whose URL button uses the dev desk URL, "
+        "and the router must pick the name per stage. This command does not submit those copies."
+    )
+
+
+def _waba_id(args: argparse.Namespace, parameter_name: str) -> str:
     if args.waba_id:
         return args.waba_id
-    value = _client(args.profile, "ssm").get_parameter(Name=WABA_PARAM)["Parameter"]["Value"]
+    value = _client(args.profile, "ssm").get_parameter(Name=parameter_name)["Parameter"]["Value"]
     if not value.startswith("waba-"):
-        sys.exit(f"{WABA_PARAM} does not look like an AWS WABA id (waba-...)")
+        sys.exit(f"{parameter_name} does not look like an AWS WABA id (waba-...)")
     return value
 
 
@@ -215,17 +243,20 @@ def cmd_plan(templates: list[Template], base_url: str | None) -> int:
     return 0
 
 
-def cmd_submit(args: argparse.Namespace, templates: list[Template]) -> int:
+def cmd_submit(args: argparse.Namespace, templates: list[Template], *, stage_name: str) -> int:
     from botocore.exceptions import ClientError
 
     if cmd_lint(templates):
         print("Fix lint problems before submitting.")
         return 1
     client = _client(args.profile, "socialmessaging")
-    waba_id = _waba_id(args)
+    waba_id = _waba_id(args, args.waba_parameter)
     have = existing(client, waba_id)
     todo = []
     for t in templates:
+        if stage_name == "dev" and t.needs_link:
+            print(f"SKIP   {t.name}: {url_button_proposal(stage_name)}")
+            continue
         if f"{t.name}|{t.language}" in have:
             print(f"EXISTS {t.name}: {have[f'{t.name}|{t.language}']['templateStatus']}")
         elif t.needs_link and not args.dashboard_base_url:
@@ -255,7 +286,7 @@ def cmd_submit(args: argparse.Namespace, templates: list[Template]) -> int:
 
 def cmd_status(args: argparse.Namespace, templates: list[Template]) -> int:
     client = _client(args.profile, "socialmessaging")
-    have = existing(client, _waba_id(args))
+    have = existing(client, _waba_id(args, args.waba_parameter))
     print(f"{'template':34} {'status':12} quality")
     for t in templates:
         item = have.get(f"{t.name}|{t.language}")
@@ -273,10 +304,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--file", type=Path, default=DEFAULT_FILE)
     parser.add_argument("--only", nargs="*", help="limit to these template names")
     parser.add_argument("--profile", help="AWS profile for the cds-oerf-poc account")
-    parser.add_argument("--waba-id", help=f"AWS WABA id; default reads SSM {WABA_PARAM}")
+    parser.add_argument("--waba-id", help="AWS WABA id; default reads the stage SSM parameter")
     parser.add_argument("--dashboard-base-url", help="fixed link root for URL buttons")
     parser.add_argument("--yes", action="store_true", help="actually submit (default: dry run)")
+    add_stage_argument(parser)
     args = parser.parse_args(argv)
+    target = remember_stage(resolve_stage(args.stage))
+    args.waba_parameter = target.waba_parameter
+    target.announce()
+    print(url_button_proposal(target.name))
 
     templates = load(args.file)
     if args.only:
@@ -290,7 +326,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "plan":
         return cmd_plan(templates, args.dashboard_base_url)
     if args.command == "submit":
-        return cmd_submit(args, templates)
+        return cmd_submit(args, templates, stage_name=target.name)
     return cmd_status(args, templates)
 
 

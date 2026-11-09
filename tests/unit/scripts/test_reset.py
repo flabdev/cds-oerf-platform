@@ -12,6 +12,13 @@ from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 from scripts.reset import ResetClients, main, reset_tenant
 from tests.unit.support.fake_dynamo import FakeDynamoClient
 
+
+@pytest.fixture(autouse=True)
+def _main_stage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STAGE", "main")
+    monkeypatch.setenv("ALLOW_MAIN", "1")
+
+
 NOW = datetime(2026, 10, 20, 10, 16, tzinfo=UTC)
 INCIDENT = "incident"
 ROUTING = "routing"

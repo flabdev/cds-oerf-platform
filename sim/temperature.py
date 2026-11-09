@@ -12,6 +12,8 @@ import os
 import sys
 from datetime import UTC, datetime, timedelta
 
+from scripts._stage import add_stage_argument, remember_stage, resolve_stage
+
 SCENARIOS = ("normal", "excursion", "recovery")
 READING_INTERVAL = timedelta(seconds=30)
 EXCURSION_CURVE = (
@@ -30,6 +32,7 @@ def generate_temperature_events(
     scenario: str,
     device_id: str = "RF-7781",
     start: datetime | None = None,
+    event_bus: str | None = None,
 ) -> list[dict[str, object]]:
     """Return a deterministic series for ``normal``, ``excursion``, or ``recovery``."""
 
@@ -37,6 +40,7 @@ def generate_temperature_events(
         raise ValueError(f"unknown scenario {scenario!r}")
     origin = start or _default_start(scenario)
     samples = _samples(scenario)
+    bus = require_event_bus(event_bus)
     events: list[dict[str, object]] = []
     for index, (offset_min, temperature_c) in enumerate(samples, start=1):
         moment = origin + timedelta(minutes=offset_min)
@@ -50,6 +54,7 @@ def generate_temperature_events(
                 seq=index,
                 lat=17.44,
                 lon=round(78.38 + (index - 1) * 0.001, 6),
+                event_bus=bus,
             )
         )
     return events
@@ -64,12 +69,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scenario", choices=SCENARIOS, default="excursion")
     parser.add_argument("--device", default="RF-7781")
     parser.add_argument("--dry-run", action="store_true")
+    add_stage_argument(parser)
     args = parser.parse_args(argv)
+    target = remember_stage(resolve_stage(args.stage))
+    print(target.summary(), file=sys.stderr)
     events = generate_temperature_events(
         tenant_id=args.tenant,
         shipment_id=args.shipment,
         scenario=args.scenario,
         device_id=args.device,
+        event_bus=target.event_bus,
     )
     json.dump(events, sys.stdout, indent=2)
     sys.stdout.write("\n")
@@ -86,6 +95,7 @@ def temperature_event(
     seq: int,
     lat: float,
     lon: float,
+    event_bus: str | None = None,
 ) -> dict[str, object]:
     """One PutEvents record. ``Detail`` is an object so tests can read the fields."""
 
@@ -93,7 +103,7 @@ def temperature_event(
     return {
         "Source": "sim.reefer",
         "DetailType": "TemperatureReading",
-        "EventBusName": os.environ.get("EVENT_BUS_NAME", "oerf-events"),
+        "EventBusName": require_event_bus(event_bus),
         "Time": stamp,
         "Detail": {
             "tenant_id": tenant_id,
@@ -106,6 +116,20 @@ def temperature_event(
             "seq": seq,
         },
     }
+
+
+def require_event_bus(event_bus: str | None) -> str:
+    """The bus for one reading. An explicit name wins; otherwise the stage.
+
+    There is no default bus. A missing name and a missing ``STAGE`` raise.
+    """
+
+    named = event_bus.strip() if isinstance(event_bus, str) else ""
+    if named:
+        return named
+    if not os.environ.get("STAGE", "").strip():
+        raise ValueError("stage or event_bus is required")
+    return resolve_stage(None).event_bus
 
 
 def _samples(scenario: str) -> list[tuple[float, float]]:

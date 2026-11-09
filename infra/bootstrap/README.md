@@ -95,6 +95,26 @@ aws cloudformation list-stack-resources \
 
 Set that value as the GitHub environment variable `SHARED_INBOUND_TOPIC_ARN` on the `dev` environment. The deploy workflow passes `-c whatsapp:sharedInboundTopicArn=...` when the variable is non-empty. A laptop deploy passes the same flag. Leave the flag off only when the ARN is not known yet; dev then keeps a queue subscription to its own topic, and nothing publishes there.
 
+### Operator targets
+
+Day-to-day dev work uses the `dev-*` Make targets. They set `STAGE=dev` and resolve every name from that stage. The `demo-*` and `reset-*` targets require `STAGE`. `STAGE=main` also needs `ALLOW_MAIN=1`. There is no silent main default.
+
+```text
+make dev-preflight PROFILE=<aws-profile>
+make dev-seed      PROFILE=<aws-profile> TENANT=t1
+make dev-users     PROFILE=<aws-profile> TENANT=t1 ROLE=ops_user EMAIL=ops@example.com
+make dev-sensor    PROFILE=<aws-profile> ACCOUNT=<account-id> TENANT=t1 SHIPMENT=<shipment> DEVICE=<device> SCENARIO=excursion
+make dev-reply     PROFILE=<aws-profile> ACCOUNT=<account-id> TENANT=t1
+make dev-reset     PROFILE=<aws-profile> TENANT=t1
+make dev-check     PROFILE=<aws-profile> TENANT=t1
+make dev-diff      PROFILE=<aws-profile> ACCOUNT=<account-id>
+make dev-deploy    PROFILE=<aws-profile> ACCOUNT=<account-id>
+```
+
+`dev-diff` and `dev-deploy` are the laptop form of the develop workflow. They read the phone-number id from `/oerf/dev/whatsapp/phone-number-id`, the shared inbound topic from main's `OerfComputeStack` (the read-only lookup above), and `ALARM_EMAIL` from the environment or `gh variable get ALARM_EMAIL`. Any empty value stops the command before CDK. They build `web/` and pass `stage=dev`, `account`, `agentcore:enabled=true`, `dashboard:enabled=true`, `desk:publish=true`, `auth:managedLogin=true`, `channels:live` from `CHANNELS_LIVE` (false when unset), `whatsapp:phoneNumberId`, `whatsapp:sharedInboundTopicArn`, and `alarms:email`. They do not pass `whatsapp:wabaId`. Normal dev deploys happen by merging to `develop`. These two targets are for a laptop.
+
+A live rehearsal also needs: a demo-number parameter for each driver contact with `live_contacts` true (`make dev-preflight` prints the names, not the values), the dev desk user from `make dev-users` (the password is typed, not passed), `CHANNELS_LIVE=true` on the dev environment when channels should be live, and Bedrock model access for the dev runtime. See [run-the-demo.md](../../docs/run-the-demo.md).
+
 ### 1. Bootstrap `CDKToolkit-dev`
 
 ```bash
