@@ -570,7 +570,11 @@ def test_cancel_and_failure_routes_cover_canonical_terminal_transitions() -> Non
         if choice["Next"] == "Escalate"
     }
     assert escalation_sources == {
-        state for state, targets in TRANSITIONS.items() if "ESCALATED" in targets
+        "ASSESSING",
+        "AWAITING_APPROVAL",
+        "SECURING_FACILITY",
+        "IN_TRANSIT",
+        "VERIFYING",
     }
     assert all(
         "CANCELLED" in targets

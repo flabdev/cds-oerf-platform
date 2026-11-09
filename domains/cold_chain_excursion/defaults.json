@@ -39,7 +39,8 @@
   "verification": {
     "stable_in_range": "PT5M",
     "poll_interval": "PT30S",
-    "reopen_on_rise": true
+    "reopen_on_rise": true,
+    "max_attempts": 20
   },
   "closure": {
     "closer_role": "qa",

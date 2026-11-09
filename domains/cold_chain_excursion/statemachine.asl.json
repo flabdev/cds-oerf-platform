@@ -560,6 +560,19 @@
             }
           ],
           "Next": "HandleReopen"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.containment.status",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.containment.status",
+              "StringEquals": "escalate"
+            }
+          ],
+          "Next": "Escalate"
         }
       ],
       "Default": "WaitBeforeVerify"
@@ -885,6 +898,19 @@
             {
               "Variable": "$.incident_state",
               "StringEquals": "SECURING_FACILITY"
+            }
+          ],
+          "Next": "Escalate"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.incident_state",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.incident_state",
+              "StringEquals": "VERIFYING"
             }
           ],
           "Next": "Escalate"

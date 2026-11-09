@@ -100,6 +100,14 @@ class VerificationConfig(BaseModel):
     stable_in_range: str
     poll_interval: str
     reopen_on_rise: bool
+    max_attempts: int = 20
+
+    @field_validator("max_attempts")
+    @classmethod
+    def attempts_must_be_positive(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("max_attempts must be at least 1")
+        return value
 
 
 class ClosureConfig(BaseModel):

@@ -115,11 +115,12 @@
     "verification": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["stable_in_range", "poll_interval", "reopen_on_rise"],
+      "required": ["stable_in_range", "poll_interval", "reopen_on_rise", "max_attempts"],
       "properties": {
         "stable_in_range": { "type": "string", "minLength": 1 },
         "poll_interval": { "type": "string", "minLength": 1 },
-        "reopen_on_rise": { "type": "boolean" }
+        "reopen_on_rise": { "type": "boolean" },
+        "max_attempts": { "type": "integer", "minimum": 1 }
       }
     },
     "closure": {

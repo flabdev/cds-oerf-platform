@@ -33,9 +33,9 @@ _PATH = (
 )
 
 
-def _dependencies(state: str) -> StepDependencies:
+def _dependencies(state: str, *, clock=lambda: NOW) -> StepDependencies:
     config = get_config(TENANT, "cold_chain_excursion")
-    incidents = IncidentRepository(clock=lambda: NOW)
+    incidents = IncidentRepository(clock=clock)
     incident = incidents.create(
         tenant_id=TENANT,
         shipment_id=SHIPMENT,
@@ -50,7 +50,7 @@ def _dependencies(state: str) -> StepDependencies:
     return StepDependencies(
         incidents=incidents,
         results=MemoryStepResultStore(clock=lambda: NOW),
-        clock=lambda: NOW,
+        clock=clock,
     )
 
 
@@ -65,7 +65,16 @@ def _envelope(step: str, **values: Any) -> StepEnvelope:
 
 
 def test_six_ticket_handlers_and_act_are_registered() -> None:
-    assert {"GatherContext", "Assess", "Act", "Verify", "QA", "Close"} <= HANDLERS.keys()
+    assert {
+        "GatherContext",
+        "Assess",
+        "Act",
+        "Verify",
+        "RecordContainment",
+        "BeginDisposition",
+        "QA",
+        "Close",
+    } <= HANDLERS.keys()
 
 
 def test_gather_context_uses_pinned_profile_and_advances_incident() -> None:
@@ -214,6 +223,113 @@ def test_act_walks_both_legal_hops_with_missing_approval_gate() -> None:
     assert result.workflow["action"]["kind"] == "continue"
 
 
+def test_verify_uses_latest_persisted_readings_for_continuous_window() -> None:
+    dependencies = _dependencies(
+        "IN_TRANSIT", clock=lambda: datetime(2026, 10, 20, 10, 20, tzinfo=UTC)
+    )
+    for event_id, timestamp, temperature, sequence in (
+        ("old-out", "2026-10-20T10:09:00Z", 9.0, 1),
+        ("start-in", "2026-10-20T10:10:00Z", 5.0, 2),
+        ("latest-in", "2026-10-20T10:15:00Z", 5.5, 3),
+    ):
+        assert dependencies.incidents.record_reading(
+            TENANT,
+            SHIPMENT,
+            event_id=event_id,
+            timestamp=timestamp,
+            temperature_c=temperature,
+            sequence=sequence,
+        )
+    envelope = _envelope(
+        "Verify",
+        workflow={
+            "context": {
+                "range_c": [2, 8],
+                "allowance_minutes": 45,
+                "ship_time": "2026-10-20T10:00:00Z",
+            },
+            "action": {"at": "2026-10-20T10:15:00Z"},
+            "temperature_c": 99,
+        },
+    )
+
+    result = HANDLERS["Verify"](envelope, dependencies)
+
+    assert result.containment is not None
+    assert result.containment["temperature_c"] == 5.5
+    assert result.containment["reading_at"] == "2026-10-20T10:15:00Z"
+    assert result.containment["stable_minutes"] == 5
+    assert result.containment["status"] == "contained"
+    assert result.incident_state == "VERIFYING"
+    assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "VERIFYING"
+
+
+def test_verify_attempt_cap_routes_to_escalation() -> None:
+    dependencies = _dependencies("IN_TRANSIT")
+    envelope = _envelope(
+        "Verify",
+        workflow={
+            "context": {
+                "range_c": [2, 8],
+                "allowance_minutes": 45,
+                "ship_time": "2026-10-20T10:00:00Z",
+            },
+            "action": {"at": "2026-10-20T10:15:00Z"},
+            "temperature_c": 5,
+            "containment": {"status": "stabilizing", "attempt": 19},
+        },
+    )
+
+    result = HANDLERS["Verify"](envelope, dependencies)
+
+    assert result.containment is not None
+    assert result.containment["status"] == "escalate"
+    assert result.containment["attempt"] == 20
+    assert result.containment["attempt_cap_reached"] is True
+    assert result.incident_state == "VERIFYING"
+    assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "VERIFYING"
+    assert (
+        dependencies.results.get(
+            tenant_id=TENANT, incident_id=INCIDENT_ID, step="Verify"
+        )
+        is None
+    )
+    escalated = HANDLERS["Escalate"](
+        _envelope("Escalate", workflow=result.workflow), dependencies
+    )
+    assert escalated.incident_state == "ESCALATED"
+    assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "ESCALATED"
+
+
+def test_record_containment_and_begin_disposition_replay_idempotently() -> None:
+    dependencies = _dependencies("VERIFYING")
+    containment = {"status": "contained", "temperature_c": 5.0, "attempt": 2}
+    envelope = _envelope("RecordContainment", workflow={"containment": containment})
+
+    recorded = HANDLERS["RecordContainment"](envelope, dependencies)
+    replay = HANDLERS["RecordContainment"](_envelope("RecordContainment"), dependencies)
+    assert recorded.workflow["containment"]["recorded_at"] == "2026-10-20T10:16:00Z"
+    assert replay == recorded
+    assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "CONTAINED"
+    assert [event.state for event in dependencies.incidents.events(TENANT, INCIDENT_ID)][-1] == (
+        "CONTAINED"
+    )
+
+    begin = _envelope(
+        "BeginDisposition",
+        workflow=recorded.workflow,
+        containment=recorded.containment,
+    )
+    started = HANDLERS["BeginDisposition"](begin, dependencies)
+    begin_replay = HANDLERS["BeginDisposition"](_envelope("BeginDisposition"), dependencies)
+    assert started.workflow["disposition_started_at"] == "2026-10-20T10:16:00Z"
+    assert begin_replay == started
+    assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "AWAITING_DISPOSITION"
+    assert [event.state for event in dependencies.incidents.events(TENANT, INCIDENT_ID)][-1] == (
+        "AWAITING_DISPOSITION"
+    )
+
+
 def test_verify_stabilizing_does_not_store_stale_result() -> None:
     dependencies = _dependencies("IN_TRANSIT")
     envelope = _envelope(
@@ -235,7 +351,7 @@ def test_verify_stabilizing_does_not_store_stale_result() -> None:
     assert (
         dependencies.results.get(tenant_id=TENANT, incident_id=INCIDENT_ID, step="Verify") is None
     )
-    assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "IN_TRANSIT"
+    assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "VERIFYING"
 
     later = HANDLERS["Verify"](
         _envelope(
@@ -249,8 +365,14 @@ def test_verify_stabilizing_does_not_store_stale_result() -> None:
     )
     assert later.containment is not None
     assert later.containment["status"] == "contained"
+    assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "VERIFYING"
+    recorded = HANDLERS["RecordContainment"](
+        _envelope("RecordContainment", workflow=later.workflow, containment=later.containment),
+        dependencies,
+    )
+    assert recorded.incident_state == "CONTAINED"
     assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "CONTAINED"
-    assert HANDLERS["Verify"](_envelope("Verify"), dependencies) == later
+    assert HANDLERS["RecordContainment"](_envelope("RecordContainment"), dependencies) == recorded
 
 
 def test_assess_decision_records_auditable_provenance() -> None:

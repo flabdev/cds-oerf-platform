@@ -1,4 +1,4 @@
-"""The six cold-chain step handlers and the state-machine dispatch map.
+"""The cold-chain step handlers and the state-machine dispatch map.
 
 Each handler receives the accumulator envelope, calls domain ports, and returns
 a complete replacement envelope. Deterministic rules decide; AI may only
@@ -649,6 +649,39 @@ def _reading(workflow: Mapping[str, Any], context: Mapping[str, Any], step: str)
     return float(found)
 
 
+def _latest_reading(
+    workflow: Mapping[str, Any],
+    context: Mapping[str, Any],
+    dependencies: StepDependencies,
+    envelope: StepEnvelope,
+    limits: tuple[float, float],
+) -> tuple[float, datetime, datetime]:
+    """Return latest persisted temperature, its time, and current stable-window start."""
+    readings = dependencies.incidents.readings(envelope.tenant_id, envelope.incident_id)
+    if not readings:
+        legacy = _reading(workflow, context, envelope.step)
+        anchor = _containment_anchor(workflow, context)
+        return legacy, dependencies.now(), anchor
+
+    ordered = sorted(readings, key=lambda row: (text(row, "ts") or "", text(row, "sk") or ""))
+    latest = ordered[-1]
+    latest_temperature = field(latest, "temperature_c")
+    if isinstance(latest_temperature, bool) or not isinstance(latest_temperature, (int, float)):
+        raise MissingStepInput("the latest persisted reading has no numeric temperature_c")
+    latest_at = _moment(text(latest, "ts"), "latest_reading.ts")
+    lower, upper = limits
+    stable_start = latest_at
+    if lower <= float(latest_temperature) <= upper:
+        for row in reversed(ordered[:-1]):
+            temperature = field(row, "temperature_c")
+            if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
+                raise MissingStepInput("a persisted reading has no numeric temperature_c")
+            if not lower <= float(temperature) <= upper:
+                break
+            stable_start = _moment(text(row, "ts"), "reading.ts")
+    return float(latest_temperature), latest_at, stable_start
+
+
 def _minutes_duration(value: Any, what: str) -> float:
     """A configured ISO-8601 duration as minutes, or a usable step failure."""
     if not isinstance(value, str):
@@ -713,15 +746,13 @@ def _containment_status(
 def verify(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
     """Check that the recovery held the product inside its range.
 
-    The verdict is a deterministic read of three pinned facts: the product
-    range, the configured stable window, and how much excursion allowance is
-    left. A reading back in range that stayed there for the whole window
-    contains the incident; a reading that rose again after containment, or one
-    that ran the allowance out, reopens it; anything else waits, and the
-    definition comes back around after its wait state.
+    The latest persisted sensor reading and the continuous interval of persisted
+    in-range readings determine whether the configured stable window has elapsed.
+    The excursion allowance can reopen an unsolved incident, and the configured
+    attempt cap routes a run that cannot be resolved to escalation.
 
-    An outcome that is not yet a verdict is reported but not stored, so the loop
-    re-measures instead of replaying a "not yet" forever.
+    Every verdict is returned to the state machine but not stored here: waits
+    and retries re-read the current sensor facts rather than replaying stale data.
     """
     replay = _replay(envelope, dependencies)
     if replay is not None:
@@ -733,11 +764,17 @@ def verify(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
     config = pinned_config(incident, dependencies)
     verification: VerificationConfig = config.resolved.verification
     lower, upper = _range_c(context, envelope.step)
-    reading = _reading(workflow, context, envelope.step)
     now = dependencies.now()
+    reading, reading_at, stable_start = _latest_reading(
+        workflow,
+        context,
+        dependencies,
+        envelope,
+        (lower, upper),
+    )
     previous = _gate(envelope, workflow, "containment") or {}
-    anchor = _containment_anchor(workflow, context)
-    stable_minutes = _minutes(anchor, now)
+    stable_minutes = _minutes(stable_start, min(now, reading_at))
+    attempt = int(field(previous, "attempt") or 0) + 1
     stable_required = _minutes_duration(
         verification.stable_in_range, "verification.stable_in_range"
     )
@@ -746,15 +783,20 @@ def verify(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
         float(field(context, "allowance_minutes")),
         _minutes_between(_ship_time(workflow, context), now),
     )
-    status = _containment_status(
-        in_range=in_range,
-        reading=reading,
-        upper=upper,
-        stable_minutes=stable_minutes,
-        stable_required=stable_required,
-        allowance_status=allowance.status,
-        was_contained=text(previous, "status") == CONTAINED,
-        reopen_on_rise=verification.reopen_on_rise,
+    attempt_cap_reached = attempt >= verification.max_attempts
+    status = (
+        "escalate"
+        if attempt_cap_reached
+        else _containment_status(
+            in_range=in_range,
+            reading=reading,
+            upper=upper,
+            stable_minutes=stable_minutes,
+            stable_required=stable_required,
+            allowance_status=allowance.status,
+            was_contained=text(previous, "status") == CONTAINED,
+            reopen_on_rise=verification.reopen_on_rise,
+        )
     )
     containment = {
         "status": status,
@@ -763,6 +805,9 @@ def verify(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
         "in_range": in_range,
         "stable_minutes": stable_minutes,
         "stable_required_min": stable_required,
+        "reading_at": reading_at.isoformat().replace("+00:00", "Z"),
+        "attempt": attempt,
+        "attempt_cap_reached": attempt_cap_reached,
         "previous_status": text(previous, "status"),
         "allowance": allowance.model_dump(),
         "checked_at": dependencies.stamp(),
@@ -780,6 +825,8 @@ def verify(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
         },
         status=status,
         in_range=in_range,
+        attempt=attempt,
+        attempt_cap_reached=attempt_cap_reached,
         stable_required_min=stable_required,
         reopened=status == REOPENED,
     )
@@ -789,14 +836,66 @@ def verify(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
             step=envelope.step,
             workflow=workflow,
             decision=outcome,
-            result={"status": status, "temperature_c": reading},
-            incident_state="CONTAINED",
-            current_stage="CONTAINED" if status == CONTAINED else "VERIFYING",
-            hold=status != CONTAINED,
+            result={"status": status, "temperature_c": reading, "attempt": attempt},
+            incident_state="VERIFYING",
+            current_stage="VERIFYING",
         ),
         envelope,
         dependencies,
-        remember=status == CONTAINED,
+        remember=False,
+    )
+
+
+@handles("RecordContainment")
+def record_containment(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
+    """Commit a verified containment as the VERIFYING → CONTAINED transition."""
+    replay = _replay(envelope, dependencies)
+    if replay is not None:
+        return replay
+
+    workflow = dict(envelope.workflow)
+    containment = _gate(envelope, workflow, "containment") or {}
+    if text(containment, "status") != CONTAINED:
+        raise MissingStepInput("RecordContainment needs a contained verification verdict")
+    workflow["containment"] = {
+        **containment,
+        "recorded_at": dependencies.stamp(),
+    }
+    return apply(
+        WorkflowStep(
+            step=envelope.step,
+            workflow=workflow,
+            result={"status": CONTAINED},
+            incident_state="CONTAINED",
+            current_stage="CONTAINED",
+        ),
+        envelope,
+        dependencies,
+    )
+
+
+@handles("BeginDisposition")
+def begin_disposition(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
+    """Move a contained incident into the disposition review stage."""
+    replay = _replay(envelope, dependencies)
+    if replay is not None:
+        return replay
+
+    workflow = dict(envelope.workflow)
+    containment = _gate(envelope, workflow, "containment") or {}
+    if text(containment, "status") != CONTAINED:
+        raise MissingStepInput("BeginDisposition needs a contained verification verdict")
+    workflow["disposition_started_at"] = dependencies.stamp()
+    return apply(
+        WorkflowStep(
+            step=envelope.step,
+            workflow=workflow,
+            result={"status": "awaiting_disposition"},
+            incident_state="AWAITING_DISPOSITION",
+            current_stage="AWAITING_DISPOSITION",
+        ),
+        envelope,
+        dependencies,
     )
 
 

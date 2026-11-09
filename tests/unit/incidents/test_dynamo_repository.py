@@ -168,6 +168,43 @@ def test_record_reading_writes_an_idempotent_read_row_for_open_incident() -> Non
         }
     ]
     assert remembered_rows[0]["sk"] == rows[0]["sk"]["S"]
+    assert store.readings("t1", incident.incident_id) == [
+        {
+            "ts": stamp,
+            "temperature_c": 8.4,
+            "sk": sk,
+        }
+    ]
+
+
+def test_readings_returns_sorted_persisted_rows() -> None:
+    client = FakeDynamoClient()
+    store = DynamoIncidentStore(client, "incident", clock=_clock)
+    incident = store.create(tenant_id="t1", shipment_id="PH-2841", reason="TEMPERATURE_ABOVE_MAX")
+    assert store.record_reading(
+        "t1",
+        "PH-2841",
+        event_id="later",
+        timestamp="2026-10-20T10:16:00Z",
+        temperature_c=7.4,
+        sequence=2,
+    )
+    assert store.record_reading(
+        "t1",
+        "PH-2841",
+        event_id="earlier",
+        timestamp="2026-10-20T10:15:00Z",
+        temperature_c=6.4,
+        sequence=1,
+    )
+
+    rows = store.readings("t1", incident.incident_id)
+
+    assert [(row["ts"], row["temperature_c"]) for row in rows] == [
+        ("2026-10-20T10:15:00Z", 6.4),
+        ("2026-10-20T10:16:00Z", 7.4),
+    ]
+    assert [row["sk"] for row in rows] == sorted(row["sk"] for row in rows)
 
 
 def test_readings_without_an_open_incident_are_not_persisted() -> None:

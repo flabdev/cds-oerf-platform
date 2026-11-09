@@ -31,7 +31,7 @@ TRANSITIONS: dict[str, frozenset[str]] = {
     "SECURING_FACILITY": frozenset({"IN_TRANSIT", "ESCALATED", "CANCELLED"}),
     "ESCALATED": frozenset({"SECURING_FACILITY", "VERIFYING", "CANCELLED"}),
     "IN_TRANSIT": frozenset({"VERIFYING", "ESCALATED", "CANCELLED"}),
-    "VERIFYING": frozenset({"CONTAINED", "REOPENED", "CANCELLED"}),
+    "VERIFYING": frozenset({"CONTAINED", "REOPENED", "ESCALATED", "CANCELLED"}),
     "CONTAINED": frozenset({"REOPENED", "AWAITING_DISPOSITION", "CANCELLED"}),
     "REOPENED": frozenset({"VERIFYING", "CANCELLED"}),
     "AWAITING_DISPOSITION": frozenset(
@@ -112,6 +112,9 @@ class IncidentStore(Protocol):
 
     def events(self, tenant_id: str, incident_id: str) -> list[TimelineEvent]:
         """Return timeline rows in sort-key order."""
+
+    def readings(self, tenant_id: str, incident_id: str) -> list[dict[str, Any]]:
+        """Return persisted temperature readings in sort-key order."""
 
     def record_reading(
         self,
