@@ -23,6 +23,8 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from infra.naming import Stage
+
 _PERIOD = Duration.minutes(5)
 # router.py logs these outcome values when a send or the route fails.
 # "sent" and "simulated" are not failures. There is no outcome "failed".
@@ -45,6 +47,23 @@ def lambda_functions(*scopes: Construct) -> list[lambda_.Function]:
     return found
 
 
+def is_flag_gated(fn: lambda_.IFunction) -> bool:
+    """True when a context flag is the only reason this function exists.
+
+    ``demo:seedDevices`` creates the device-seed function and its provider.
+    ``whatsapp:wabaId`` creates the WABA destination function and its provider.
+    ``dashboard:enabled`` creates the API stack, and ``desk:publish`` adds the
+    desk upload handler inside that stack. Referencing any of these from
+    another stack exports a value that CloudFormation cannot delete on the
+    next deploy once the flag is off, because the producer stack updates first.
+    """
+
+    if "OerfApiStack" in Stack.of(fn).stack_name:
+        return True
+    path = fn.node.path
+    return "/DeviceSeed" in path or "/WabaEventDestination/" in path
+
+
 def error_alarm_id(fn: lambda_.IFunction, functions: Sequence[lambda_.IFunction]) -> str:
     """Construct id for one function's errors alarm.
 
@@ -61,6 +80,47 @@ def error_alarm_id(fn: lambda_.IFunction, functions: Sequence[lambda_.IFunction]
     return f"{sanitized}Errors"
 
 
+def _alarm_beside_function(
+    fn: lambda_.IFunction,
+    peers: Sequence[lambda_.IFunction],
+    stage: Stage,
+) -> None:
+    """Alarm a flag-gated function in its own stack.
+
+    The metric uses the function name directly, so no export is required.
+    The action targets the observability topic by its name.
+    """
+
+    stack = Stack.of(fn)
+    alarm = cloudwatch.Alarm(
+        stack,
+        error_alarm_id(fn, peers),
+        metric=fn.metric_errors(period=_PERIOD, statistic="Sum"),
+        threshold=0,
+        comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluation_periods=1,
+        treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+    )
+    cfn_alarm = alarm.node.default_child
+    if not isinstance(cfn_alarm, cloudwatch.CfnAlarm):
+        raise TypeError("alarm default child is not CfnAlarm")
+    cfn_alarm.alarm_actions = [stack.format_arn(service="sns", resource=stage.res("alarms"))]
+    _retain_function_export(fn)
+
+
+def _retain_function_export(fn: lambda_.IFunction) -> None:
+    """Keep the function-name export observability used to import.
+
+    TODO(export-removal): Delete this call after main and dev have each
+    deployed the release that stops importing the export. The producer
+    stacks update before observability, so the export has to survive that
+    first deploy or CloudFormation cancels the delete. Remove it in the
+    following release, not in the same one that drops the import.
+    """
+
+    Stack.of(fn).export_value(fn.function_name)
+
+
 class OerfObservabilityStack(Stack):
     def __init__(
         self,
@@ -71,13 +131,23 @@ class OerfObservabilityStack(Stack):
         dead_letter_queues: Sequence[sqs.IQueue],
         state_machines: Sequence[sfn.IStateMachine],
         channel_router_log_group: logs.ILogGroup,
+        stage: Stage,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
         if not functions or not dead_letter_queues or not state_machines:
             raise ValueError("observability stack needs functions, DLQs, and state machines")
 
-        self.alarm_topic = sns.Topic(self, "AlarmTopic", display_name="oerf-alarms")
+        # Fixed name so an alarm in the function's own stack can target this
+        # topic without importing it. Importing the topic from here would
+        # cycle, because this stack already imports the producer stacks, and
+        # those stacks deploy first. Setting the name replaces the topic once.
+        self.alarm_topic = sns.Topic(
+            self,
+            "AlarmTopic",
+            display_name=stage.res("alarms"),
+            topic_name=stage.res("alarms"),
+        )
         email = self.node.try_get_context("alarms:email")
         if isinstance(email, str) and email.strip():
             self.alarm_topic.add_subscription(subscriptions.EmailSubscription(email.strip()))
@@ -97,8 +167,11 @@ class OerfObservabilityStack(Stack):
                 machine.metric_timed_out(period=_PERIOD, statistic="Sum"),
             )
         ]
+        stable = [fn for fn in functions if not is_flag_gated(fn)]
+        if not stable:
+            raise ValueError("observability stack needs functions that exist for every flag")
         error_metrics = [
-            fn.metric_errors(period=_PERIOD, statistic="Sum") for fn in functions
+            fn.metric_errors(period=_PERIOD, statistic="Sum") for fn in stable
         ]
         self.alarms = [
             self._alarm(f"{queue.node.id}Visible", metric)
@@ -112,14 +185,17 @@ class OerfObservabilityStack(Stack):
                 strict=True,
             )
         )
+        # Ids stay based on the full list, so a provider alarm keeps today's
+        # construct id when another provider is added.
         self.alarms.extend(
             self._alarm(error_alarm_id(fn, functions), metric)
-            for fn, metric in zip(functions, error_metrics, strict=True)
+            for fn, metric in zip(stable, error_metrics, strict=True)
         )
         for alarm in self.alarms:
             alarm.add_alarm_action(action)
 
-        delivery_failures = self._delivery_failures(channel_router_log_group)
+        namespace = stage.channels_namespace()
+        delivery_failures = self._delivery_failures(channel_router_log_group, namespace)
         delivery_alarm = self._alarm("ChannelDeliveryFailures", delivery_failures)
         delivery_alarm.add_alarm_action(action)
         self.alarms.append(delivery_alarm)
@@ -136,14 +212,16 @@ class OerfObservabilityStack(Stack):
             self.alarms.append(ingest_alarm)
         by_channel = cloudwatch.MathExpression(
             expression=(
-                "SEARCH('{OERF/Channels,channel} "
-                'MetricName="DeliveryFailures"\', \'Sum\', 300)'
+                f"SEARCH('{{{namespace},channel}} "
+                "MetricName=\"DeliveryFailures\"', 'Sum', 300)"
             ),
             period=_PERIOD,
             label="DeliveryFailures by channel",
         )
 
-        dashboard = cloudwatch.Dashboard(self, "OerfOperations", dashboard_name="oerf-operations")
+        dashboard = cloudwatch.Dashboard(
+            self, "OerfOperations", dashboard_name=stage.res("operations")
+        )
         dashboard.add_widgets(
             cloudwatch.GraphWidget(title="DLQ depth", left=dlq_metrics),
             cloudwatch.GraphWidget(title="State machine failures", left=machine_metrics),
@@ -158,8 +236,13 @@ class OerfObservabilityStack(Stack):
                 else []
             ),
         )
+        for fn in functions:
+            if is_flag_gated(fn):
+                _alarm_beside_function(fn, functions, stage)
 
-    def _delivery_failures(self, log_group: logs.ILogGroup) -> cloudwatch.IMetric:
+    def _delivery_failures(
+        self, log_group: logs.ILogGroup, namespace: str
+    ) -> cloudwatch.IMetric:
         """Count router JSON lines whose outcome is a delivery failure.
 
         The alarm metric has no dimension, so a line with no channel still
@@ -177,7 +260,7 @@ class OerfObservabilityStack(Stack):
             "ChannelDeliveryFailureFilter",
             log_group=log_group,
             filter_pattern=pattern,
-            metric_namespace="OERF/Channels",
+            metric_namespace=namespace,
             metric_name="DeliveryFailures",
             metric_value="1",
         )
@@ -186,13 +269,13 @@ class OerfObservabilityStack(Stack):
             "ChannelDeliveryFailureByChannelFilter",
             log_group=log_group,
             filter_pattern=pattern,
-            metric_namespace="OERF/Channels",
+            metric_namespace=namespace,
             metric_name="DeliveryFailures",
             metric_value="1",
             dimensions={"channel": "$.channel"},
         )
         return cloudwatch.Metric(
-            namespace="OERF/Channels",
+            namespace=namespace,
             metric_name="DeliveryFailures",
             statistic="Sum",
             period=_PERIOD,

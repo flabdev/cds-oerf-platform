@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import UTC, datetime, timedelta
 
@@ -92,7 +93,7 @@ def temperature_event(
     return {
         "Source": "sim.reefer",
         "DetailType": "TemperatureReading",
-        "EventBusName": "oerf-events",
+        "EventBusName": os.environ.get("EVENT_BUS_NAME", "oerf-events"),
         "Time": stamp,
         "Detail": {
             "tenant_id": tenant_id,

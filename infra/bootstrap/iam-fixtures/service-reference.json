@@ -1,0 +1,6529 @@
+{
+  "apigateway": {
+    "Actions": [
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "DELETE",
+        "Resources": [
+          {
+            "Name": "AccessLogSettings"
+          },
+          {
+            "Name": "Api"
+          },
+          {
+            "Name": "ApiKey"
+          },
+          {
+            "Name": "ApiMapping"
+          },
+          {
+            "Name": "Authorizer"
+          },
+          {
+            "Name": "AuthorizersCache"
+          },
+          {
+            "Name": "BasePathMapping"
+          },
+          {
+            "Name": "ClientCertificate"
+          },
+          {
+            "Name": "Cors"
+          },
+          {
+            "Name": "Deployment"
+          },
+          {
+            "Name": "DocumentationPart"
+          },
+          {
+            "Name": "DocumentationVersion"
+          },
+          {
+            "Name": "DomainName"
+          },
+          {
+            "Name": "DomainNameAccessAssociation"
+          },
+          {
+            "Name": "GatewayResponse"
+          },
+          {
+            "Name": "Integration"
+          },
+          {
+            "Name": "IntegrationResponse"
+          },
+          {
+            "Name": "Method"
+          },
+          {
+            "Name": "MethodResponse"
+          },
+          {
+            "Name": "Model"
+          },
+          {
+            "Name": "PrivateBasePathMapping"
+          },
+          {
+            "Name": "PrivateDomainName"
+          },
+          {
+            "Name": "RequestValidator"
+          },
+          {
+            "Name": "Resource"
+          },
+          {
+            "Name": "RestApi"
+          },
+          {
+            "Name": "Route"
+          },
+          {
+            "Name": "RouteRequestParameter"
+          },
+          {
+            "Name": "RouteResponse"
+          },
+          {
+            "Name": "RouteSettings"
+          },
+          {
+            "Name": "Stage"
+          },
+          {
+            "Name": "Tags"
+          },
+          {
+            "Name": "Template"
+          },
+          {
+            "Name": "UsagePlan"
+          },
+          {
+            "Name": "UsagePlanKey"
+          },
+          {
+            "Name": "VpcLink"
+          }
+        ]
+      },
+      {
+        "Name": "GET",
+        "Resources": [
+          {
+            "Name": "AccessLogSettings"
+          },
+          {
+            "Name": "Account"
+          },
+          {
+            "Name": "Api"
+          },
+          {
+            "Name": "ApiKey"
+          },
+          {
+            "Name": "ApiKeys"
+          },
+          {
+            "Name": "ApiMapping"
+          },
+          {
+            "Name": "ApiMappings"
+          },
+          {
+            "Name": "Apis"
+          },
+          {
+            "Name": "Authorizer"
+          },
+          {
+            "Name": "Authorizers"
+          },
+          {
+            "Name": "AuthorizersCache"
+          },
+          {
+            "Name": "BasePathMapping"
+          },
+          {
+            "Name": "BasePathMappings"
+          },
+          {
+            "Name": "ClientCertificate"
+          },
+          {
+            "Name": "ClientCertificates"
+          },
+          {
+            "Name": "Cors"
+          },
+          {
+            "Name": "Deployment"
+          },
+          {
+            "Name": "Deployments"
+          },
+          {
+            "Name": "DocumentationPart"
+          },
+          {
+            "Name": "DocumentationParts"
+          },
+          {
+            "Name": "DocumentationVersion"
+          },
+          {
+            "Name": "DocumentationVersions"
+          },
+          {
+            "Name": "DomainName"
+          },
+          {
+            "Name": "DomainNameAccessAssociations"
+          },
+          {
+            "Name": "DomainNames"
+          },
+          {
+            "Name": "ExportedAPI"
+          },
+          {
+            "Name": "GatewayResponse"
+          },
+          {
+            "Name": "GatewayResponses"
+          },
+          {
+            "Name": "Integration"
+          },
+          {
+            "Name": "IntegrationResponse"
+          },
+          {
+            "Name": "IntegrationResponses"
+          },
+          {
+            "Name": "Integrations"
+          },
+          {
+            "Name": "Method"
+          },
+          {
+            "Name": "MethodResponse"
+          },
+          {
+            "Name": "Model"
+          },
+          {
+            "Name": "ModelTemplate"
+          },
+          {
+            "Name": "Models"
+          },
+          {
+            "Name": "PrivateBasePathMapping"
+          },
+          {
+            "Name": "PrivateBasePathMappings"
+          },
+          {
+            "Name": "PrivateDomainName"
+          },
+          {
+            "Name": "RequestValidator"
+          },
+          {
+            "Name": "RequestValidators"
+          },
+          {
+            "Name": "Resource"
+          },
+          {
+            "Name": "Resources"
+          },
+          {
+            "Name": "RestApi"
+          },
+          {
+            "Name": "RestApis"
+          },
+          {
+            "Name": "Route"
+          },
+          {
+            "Name": "RouteRequestParameter"
+          },
+          {
+            "Name": "RouteResponse"
+          },
+          {
+            "Name": "RouteResponses"
+          },
+          {
+            "Name": "RouteSettings"
+          },
+          {
+            "Name": "Routes"
+          },
+          {
+            "Name": "Sdk"
+          },
+          {
+            "Name": "Stage"
+          },
+          {
+            "Name": "Stages"
+          },
+          {
+            "Name": "Tags"
+          },
+          {
+            "Name": "UsagePlan"
+          },
+          {
+            "Name": "UsagePlanKey"
+          },
+          {
+            "Name": "UsagePlanKeys"
+          },
+          {
+            "Name": "UsagePlans"
+          },
+          {
+            "Name": "VpcLink"
+          },
+          {
+            "Name": "VpcLinks"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "PATCH",
+        "Resources": [
+          {
+            "Name": "Account"
+          },
+          {
+            "Name": "Api"
+          },
+          {
+            "Name": "ApiKey"
+          },
+          {
+            "Name": "ApiMapping"
+          },
+          {
+            "Name": "Authorizer"
+          },
+          {
+            "Name": "BasePathMapping"
+          },
+          {
+            "Name": "ClientCertificate"
+          },
+          {
+            "Name": "Deployment"
+          },
+          {
+            "Name": "DocumentationPart"
+          },
+          {
+            "Name": "DocumentationVersion"
+          },
+          {
+            "Name": "DomainName"
+          },
+          {
+            "Name": "GatewayResponse"
+          },
+          {
+            "Name": "Integration"
+          },
+          {
+            "Name": "IntegrationResponse"
+          },
+          {
+            "Name": "Method"
+          },
+          {
+            "Name": "MethodResponse"
+          },
+          {
+            "Name": "Model"
+          },
+          {
+            "Name": "PrivateBasePathMapping"
+          },
+          {
+            "Name": "PrivateDomainName"
+          },
+          {
+            "Name": "RequestValidator"
+          },
+          {
+            "Name": "Resource"
+          },
+          {
+            "Name": "RestApi"
+          },
+          {
+            "Name": "Route"
+          },
+          {
+            "Name": "RouteRequestParameter"
+          },
+          {
+            "Name": "RouteResponse"
+          },
+          {
+            "Name": "Stage"
+          },
+          {
+            "Name": "Template"
+          },
+          {
+            "Name": "UsagePlan"
+          },
+          {
+            "Name": "UsagePlanKey"
+          },
+          {
+            "Name": "VpcLink"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "POST",
+        "Resources": [
+          {
+            "Name": "ApiKeys"
+          },
+          {
+            "Name": "ApiMappings"
+          },
+          {
+            "Name": "Apis"
+          },
+          {
+            "Name": "Authorizers"
+          },
+          {
+            "Name": "BasePathMappings"
+          },
+          {
+            "Name": "ClientCertificates"
+          },
+          {
+            "Name": "Deployments"
+          },
+          {
+            "Name": "DocumentationParts"
+          },
+          {
+            "Name": "DocumentationVersions"
+          },
+          {
+            "Name": "DomainNameAccessAssociations"
+          },
+          {
+            "Name": "DomainNames"
+          },
+          {
+            "Name": "GatewayResponses"
+          },
+          {
+            "Name": "IntegrationResponse"
+          },
+          {
+            "Name": "IntegrationResponses"
+          },
+          {
+            "Name": "Integrations"
+          },
+          {
+            "Name": "MethodResponse"
+          },
+          {
+            "Name": "Models"
+          },
+          {
+            "Name": "PrivateBasePathMappings"
+          },
+          {
+            "Name": "RequestValidators"
+          },
+          {
+            "Name": "Resources"
+          },
+          {
+            "Name": "RestApis"
+          },
+          {
+            "Name": "RouteResponses"
+          },
+          {
+            "Name": "Routes"
+          },
+          {
+            "Name": "Stages"
+          },
+          {
+            "Name": "UsagePlanKeys"
+          },
+          {
+            "Name": "UsagePlans"
+          },
+          {
+            "Name": "VpcLinks"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "PUT",
+        "Resources": [
+          {
+            "Name": "Api"
+          },
+          {
+            "Name": "Apis"
+          },
+          {
+            "Name": "DocumentationPart"
+          },
+          {
+            "Name": "GatewayResponse"
+          },
+          {
+            "Name": "IntegrationResponse"
+          },
+          {
+            "Name": "MethodResponse"
+          },
+          {
+            "Name": "RestApi"
+          },
+          {
+            "Name": "Tags"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateRestApiPolicy",
+        "Resources": [
+          {
+            "Name": "RestApi"
+          },
+          {
+            "Name": "RestApis"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/stages/${StageName}/accesslogsettings"
+        ],
+        "Name": "AccessLogSettings"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/account"
+        ],
+        "Name": "Account"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}"
+        ],
+        "Name": "Api"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apikeys/${ApiKeyId}"
+        ],
+        "Name": "ApiKey"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apikeys"
+        ],
+        "Name": "ApiKeys"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/domainnames/${DomainName}/apimappings/${ApiMappingId}"
+        ],
+        "Name": "ApiMapping"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/domainnames/${DomainName}/apimappings"
+        ],
+        "Name": "ApiMappings"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis"
+        ],
+        "Name": "Apis"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/authorizers/${AuthorizerId}",
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/authorizers/${AuthorizerId}"
+        ],
+        "Name": "Authorizer"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/authorizers",
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/authorizers"
+        ],
+        "Name": "Authorizers"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/stages/${StageName}/cache/authorizers"
+        ],
+        "Name": "AuthorizersCache"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/domainnames/${DomainName}/basepathmappings/${BasePath}"
+        ],
+        "Name": "BasePathMapping"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/domainnames/${DomainName}/basepathmappings"
+        ],
+        "Name": "BasePathMappings"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/clientcertificates/${ClientCertificateId}"
+        ],
+        "Name": "ClientCertificate"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/clientcertificates"
+        ],
+        "Name": "ClientCertificates"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/cors"
+        ],
+        "Name": "Cors"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/deployments/${DeploymentId}",
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/deployments/${DeploymentId}"
+        ],
+        "Name": "Deployment"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/deployments",
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/deployments"
+        ],
+        "Name": "Deployments"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/documentation/parts/${DocumentationPartId}"
+        ],
+        "Name": "DocumentationPart"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/documentation/parts"
+        ],
+        "Name": "DocumentationParts"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/documentation/versions/${DocumentationVersionId}"
+        ],
+        "Name": "DocumentationVersion"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/documentation/versions"
+        ],
+        "Name": "DocumentationVersions"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/domainnames/${DomainName}"
+        ],
+        "Name": "DomainName"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}:${Account}:/domainnameaccessassociations/domainname/${DomainName}/${SourceType}/${SourceId}"
+        ],
+        "Name": "DomainNameAccessAssociation"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}:${Account}:/domainnameaccessassociations"
+        ],
+        "Name": "DomainNameAccessAssociations"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/domainnames"
+        ],
+        "Name": "DomainNames"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/exports/${Specification}"
+        ],
+        "Name": "ExportedAPI"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/gatewayresponses/${ResponseType}"
+        ],
+        "Name": "GatewayResponse"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/gatewayresponses"
+        ],
+        "Name": "GatewayResponses"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/integrations/${IntegrationId}",
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/resources/${ResourceId}/methods/${HttpMethodType}/integration"
+        ],
+        "Name": "Integration"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/integrations/${IntegrationId}/integrationresponses/${IntegrationResponseId}",
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/resources/${ResourceId}/methods/${HttpMethodType}/integration/responses/${StatusCode}"
+        ],
+        "Name": "IntegrationResponse"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/integrations/${IntegrationId}/integrationresponses"
+        ],
+        "Name": "IntegrationResponses"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/integrations"
+        ],
+        "Name": "Integrations"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/resources/${ResourceId}/methods/${HttpMethodType}"
+        ],
+        "Name": "Method"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/resources/${ResourceId}/methods/${HttpMethodType}/responses/${StatusCode}"
+        ],
+        "Name": "MethodResponse"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/models/${ModelId}",
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/models/${ModelName}"
+        ],
+        "Name": "Model"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/models/${ModelId}/template"
+        ],
+        "Name": "ModelTemplate"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/models",
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/models"
+        ],
+        "Name": "Models"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/domainnames/${DomainName}+${DomainIdentifier}/basepathmappings/${BasePath}"
+        ],
+        "Name": "PrivateBasePathMapping"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/domainnames/${DomainName}+${DomainIdentifier}/basepathmappings"
+        ],
+        "Name": "PrivateBasePathMappings"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}:${Account}:/domainnames/${DomainName}+${DomainIdentifier}"
+        ],
+        "Name": "PrivateDomainName"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/requestvalidators/${RequestValidatorId}"
+        ],
+        "Name": "RequestValidator"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/requestvalidators"
+        ],
+        "Name": "RequestValidators"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/resources/${ResourceId}"
+        ],
+        "Name": "Resource"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/resources"
+        ],
+        "Name": "Resources"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}"
+        ],
+        "Name": "RestApi"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis"
+        ],
+        "Name": "RestApis"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/routes/${RouteId}"
+        ],
+        "Name": "Route"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/routes/${RouteId}/requestparameters/${RequestParameterKey}"
+        ],
+        "Name": "RouteRequestParameter"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/routes/${RouteId}/routeresponses/${RouteResponseId}"
+        ],
+        "Name": "RouteResponse"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/routes/${RouteId}/routeresponses"
+        ],
+        "Name": "RouteResponses"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/stages/${StageName}/routesettings/${RouteKey}"
+        ],
+        "Name": "RouteSettings"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/routes"
+        ],
+        "Name": "Routes"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/stages/${StageName}/sdks/${SdkType}"
+        ],
+        "Name": "Sdk"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/stages/${StageName}",
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/stages/${StageName}"
+        ],
+        "Name": "Stage"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/apis/${ApiId}/stages",
+          "arn:${Partition}:apigateway:${Region}::/restapis/${RestApiId}/stages"
+        ],
+        "Name": "Stages"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/tags/${UrlEncodedResourceARN}"
+        ],
+        "Name": "Tags"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/restapis/models/${ModelName}/template"
+        ],
+        "Name": "Template"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/usageplans/${UsagePlanId}"
+        ],
+        "Name": "UsagePlan"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/usageplans/${UsagePlanId}/keys/${Id}"
+        ],
+        "Name": "UsagePlanKey"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/usageplans/${UsagePlanId}/keys"
+        ],
+        "Name": "UsagePlanKeys"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/usageplans"
+        ],
+        "Name": "UsagePlans"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/vpclinks/${VpcLinkId}"
+        ],
+        "Name": "VpcLink"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:apigateway:${Region}::/vpclinks"
+        ],
+        "Name": "VpcLinks"
+      }
+    ]
+  },
+  "bedrock": {
+    "Actions": [
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "CreateGuardrail",
+        "Resources": [
+          {
+            "Name": "automated-reasoning-policy"
+          },
+          {
+            "Name": "automated-reasoning-policy-version"
+          },
+          {
+            "Name": "guardrail-profile"
+          }
+        ]
+      },
+      {
+        "Name": "CreateGuardrailVersion",
+        "Resources": [
+          {
+            "Name": "guardrail"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteGuardrail",
+        "Resources": [
+          {
+            "Name": "guardrail"
+          }
+        ]
+      },
+      {
+        "Name": "GetGuardrail",
+        "Resources": [
+          {
+            "Name": "guardrail"
+          }
+        ]
+      },
+      {
+        "Name": "ListGuardrails",
+        "Resources": [
+          {
+            "Name": "guardrail"
+          }
+        ]
+      },
+      {
+        "Name": "ListTagsForResource",
+        "Resources": [
+          {
+            "Name": "advanced-prompt-optimization-job"
+          },
+          {
+            "Name": "agent"
+          },
+          {
+            "Name": "agent-alias"
+          },
+          {
+            "Name": "application-inference-profile"
+          },
+          {
+            "Name": "async-invoke"
+          },
+          {
+            "Name": "automated-reasoning-policy"
+          },
+          {
+            "Name": "automated-reasoning-policy-version"
+          },
+          {
+            "Name": "blueprint"
+          },
+          {
+            "Name": "blueprint-optimization-invocation"
+          },
+          {
+            "Name": "custom-model"
+          },
+          {
+            "Name": "custom-model-deployment"
+          },
+          {
+            "Name": "data-automation-invocation-job"
+          },
+          {
+            "Name": "data-automation-library"
+          },
+          {
+            "Name": "data-automation-library-ingestion-job"
+          },
+          {
+            "Name": "data-automation-project"
+          },
+          {
+            "Name": "evaluation-job"
+          },
+          {
+            "Name": "flow"
+          },
+          {
+            "Name": "flow-alias"
+          },
+          {
+            "Name": "guardrail"
+          },
+          {
+            "Name": "imported-model"
+          },
+          {
+            "Name": "knowledge-base"
+          },
+          {
+            "Name": "model-copy-job"
+          },
+          {
+            "Name": "model-customization-job"
+          },
+          {
+            "Name": "model-evaluation-job"
+          },
+          {
+            "Name": "model-import-job"
+          },
+          {
+            "Name": "model-invocation-job"
+          },
+          {
+            "Name": "prompt"
+          },
+          {
+            "Name": "prompt-router"
+          },
+          {
+            "Name": "prompt-version"
+          },
+          {
+            "Name": "provisioned-model"
+          },
+          {
+            "Name": "retrieval-instruction"
+          },
+          {
+            "Name": "session"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "TagResource",
+        "Resources": [
+          {
+            "Name": "advanced-prompt-optimization-job"
+          },
+          {
+            "Name": "agent"
+          },
+          {
+            "Name": "agent-alias"
+          },
+          {
+            "Name": "application-inference-profile"
+          },
+          {
+            "Name": "async-invoke"
+          },
+          {
+            "Name": "automated-reasoning-policy"
+          },
+          {
+            "Name": "automated-reasoning-policy-version"
+          },
+          {
+            "Name": "blueprint"
+          },
+          {
+            "Name": "blueprint-optimization-invocation"
+          },
+          {
+            "Name": "custom-model"
+          },
+          {
+            "Name": "custom-model-deployment"
+          },
+          {
+            "Name": "data-automation-invocation-job"
+          },
+          {
+            "Name": "data-automation-library"
+          },
+          {
+            "Name": "data-automation-library-ingestion-job"
+          },
+          {
+            "Name": "data-automation-project"
+          },
+          {
+            "Name": "evaluation-job"
+          },
+          {
+            "Name": "flow"
+          },
+          {
+            "Name": "flow-alias"
+          },
+          {
+            "Name": "guardrail"
+          },
+          {
+            "Name": "imported-model"
+          },
+          {
+            "Name": "knowledge-base"
+          },
+          {
+            "Name": "model-copy-job"
+          },
+          {
+            "Name": "model-customization-job"
+          },
+          {
+            "Name": "model-evaluation-job"
+          },
+          {
+            "Name": "model-import-job"
+          },
+          {
+            "Name": "model-invocation-job"
+          },
+          {
+            "Name": "prompt"
+          },
+          {
+            "Name": "prompt-router"
+          },
+          {
+            "Name": "prompt-version"
+          },
+          {
+            "Name": "provisioned-model"
+          },
+          {
+            "Name": "retrieval-instruction"
+          },
+          {
+            "Name": "session"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:TagKeys"
+        ],
+        "Name": "UntagResource",
+        "Resources": [
+          {
+            "Name": "advanced-prompt-optimization-job"
+          },
+          {
+            "Name": "agent"
+          },
+          {
+            "Name": "agent-alias"
+          },
+          {
+            "Name": "application-inference-profile"
+          },
+          {
+            "Name": "async-invoke"
+          },
+          {
+            "Name": "automated-reasoning-policy"
+          },
+          {
+            "Name": "automated-reasoning-policy-version"
+          },
+          {
+            "Name": "blueprint"
+          },
+          {
+            "Name": "blueprint-optimization-invocation"
+          },
+          {
+            "Name": "custom-model"
+          },
+          {
+            "Name": "custom-model-deployment"
+          },
+          {
+            "Name": "data-automation-invocation-job"
+          },
+          {
+            "Name": "data-automation-library"
+          },
+          {
+            "Name": "data-automation-library-ingestion-job"
+          },
+          {
+            "Name": "data-automation-project"
+          },
+          {
+            "Name": "evaluation-job"
+          },
+          {
+            "Name": "flow"
+          },
+          {
+            "Name": "flow-alias"
+          },
+          {
+            "Name": "guardrail"
+          },
+          {
+            "Name": "imported-model"
+          },
+          {
+            "Name": "knowledge-base"
+          },
+          {
+            "Name": "model-copy-job"
+          },
+          {
+            "Name": "model-customization-job"
+          },
+          {
+            "Name": "model-evaluation-job"
+          },
+          {
+            "Name": "model-import-job"
+          },
+          {
+            "Name": "model-invocation-job"
+          },
+          {
+            "Name": "prompt"
+          },
+          {
+            "Name": "prompt-router"
+          },
+          {
+            "Name": "prompt-version"
+          },
+          {
+            "Name": "provisioned-model"
+          },
+          {
+            "Name": "retrieval-instruction"
+          },
+          {
+            "Name": "session"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateGuardrail",
+        "Resources": [
+          {
+            "Name": "automated-reasoning-policy"
+          },
+          {
+            "Name": "automated-reasoning-policy-version"
+          },
+          {
+            "Name": "guardrail"
+          },
+          {
+            "Name": "guardrail-profile"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:advanced-prompt-optimization-job/${ResourceId}"
+        ],
+        "Name": "advanced-prompt-optimization-job"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:agent/${AgentId}"
+        ],
+        "Name": "agent"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:agent-alias/${AgentId}/${AgentAliasId}"
+        ],
+        "Name": "agent-alias"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:application-inference-profile/${ResourceId}"
+        ],
+        "Name": "application-inference-profile"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:async-invoke/${ResourceId}"
+        ],
+        "Name": "async-invoke"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:automated-reasoning-policy/${AutomatedReasoningPolicyId}"
+        ],
+        "Name": "automated-reasoning-policy"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:automated-reasoning-policy/${AutomatedReasoningPolicyId}:${AutomatedReasoningPolicyVersion}"
+        ],
+        "Name": "automated-reasoning-policy-version"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:blueprint/${BlueprintId}"
+        ],
+        "Name": "blueprint"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:blueprint-optimization-invocation/${ResourceId}"
+        ],
+        "Name": "blueprint-optimization-invocation"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:custom-model/${ResourceId}"
+        ],
+        "Name": "custom-model"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:custom-model-deployment/${ResourceId}"
+        ],
+        "Name": "custom-model-deployment"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:data-automation-invocation/${JobId}"
+        ],
+        "Name": "data-automation-invocation-job"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:data-automation-library/${DataAutomationLibraryId}"
+        ],
+        "Name": "data-automation-library"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:data-automation-library-ingestion-job/${IngestionJobId}"
+        ],
+        "Name": "data-automation-library-ingestion-job"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:data-automation-project/${ProjectId}"
+        ],
+        "Name": "data-automation-project"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:evaluation-job/${ResourceId}"
+        ],
+        "Name": "evaluation-job"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:flow/${FlowId}"
+        ],
+        "Name": "flow"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:flow/${FlowId}/alias/${FlowAliasId}"
+        ],
+        "Name": "flow-alias"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:guardrail/${GuardrailId}"
+        ],
+        "Name": "guardrail"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:guardrail-profile/${ResourceId}"
+        ],
+        "Name": "guardrail-profile"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:imported-model/${ResourceId}"
+        ],
+        "Name": "imported-model"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:knowledge-base/${KnowledgeBaseId}"
+        ],
+        "Name": "knowledge-base"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:model-copy-job/${ResourceId}"
+        ],
+        "Name": "model-copy-job"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:model-customization-job/${ResourceId}"
+        ],
+        "Name": "model-customization-job"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:model-evaluation-job/${ResourceId}"
+        ],
+        "Name": "model-evaluation-job"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:model-import-job/${ResourceId}"
+        ],
+        "Name": "model-import-job"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:model-invocation-job/${JobIdentifier}"
+        ],
+        "Name": "model-invocation-job"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:prompt/${PromptId}"
+        ],
+        "Name": "prompt"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:prompt-router/${ResourceId}"
+        ],
+        "Name": "prompt-router"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:prompt/${PromptId}:${PromptVersion}"
+        ],
+        "Name": "prompt-version"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:provisioned-model/${ResourceId}"
+        ],
+        "Name": "provisioned-model"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:retrieval-instruction/${RetrievalInstructionId}"
+        ],
+        "Name": "retrieval-instruction"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock:${Region}:${Account}:session/${SessionId}"
+        ],
+        "Name": "session"
+      }
+    ]
+  },
+  "bedrock-agentcore": {
+    "Actions": [
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys",
+          "bedrock-agentcore:RuntimeAuthorizerType",
+          "bedrock-agentcore:securityGroups",
+          "bedrock-agentcore:subnets"
+        ],
+        "Name": "CreateAgentRuntime"
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "CreateAgentRuntimeEndpoint",
+        "Resources": [
+          {
+            "Name": "runtime"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "CreateWorkloadIdentity",
+        "Resources": [
+          {
+            "Name": "workload-identity"
+          },
+          {
+            "Name": "workload-identity-directory"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteAgentRuntime",
+        "Resources": [
+          {
+            "Name": "runtime"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteAgentRuntimeEndpoint",
+        "Resources": [
+          {
+            "Name": "runtime"
+          },
+          {
+            "Name": "runtime-endpoint"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteWorkloadIdentity",
+        "Resources": [
+          {
+            "Name": "workload-identity"
+          },
+          {
+            "Name": "workload-identity-directory"
+          }
+        ]
+      },
+      {
+        "Name": "GetAgentRuntime",
+        "Resources": [
+          {
+            "Name": "runtime"
+          }
+        ]
+      },
+      {
+        "Name": "GetAgentRuntimeEndpoint",
+        "Resources": [
+          {
+            "Name": "runtime"
+          },
+          {
+            "Name": "runtime-endpoint"
+          }
+        ]
+      },
+      {
+        "Name": "ListAgentRuntimeEndpoints"
+      },
+      {
+        "Name": "ListAgentRuntimes"
+      },
+      {
+        "Name": "ListTagsForResource",
+        "Resources": [
+          {
+            "Name": "apikeycredentialprovider"
+          },
+          {
+            "Name": "browser-custom"
+          },
+          {
+            "Name": "browser-profile"
+          },
+          {
+            "Name": "capacity-provider"
+          },
+          {
+            "Name": "code-interpreter-custom"
+          },
+          {
+            "Name": "evaluator"
+          },
+          {
+            "Name": "gateway"
+          },
+          {
+            "Name": "harness"
+          },
+          {
+            "Name": "memory"
+          },
+          {
+            "Name": "oauth2credentialprovider"
+          },
+          {
+            "Name": "online-evaluation-config"
+          },
+          {
+            "Name": "payment-manager"
+          },
+          {
+            "Name": "paymentcredentialprovider"
+          },
+          {
+            "Name": "policy-engine"
+          },
+          {
+            "Name": "runtime"
+          },
+          {
+            "Name": "runtime-endpoint"
+          },
+          {
+            "Name": "token-vault"
+          },
+          {
+            "Name": "workload-identity"
+          },
+          {
+            "Name": "workload-identity-directory"
+          }
+        ]
+      },
+      {
+        "Name": "PassCapacityProvider",
+        "Resources": [
+          {
+            "Name": "capacity-provider"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "TagResource",
+        "Resources": [
+          {
+            "Name": "apikeycredentialprovider"
+          },
+          {
+            "Name": "browser-custom"
+          },
+          {
+            "Name": "browser-profile"
+          },
+          {
+            "Name": "capacity-provider"
+          },
+          {
+            "Name": "code-interpreter-custom"
+          },
+          {
+            "Name": "evaluator"
+          },
+          {
+            "Name": "gateway"
+          },
+          {
+            "Name": "harness"
+          },
+          {
+            "Name": "memory"
+          },
+          {
+            "Name": "oauth2credentialprovider"
+          },
+          {
+            "Name": "online-evaluation-config"
+          },
+          {
+            "Name": "payment-manager"
+          },
+          {
+            "Name": "paymentcredentialprovider"
+          },
+          {
+            "Name": "policy-engine"
+          },
+          {
+            "Name": "runtime"
+          },
+          {
+            "Name": "runtime-endpoint"
+          },
+          {
+            "Name": "token-vault"
+          },
+          {
+            "Name": "workload-identity"
+          },
+          {
+            "Name": "workload-identity-directory"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:TagKeys"
+        ],
+        "Name": "UntagResource",
+        "Resources": [
+          {
+            "Name": "apikeycredentialprovider"
+          },
+          {
+            "Name": "browser-custom"
+          },
+          {
+            "Name": "browser-profile"
+          },
+          {
+            "Name": "capacity-provider"
+          },
+          {
+            "Name": "code-interpreter-custom"
+          },
+          {
+            "Name": "evaluator"
+          },
+          {
+            "Name": "gateway"
+          },
+          {
+            "Name": "harness"
+          },
+          {
+            "Name": "memory"
+          },
+          {
+            "Name": "oauth2credentialprovider"
+          },
+          {
+            "Name": "online-evaluation-config"
+          },
+          {
+            "Name": "payment-manager"
+          },
+          {
+            "Name": "paymentcredentialprovider"
+          },
+          {
+            "Name": "policy-engine"
+          },
+          {
+            "Name": "runtime"
+          },
+          {
+            "Name": "runtime-endpoint"
+          },
+          {
+            "Name": "token-vault"
+          },
+          {
+            "Name": "workload-identity"
+          },
+          {
+            "Name": "workload-identity-directory"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "bedrock-agentcore:RuntimeAuthorizerType",
+          "bedrock-agentcore:securityGroups",
+          "bedrock-agentcore:subnets"
+        ],
+        "Name": "UpdateAgentRuntime",
+        "Resources": [
+          {
+            "Name": "runtime"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateAgentRuntimeEndpoint",
+        "Resources": [
+          {
+            "Name": "runtime"
+          },
+          {
+            "Name": "runtime-endpoint"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:token-vault/${TokenVaultId}/apikeycredentialprovider/${Name}"
+        ],
+        "Name": "apikeycredentialprovider"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:browser-custom/${BrowserId}"
+        ],
+        "Name": "browser-custom"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:browser-profile/${BrowserProfileId}"
+        ],
+        "Name": "browser-profile"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:capacity-provider/${CapacityProviderId}"
+        ],
+        "Name": "capacity-provider"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:code-interpreter-custom/${CodeInterpreterId}"
+        ],
+        "Name": "code-interpreter-custom"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:evaluator/${EvaluatorId}"
+        ],
+        "Name": "evaluator"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:gateway/${GatewayId}"
+        ],
+        "Name": "gateway"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:harness/${HarnessId}"
+        ],
+        "Name": "harness"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:memory/${MemoryId}"
+        ],
+        "Name": "memory"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:token-vault/${TokenVaultId}/oauth2credentialprovider/${Name}"
+        ],
+        "Name": "oauth2credentialprovider"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:online-evaluation-config/${OnlineEvaluationConfigId}"
+        ],
+        "Name": "online-evaluation-config"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:payment-manager/${PaymentManagerId}"
+        ],
+        "Name": "payment-manager"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:token-vault/${TokenVaultId}/paymentcredentialprovider/${Name}"
+        ],
+        "Name": "paymentcredentialprovider"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:policy-engine/${PolicyEngineId}"
+        ],
+        "Name": "policy-engine"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:runtime/${RuntimeId}"
+        ],
+        "Name": "runtime"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:runtime/${RuntimeId}/runtime-endpoint/${Name}"
+        ],
+        "Name": "runtime-endpoint"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:token-vault/${TokenVaultId}"
+        ],
+        "Name": "token-vault"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:workload-identity-directory/${DirectoryId}/workload-identity/${WorkloadIdentityName}"
+        ],
+        "Name": "workload-identity"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:bedrock-agentcore:${Region}:${Account}:workload-identity-directory/${DirectoryId}"
+        ],
+        "Name": "workload-identity-directory"
+      }
+    ]
+  },
+  "cloudfront": {
+    "Actions": [
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "CreateConnectionGroup"
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "CreateDistribution"
+      },
+      {
+        "Name": "CreateOriginAccessControl"
+      },
+      {
+        "Name": "DeleteDistribution",
+        "Resources": [
+          {
+            "Name": "distribution"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteOriginAccessControl",
+        "Resources": [
+          {
+            "Name": "origin-access-control"
+          }
+        ]
+      },
+      {
+        "Name": "GetConnectionGroup",
+        "Resources": [
+          {
+            "Name": "connection-group"
+          }
+        ]
+      },
+      {
+        "Name": "GetDistribution",
+        "Resources": [
+          {
+            "Name": "distribution"
+          }
+        ]
+      },
+      {
+        "Name": "GetDistributionConfig",
+        "Resources": [
+          {
+            "Name": "distribution"
+          }
+        ]
+      },
+      {
+        "Name": "GetOriginAccessControl",
+        "Resources": [
+          {
+            "Name": "origin-access-control"
+          }
+        ]
+      },
+      {
+        "Name": "GetVpcOrigin",
+        "Resources": [
+          {
+            "Name": "vpcorigin"
+          }
+        ]
+      },
+      {
+        "Name": "ListDistributions"
+      },
+      {
+        "Name": "ListOriginAccessControls"
+      },
+      {
+        "Name": "ListTagsForResource",
+        "Resources": [
+          {
+            "Name": "anycast-ip-list"
+          },
+          {
+            "Name": "connection-function"
+          },
+          {
+            "Name": "connection-group"
+          },
+          {
+            "Name": "distribution"
+          },
+          {
+            "Name": "distribution-tenant"
+          },
+          {
+            "Name": "function"
+          },
+          {
+            "Name": "key-value-store"
+          },
+          {
+            "Name": "trust-store"
+          },
+          {
+            "Name": "vpcorigin"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "TagResource",
+        "Resources": [
+          {
+            "Name": "anycast-ip-list"
+          },
+          {
+            "Name": "connection-function"
+          },
+          {
+            "Name": "connection-group"
+          },
+          {
+            "Name": "distribution"
+          },
+          {
+            "Name": "distribution-tenant"
+          },
+          {
+            "Name": "function"
+          },
+          {
+            "Name": "key-value-store"
+          },
+          {
+            "Name": "streaming-distribution"
+          },
+          {
+            "Name": "trust-store"
+          },
+          {
+            "Name": "vpcorigin"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:TagKeys"
+        ],
+        "Name": "UntagResource",
+        "Resources": [
+          {
+            "Name": "anycast-ip-list"
+          },
+          {
+            "Name": "connection-function"
+          },
+          {
+            "Name": "connection-group"
+          },
+          {
+            "Name": "distribution"
+          },
+          {
+            "Name": "distribution-tenant"
+          },
+          {
+            "Name": "function"
+          },
+          {
+            "Name": "key-value-store"
+          },
+          {
+            "Name": "streaming-distribution"
+          },
+          {
+            "Name": "trust-store"
+          },
+          {
+            "Name": "vpcorigin"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateDistribution",
+        "Resources": [
+          {
+            "Name": "distribution"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateDistributionWithStagingConfig",
+        "Resources": [
+          {
+            "Name": "distribution"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateOriginAccessControl",
+        "Resources": [
+          {
+            "Name": "origin-access-control"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudfront::${Account}:anycast-ip-list/${Id}"
+        ],
+        "Name": "anycast-ip-list"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudfront::${Account}:connection-function/${Id}"
+        ],
+        "Name": "connection-function"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudfront::${Account}:connection-group/${Id}"
+        ],
+        "Name": "connection-group"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudfront::${Account}:distribution/${DistributionId}"
+        ],
+        "Name": "distribution"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudfront::${Account}:distribution-tenant/${Id}"
+        ],
+        "Name": "distribution-tenant"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudfront::${Account}:function/${Name}"
+        ],
+        "Name": "function"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudfront::${Account}:key-value-store/${Name}"
+        ],
+        "Name": "key-value-store"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudfront::${Account}:origin-access-control/${Id}"
+        ],
+        "Name": "origin-access-control"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudfront::${Account}:streaming-distribution/${DistributionId}"
+        ],
+        "Name": "streaming-distribution"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudfront::${Account}:trust-store/${Id}"
+        ],
+        "Name": "trust-store"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudfront::${Account}:vpcorigin/${Id}"
+        ],
+        "Name": "vpcorigin"
+      }
+    ]
+  },
+  "cloudwatch": {
+    "Actions": [
+      {
+        "Name": "DeleteAlarms",
+        "Resources": [
+          {
+            "Name": "alarm"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteDashboards",
+        "Resources": [
+          {
+            "Name": "dashboard"
+          }
+        ]
+      },
+      {
+        "Name": "DescribeAlarms",
+        "Resources": [
+          {
+            "Name": "alarm"
+          }
+        ]
+      },
+      {
+        "Name": "GetDashboard",
+        "Resources": [
+          {
+            "Name": "dashboard"
+          }
+        ]
+      },
+      {
+        "Name": "ListDashboards"
+      },
+      {
+        "ActionConditionKeys": [
+          "cloudwatch:HasAccessGrant"
+        ],
+        "Name": "ListTagsForResource",
+        "Resources": [
+          {
+            "Name": "alarm"
+          },
+          {
+            "Name": "alarm-mute-rule"
+          },
+          {
+            "Name": "dashboard"
+          },
+          {
+            "Name": "dataset"
+          },
+          {
+            "Name": "insight-rule"
+          },
+          {
+            "Name": "metric-stream"
+          },
+          {
+            "Name": "service"
+          },
+          {
+            "Name": "slo"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "PutDashboard",
+        "Resources": [
+          {
+            "Name": "dashboard"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys",
+          "cloudwatch:AlarmActions",
+          "cloudwatch:AlarmTagsPropagationEnabled"
+        ],
+        "Name": "PutMetricAlarm",
+        "Resources": [
+          {
+            "Name": "alarm"
+          },
+          {
+            "Name": "dataset"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys",
+          "cloudwatch:HasAccessGrant"
+        ],
+        "Name": "TagResource",
+        "Resources": [
+          {
+            "Name": "alarm"
+          },
+          {
+            "Name": "alarm-mute-rule"
+          },
+          {
+            "Name": "dashboard"
+          },
+          {
+            "Name": "dataset"
+          },
+          {
+            "Name": "insight-rule"
+          },
+          {
+            "Name": "metric-stream"
+          },
+          {
+            "Name": "service"
+          },
+          {
+            "Name": "slo"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:TagKeys",
+          "cloudwatch:HasAccessGrant"
+        ],
+        "Name": "UntagResource",
+        "Resources": [
+          {
+            "Name": "alarm"
+          },
+          {
+            "Name": "alarm-mute-rule"
+          },
+          {
+            "Name": "dashboard"
+          },
+          {
+            "Name": "dataset"
+          },
+          {
+            "Name": "insight-rule"
+          },
+          {
+            "Name": "metric-stream"
+          },
+          {
+            "Name": "service"
+          },
+          {
+            "Name": "slo"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudwatch:${Region}:${Account}:alarm:${AlarmName}"
+        ],
+        "Name": "alarm"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudwatch:${Region}:${Account}:alarm-mute-rule:${AlarmMuteRuleName}"
+        ],
+        "Name": "alarm-mute-rule"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudwatch::${Account}:dashboard/${DashboardName}"
+        ],
+        "Name": "dashboard"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudwatch:${Region}:${Account}:dataset/${DatasetId}"
+        ],
+        "Name": "dataset"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudwatch:${Region}:${Account}:insight-rule/${InsightRuleName}"
+        ],
+        "Name": "insight-rule"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudwatch:${Region}:${Account}:metric-stream/${MetricStreamName}"
+        ],
+        "Name": "metric-stream"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudwatch:${Region}:${Account}:service/${ServiceName}-${UniqueAttributesHex}"
+        ],
+        "Name": "service"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudwatch:${Region}:${Account}:slo/${SloName}"
+        ],
+        "Name": "slo"
+      }
+    ]
+  },
+  "cognito-idp": {
+    "Actions": [
+      {
+        "Name": "AddCustomAttributes",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "CreateGroup",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:ResourceTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "CreateUserPool"
+      },
+      {
+        "Name": "CreateUserPoolClient",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "CreateUserPoolDomain",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteGroup",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteUserPool",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteUserPoolClient",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteUserPoolDomain",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "DescribeUserPool",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "DescribeUserPoolClient",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "DescribeUserPoolDomain"
+      },
+      {
+        "Name": "GetGroup",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "GetUserPoolMfaConfig",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "ListGroups",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "ListTagsForResource",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "ListUserPoolClientSecrets",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "ListUserPoolClients",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "ListUserPools"
+      },
+      {
+        "Name": "SetUserPoolMfaConfig",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "TagResource",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:TagKeys"
+        ],
+        "Name": "UntagResource",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateGroup",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "UpdateUserPool",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateUserPoolClient",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateUserPoolDomain",
+        "Resources": [
+          {
+            "Name": "userpool"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cognito-idp:${Region}:${Account}:userpool/${UserPoolId}"
+        ],
+        "Name": "userpool"
+      }
+    ]
+  },
+  "dynamodb": {
+    "Actions": [
+      {
+        "Name": "AssociateTableReplica",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "dynamodb:Attributes",
+          "dynamodb:LeadingKeys",
+          "dynamodb:ReturnConsumedCapacity"
+        ],
+        "Name": "BatchWriteItem",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "CreateTable",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "CreateTableReplica",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "dynamodb:Attributes",
+          "dynamodb:EnclosingOperation",
+          "dynamodb:LeadingKeys",
+          "dynamodb:ReturnConsumedCapacity",
+          "dynamodb:ReturnValues"
+        ],
+        "Name": "DeleteItem",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteResourcePolicy",
+        "Resources": [
+          {
+            "Name": "stream"
+          },
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteTable",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "DescribeContinuousBackups",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "DescribeContributorInsights",
+        "Resources": [
+          {
+            "Name": "index"
+          },
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "DescribeImport",
+        "Resources": [
+          {
+            "Name": "import"
+          }
+        ]
+      },
+      {
+        "Name": "DescribeKinesisStreamingDestination",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "DescribeTable",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "DescribeTimeToLive",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "DisableKinesisStreamingDestination",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "EnableKinesisStreamingDestination",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "dynamodb:Attributes",
+          "dynamodb:EnclosingOperation",
+          "dynamodb:LeadingKeys",
+          "dynamodb:ReturnConsumedCapacity",
+          "dynamodb:Select"
+        ],
+        "Name": "GetItem",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "GetResourcePolicy",
+        "Resources": [
+          {
+            "Name": "stream"
+          },
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "ImportTable",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "ListTables"
+      },
+      {
+        "Name": "ListTagsOfResource",
+        "Resources": [
+          {
+            "Name": "stream"
+          },
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "dynamodb:Attributes",
+          "dynamodb:EnclosingOperation",
+          "dynamodb:LeadingKeys",
+          "dynamodb:ReturnConsumedCapacity",
+          "dynamodb:ReturnValues"
+        ],
+        "Name": "PutItem",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "PutResourcePolicy",
+        "Resources": [
+          {
+            "Name": "stream"
+          },
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "dynamodb:Attributes",
+          "dynamodb:LeadingKeys",
+          "dynamodb:ReturnConsumedCapacity",
+          "dynamodb:ReturnValues",
+          "dynamodb:Select"
+        ],
+        "Name": "Query",
+        "Resources": [
+          {
+            "Name": "index"
+          },
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "dynamodb:Attributes",
+          "dynamodb:ReturnConsumedCapacity",
+          "dynamodb:ReturnValues",
+          "dynamodb:Select"
+        ],
+        "Name": "Scan",
+        "Resources": [
+          {
+            "Name": "index"
+          },
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "TagResource",
+        "Resources": [
+          {
+            "Name": "stream"
+          },
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:TagKeys"
+        ],
+        "Name": "UntagResource",
+        "Resources": [
+          {
+            "Name": "stream"
+          },
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateContinuousBackups",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateContributorInsights",
+        "Resources": [
+          {
+            "Name": "index"
+          },
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "dynamodb:Attributes",
+          "dynamodb:EnclosingOperation",
+          "dynamodb:LeadingKeys",
+          "dynamodb:ReturnConsumedCapacity",
+          "dynamodb:ReturnValues"
+        ],
+        "Name": "UpdateItem",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateKinesisStreamingDestination",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateTable",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateTimeToLive",
+        "Resources": [
+          {
+            "Name": "table"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:dynamodb:${Region}:${Account}:table/${TableName}/import/${ImportName}"
+        ],
+        "Name": "import"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:dynamodb:${Region}:${Account}:table/${TableName}/index/${IndexName}"
+        ],
+        "Name": "index"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:dynamodb:${Region}:${Account}:table/${TableName}/stream/${StreamLabel}"
+        ],
+        "Name": "stream"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:dynamodb:${Region}:${Account}:table/${TableName}"
+        ],
+        "Name": "table"
+      }
+    ]
+  },
+  "ec2": {
+    "Actions": [
+      {
+        "ActionConditionKeys": [
+          "ec2:Region"
+        ],
+        "Name": "CreateNetworkInterface",
+        "Resources": [
+          {
+            "Name": "network-interface"
+          },
+          {
+            "Name": "security-group"
+          },
+          {
+            "Name": "subnet"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "ec2:Region"
+        ],
+        "Name": "DescribeNetworkInterfaces"
+      },
+      {
+        "ActionConditionKeys": [
+          "ec2:Region"
+        ],
+        "Name": "DescribeSecurityGroups"
+      },
+      {
+        "ActionConditionKeys": [
+          "ec2:Region"
+        ],
+        "Name": "DescribeSubnets"
+      },
+      {
+        "ActionConditionKeys": [
+          "ec2:Region"
+        ],
+        "Name": "DescribeVpcs"
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:ec2:${Region}:${Account}:network-interface/${NetworkInterfaceId}"
+        ],
+        "Name": "network-interface"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:ec2:${Region}:${Account}:security-group/${SecurityGroupId}"
+        ],
+        "Name": "security-group"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:ec2:${Region}:${Account}:subnet/${SubnetId}"
+        ],
+        "Name": "subnet"
+      }
+    ]
+  },
+  "events": {
+    "Actions": [
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "CreateEventBus",
+        "Resources": [
+          {
+            "Name": "event-bus"
+          },
+          {
+            "Name": "event-busv2"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteEventBus",
+        "Resources": [
+          {
+            "Name": "event-bus"
+          },
+          {
+            "Name": "event-busv2"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "events:ManagedBy",
+          "events:creatorAccount"
+        ],
+        "Name": "DeleteRule",
+        "Resources": [
+          {
+            "Name": "rule-on-custom-event-bus"
+          },
+          {
+            "Name": "rule-on-default-event-bus"
+          }
+        ]
+      },
+      {
+        "Name": "DescribeEventBus",
+        "Resources": [
+          {
+            "Name": "event-bus"
+          },
+          {
+            "Name": "event-busv2"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "events:creatorAccount"
+        ],
+        "Name": "DescribeRule",
+        "Resources": [
+          {
+            "Name": "rule-on-custom-event-bus"
+          },
+          {
+            "Name": "rule-on-default-event-bus"
+          }
+        ]
+      },
+      {
+        "Name": "ListEventBuses"
+      },
+      {
+        "Name": "ListRules"
+      },
+      {
+        "ActionConditionKeys": [
+          "events:creatorAccount"
+        ],
+        "Name": "ListTagsForResource",
+        "Resources": [
+          {
+            "Name": "event-bus"
+          },
+          {
+            "Name": "event-busv2"
+          },
+          {
+            "Name": "event-sourcev2"
+          },
+          {
+            "Name": "rule-on-custom-event-bus"
+          },
+          {
+            "Name": "rule-on-default-event-bus"
+          },
+          {
+            "Name": "subscriber"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "events:creatorAccount"
+        ],
+        "Name": "ListTargetsByRule",
+        "Resources": [
+          {
+            "Name": "rule-on-custom-event-bus"
+          },
+          {
+            "Name": "rule-on-default-event-bus"
+          }
+        ]
+      },
+      {
+        "Name": "PutPermission"
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys",
+          "events:ManagedBy",
+          "events:creatorAccount",
+          "events:detail-type",
+          "events:detail.eventTypeCode",
+          "events:detail.service",
+          "events:detail.userIdentity.principalId",
+          "events:source"
+        ],
+        "Name": "PutRule",
+        "Resources": [
+          {
+            "Name": "rule-on-custom-event-bus"
+          },
+          {
+            "Name": "rule-on-default-event-bus"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "events:ManagedBy",
+          "events:TargetArn",
+          "events:creatorAccount"
+        ],
+        "Name": "PutTargets",
+        "Resources": [
+          {
+            "Name": "rule-on-custom-event-bus"
+          },
+          {
+            "Name": "rule-on-default-event-bus"
+          }
+        ]
+      },
+      {
+        "Name": "RemovePermission"
+      },
+      {
+        "ActionConditionKeys": [
+          "events:ManagedBy",
+          "events:creatorAccount"
+        ],
+        "Name": "RemoveTargets",
+        "Resources": [
+          {
+            "Name": "rule-on-custom-event-bus"
+          },
+          {
+            "Name": "rule-on-default-event-bus"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys",
+          "events:creatorAccount"
+        ],
+        "Name": "TagResource",
+        "Resources": [
+          {
+            "Name": "event-bus"
+          },
+          {
+            "Name": "event-busv2"
+          },
+          {
+            "Name": "event-sourcev2"
+          },
+          {
+            "Name": "rule-on-custom-event-bus"
+          },
+          {
+            "Name": "rule-on-default-event-bus"
+          },
+          {
+            "Name": "subscriber"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:TagKeys",
+          "events:creatorAccount"
+        ],
+        "Name": "UntagResource",
+        "Resources": [
+          {
+            "Name": "event-bus"
+          },
+          {
+            "Name": "event-busv2"
+          },
+          {
+            "Name": "event-sourcev2"
+          },
+          {
+            "Name": "rule-on-custom-event-bus"
+          },
+          {
+            "Name": "rule-on-default-event-bus"
+          },
+          {
+            "Name": "subscriber"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateEventBus",
+        "Resources": [
+          {
+            "Name": "event-bus"
+          },
+          {
+            "Name": "event-busv2"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:events:${Region}:${Account}:event-bus/${EventBusName}"
+        ],
+        "Name": "event-bus"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:events:${Region}:${Account}:event-busv2/${EventBusName}/${OpaqueId}"
+        ],
+        "Name": "event-busv2"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:events:${Region}:${Account}:event-sourcev2/${SourceType}/${EventSourceName}/${OpaqueId}"
+        ],
+        "Name": "event-sourcev2"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:events:${Region}:${Account}:rule/${EventBusName}/${RuleName}"
+        ],
+        "Name": "rule-on-custom-event-bus"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:events:${Region}:${Account}:rule/${RuleName}"
+        ],
+        "Name": "rule-on-default-event-bus"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:events:${Region}:${Account}:subscriber/${SubscriberName}/${OpaqueId}"
+        ],
+        "Name": "subscriber"
+      }
+    ]
+  },
+  "iam": {
+    "Actions": [
+      {
+        "ActionConditionKeys": [
+          "iam:PermissionsBoundary",
+          "iam:PolicyARN",
+          "iam:RoleTemplateARN"
+        ],
+        "Name": "AttachRolePolicy",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys",
+          "iam:PermissionsBoundary",
+          "iam:RoleTemplateARN"
+        ],
+        "Name": "CreateRole",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "iam:AWSServiceName"
+        ],
+        "Name": "CreateServiceLinkedRole",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteGroupPolicy",
+        "Resources": [
+          {
+            "Name": "group"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "iam:PermissionsBoundary"
+        ],
+        "Name": "DeleteRole",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "iam:PermissionsBoundary"
+        ],
+        "Name": "DeleteRolePermissionsBoundary",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "iam:PermissionsBoundary"
+        ],
+        "Name": "DeleteRolePolicy",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "iam:PermissionsBoundary"
+        ],
+        "Name": "DeleteUserPolicy",
+        "Resources": [
+          {
+            "Name": "user"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "iam:PermissionsBoundary",
+          "iam:PolicyARN"
+        ],
+        "Name": "DetachRolePolicy",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "Name": "GetGroupPolicy",
+        "Resources": [
+          {
+            "Name": "group"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "iam:PermissionsBoundary",
+          "iam:RoleTemplateARN"
+        ],
+        "Name": "GetRole",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "Name": "GetRolePolicy",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "Name": "GetUserPolicy",
+        "Resources": [
+          {
+            "Name": "user"
+          }
+        ]
+      },
+      {
+        "Name": "ListAttachedRolePolicies",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "Name": "ListRolePolicies",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "Name": "ListRoles"
+      },
+      {
+        "ActionConditionKeys": [
+          "iam:AssociatedResourceArn",
+          "iam:PassedToService"
+        ],
+        "Name": "PassRole",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "Name": "PutGroupPolicy",
+        "Resources": [
+          {
+            "Name": "group"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "iam:PermissionsBoundary",
+          "iam:RoleTemplateARN"
+        ],
+        "Name": "PutRolePermissionsBoundary",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "iam:PermissionsBoundary",
+          "iam:RoleTemplateARN"
+        ],
+        "Name": "PutRolePolicy",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "iam:PermissionsBoundary"
+        ],
+        "Name": "PutUserPolicy",
+        "Resources": [
+          {
+            "Name": "user"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys",
+          "iam:RoleTemplateARN"
+        ],
+        "Name": "TagRole",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:TagKeys"
+        ],
+        "Name": "UntagRole",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "iam:PermissionsBoundary"
+        ],
+        "Name": "UpdateAssumeRolePolicy",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "iam:PermissionsBoundary"
+        ],
+        "Name": "UpdateRole",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "iam:PermissionsBoundary"
+        ],
+        "Name": "UpdateRoleDescription",
+        "Resources": [
+          {
+            "Name": "role"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:iam::${Account}:group/${GroupNameWithPath}"
+        ],
+        "Name": "group"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:iam::${Account}:role/${RoleNameWithPath}"
+        ],
+        "Name": "role"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:iam::${Account}:user/${UserNameWithPath}"
+        ],
+        "Name": "user"
+      }
+    ]
+  },
+  "kms": {
+    "Actions": [
+      {
+        "ActionConditionKeys": [
+          "kms:CallerAccount",
+          "kms:EncryptionContext:${EncryptionContextKey}",
+          "kms:EncryptionContextKeys",
+          "kms:GrantConstraintSourceArn",
+          "kms:GrantConstraintType",
+          "kms:GrantIsForAWSResource",
+          "kms:GrantOperations",
+          "kms:GranteePrincipal",
+          "kms:GranteeServicePrincipal",
+          "kms:RetiringPrincipal",
+          "kms:RetiringServicePrincipal",
+          "kms:ViaService"
+        ],
+        "Name": "CreateGrant",
+        "Resources": [
+          {
+            "Name": "key"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "kms:CallerAccount",
+          "kms:EncryptionAlgorithm",
+          "kms:EncryptionContext:${EncryptionContextKey}",
+          "kms:EncryptionContextKeys",
+          "kms:RecipientAttestation:ImageSha384",
+          "kms:RecipientAttestation:NitroTPMPCR0",
+          "kms:RecipientAttestation:NitroTPMPCR1",
+          "kms:RecipientAttestation:NitroTPMPCR10",
+          "kms:RecipientAttestation:NitroTPMPCR11",
+          "kms:RecipientAttestation:NitroTPMPCR12",
+          "kms:RecipientAttestation:NitroTPMPCR13",
+          "kms:RecipientAttestation:NitroTPMPCR14",
+          "kms:RecipientAttestation:NitroTPMPCR15",
+          "kms:RecipientAttestation:NitroTPMPCR16",
+          "kms:RecipientAttestation:NitroTPMPCR17",
+          "kms:RecipientAttestation:NitroTPMPCR18",
+          "kms:RecipientAttestation:NitroTPMPCR19",
+          "kms:RecipientAttestation:NitroTPMPCR2",
+          "kms:RecipientAttestation:NitroTPMPCR20",
+          "kms:RecipientAttestation:NitroTPMPCR21",
+          "kms:RecipientAttestation:NitroTPMPCR22",
+          "kms:RecipientAttestation:NitroTPMPCR23",
+          "kms:RecipientAttestation:NitroTPMPCR3",
+          "kms:RecipientAttestation:NitroTPMPCR4",
+          "kms:RecipientAttestation:NitroTPMPCR5",
+          "kms:RecipientAttestation:NitroTPMPCR6",
+          "kms:RecipientAttestation:NitroTPMPCR7",
+          "kms:RecipientAttestation:NitroTPMPCR8",
+          "kms:RecipientAttestation:NitroTPMPCR9",
+          "kms:RecipientAttestation:PCR0",
+          "kms:RecipientAttestation:PCR1",
+          "kms:RecipientAttestation:PCR10",
+          "kms:RecipientAttestation:PCR11",
+          "kms:RecipientAttestation:PCR12",
+          "kms:RecipientAttestation:PCR13",
+          "kms:RecipientAttestation:PCR14",
+          "kms:RecipientAttestation:PCR15",
+          "kms:RecipientAttestation:PCR16",
+          "kms:RecipientAttestation:PCR17",
+          "kms:RecipientAttestation:PCR18",
+          "kms:RecipientAttestation:PCR19",
+          "kms:RecipientAttestation:PCR2",
+          "kms:RecipientAttestation:PCR20",
+          "kms:RecipientAttestation:PCR21",
+          "kms:RecipientAttestation:PCR22",
+          "kms:RecipientAttestation:PCR23",
+          "kms:RecipientAttestation:PCR24",
+          "kms:RecipientAttestation:PCR25",
+          "kms:RecipientAttestation:PCR26",
+          "kms:RecipientAttestation:PCR27",
+          "kms:RecipientAttestation:PCR28",
+          "kms:RecipientAttestation:PCR29",
+          "kms:RecipientAttestation:PCR3",
+          "kms:RecipientAttestation:PCR30",
+          "kms:RecipientAttestation:PCR31",
+          "kms:RecipientAttestation:PCR4",
+          "kms:RecipientAttestation:PCR5",
+          "kms:RecipientAttestation:PCR6",
+          "kms:RecipientAttestation:PCR7",
+          "kms:RecipientAttestation:PCR8",
+          "kms:RecipientAttestation:PCR8:ServiceName",
+          "kms:RecipientAttestation:PCR9",
+          "kms:RequestAlias",
+          "kms:ViaService"
+        ],
+        "Name": "Decrypt",
+        "Resources": [
+          {
+            "Name": "key"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "kms:CallerAccount",
+          "kms:RequestAlias",
+          "kms:ViaService"
+        ],
+        "Name": "DescribeKey",
+        "Resources": [
+          {
+            "Name": "key"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "kms:CallerAccount",
+          "kms:EncryptionAlgorithm",
+          "kms:EncryptionContext:${EncryptionContextKey}",
+          "kms:EncryptionContextKeys",
+          "kms:RequestAlias",
+          "kms:ViaService"
+        ],
+        "Name": "Encrypt",
+        "Resources": [
+          {
+            "Name": "key"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "kms:CallerAccount",
+          "kms:EncryptionAlgorithm",
+          "kms:EncryptionContext:${EncryptionContextKey}",
+          "kms:EncryptionContextKeys",
+          "kms:RecipientAttestation:ImageSha384",
+          "kms:RecipientAttestation:NitroTPMPCR0",
+          "kms:RecipientAttestation:NitroTPMPCR1",
+          "kms:RecipientAttestation:NitroTPMPCR10",
+          "kms:RecipientAttestation:NitroTPMPCR11",
+          "kms:RecipientAttestation:NitroTPMPCR12",
+          "kms:RecipientAttestation:NitroTPMPCR13",
+          "kms:RecipientAttestation:NitroTPMPCR14",
+          "kms:RecipientAttestation:NitroTPMPCR15",
+          "kms:RecipientAttestation:NitroTPMPCR16",
+          "kms:RecipientAttestation:NitroTPMPCR17",
+          "kms:RecipientAttestation:NitroTPMPCR18",
+          "kms:RecipientAttestation:NitroTPMPCR19",
+          "kms:RecipientAttestation:NitroTPMPCR2",
+          "kms:RecipientAttestation:NitroTPMPCR20",
+          "kms:RecipientAttestation:NitroTPMPCR21",
+          "kms:RecipientAttestation:NitroTPMPCR22",
+          "kms:RecipientAttestation:NitroTPMPCR23",
+          "kms:RecipientAttestation:NitroTPMPCR3",
+          "kms:RecipientAttestation:NitroTPMPCR4",
+          "kms:RecipientAttestation:NitroTPMPCR5",
+          "kms:RecipientAttestation:NitroTPMPCR6",
+          "kms:RecipientAttestation:NitroTPMPCR7",
+          "kms:RecipientAttestation:NitroTPMPCR8",
+          "kms:RecipientAttestation:NitroTPMPCR9",
+          "kms:RecipientAttestation:PCR0",
+          "kms:RecipientAttestation:PCR1",
+          "kms:RecipientAttestation:PCR10",
+          "kms:RecipientAttestation:PCR11",
+          "kms:RecipientAttestation:PCR12",
+          "kms:RecipientAttestation:PCR13",
+          "kms:RecipientAttestation:PCR14",
+          "kms:RecipientAttestation:PCR15",
+          "kms:RecipientAttestation:PCR16",
+          "kms:RecipientAttestation:PCR17",
+          "kms:RecipientAttestation:PCR18",
+          "kms:RecipientAttestation:PCR19",
+          "kms:RecipientAttestation:PCR2",
+          "kms:RecipientAttestation:PCR20",
+          "kms:RecipientAttestation:PCR21",
+          "kms:RecipientAttestation:PCR22",
+          "kms:RecipientAttestation:PCR23",
+          "kms:RecipientAttestation:PCR24",
+          "kms:RecipientAttestation:PCR25",
+          "kms:RecipientAttestation:PCR26",
+          "kms:RecipientAttestation:PCR27",
+          "kms:RecipientAttestation:PCR28",
+          "kms:RecipientAttestation:PCR29",
+          "kms:RecipientAttestation:PCR3",
+          "kms:RecipientAttestation:PCR30",
+          "kms:RecipientAttestation:PCR31",
+          "kms:RecipientAttestation:PCR4",
+          "kms:RecipientAttestation:PCR5",
+          "kms:RecipientAttestation:PCR6",
+          "kms:RecipientAttestation:PCR7",
+          "kms:RecipientAttestation:PCR8",
+          "kms:RecipientAttestation:PCR8:ServiceName",
+          "kms:RecipientAttestation:PCR9",
+          "kms:RequestAlias",
+          "kms:ViaService"
+        ],
+        "Name": "GenerateDataKey",
+        "Resources": [
+          {
+            "Name": "key"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "kms:CallerAccount",
+          "kms:EncryptionAlgorithm",
+          "kms:EncryptionContext:${EncryptionContextKey}",
+          "kms:EncryptionContextKeys",
+          "kms:RequestAlias",
+          "kms:ViaService"
+        ],
+        "Name": "GenerateDataKeyWithoutPlaintext",
+        "Resources": [
+          {
+            "Name": "key"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "kms:CallerAccount",
+          "kms:ViaService"
+        ],
+        "Name": "ListAliases"
+      },
+      {
+        "ActionConditionKeys": [
+          "kms:CallerAccount",
+          "kms:EncryptionAlgorithm",
+          "kms:EncryptionContext:${EncryptionContextKey}",
+          "kms:EncryptionContextKeys",
+          "kms:ReEncryptOnSameKey",
+          "kms:RequestAlias",
+          "kms:ViaService"
+        ],
+        "Name": "ReEncryptFrom",
+        "Resources": [
+          {
+            "Name": "key"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "kms:CallerAccount",
+          "kms:EncryptionAlgorithm",
+          "kms:EncryptionContext:${EncryptionContextKey}",
+          "kms:EncryptionContextKeys",
+          "kms:ReEncryptOnSameKey",
+          "kms:RequestAlias",
+          "kms:ViaService"
+        ],
+        "Name": "ReEncryptTo",
+        "Resources": [
+          {
+            "Name": "key"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "kms:CallerAccount",
+          "kms:EncryptionContext:${EncryptionContextKey}",
+          "kms:EncryptionContextKeys",
+          "kms:GrantConstraintType",
+          "kms:ViaService"
+        ],
+        "Name": "RetireGrant",
+        "Resources": [
+          {
+            "Name": "key"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "kms:CallerAccount",
+          "kms:GrantIsForAWSResource",
+          "kms:ViaService"
+        ],
+        "Name": "RevokeGrant",
+        "Resources": [
+          {
+            "Name": "key"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:kms:${Region}:${Account}:key/${KeyId}"
+        ],
+        "Name": "key"
+      }
+    ]
+  },
+  "lambda": {
+    "Actions": [
+      {
+        "ActionConditionKeys": [
+          "lambda:FunctionUrlAuthType",
+          "lambda:Principal"
+        ],
+        "Name": "AddPermission",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys",
+          "lambda:FunctionArn"
+        ],
+        "Name": "CreateEventSourceMapping"
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys",
+          "lambda:CodeSigningConfigArn",
+          "lambda:Layer",
+          "lambda:SecurityGroupIds",
+          "lambda:SubnetIds",
+          "lambda:VpcIds"
+        ],
+        "Name": "CreateFunction",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "lambda:FunctionArn"
+        ],
+        "Name": "DeleteEventSourceMapping",
+        "Resources": [
+          {
+            "Name": "eventSourceMapping"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteFunction",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteFunctionCodeSigningConfig",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteFunctionConcurrency",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "Name": "GetCodeSigningConfig",
+        "Resources": [
+          {
+            "Name": "code signing config"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "lambda:FunctionArn"
+        ],
+        "Name": "GetEventSourceMapping",
+        "Resources": [
+          {
+            "Name": "eventSourceMapping"
+          }
+        ]
+      },
+      {
+        "Name": "GetFunction",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "Name": "GetFunctionCodeSigningConfig",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "Name": "GetFunctionRecursionConfig",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "Name": "GetFunctionScalingConfig",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "Name": "GetLayerVersion",
+        "Resources": [
+          {
+            "Name": "layerVersion"
+          }
+        ]
+      },
+      {
+        "Name": "GetPolicy",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "Name": "GetRuntimeManagementConfig",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "Name": "ListEventSourceMappings"
+      },
+      {
+        "Name": "ListFunctions"
+      },
+      {
+        "Name": "ListTags",
+        "Resources": [
+          {
+            "Name": "capacityProvider"
+          },
+          {
+            "Name": "code signing config"
+          },
+          {
+            "Name": "eventSourceMapping"
+          },
+          {
+            "Name": "function"
+          },
+          {
+            "Name": "microvmImage"
+          },
+          {
+            "Name": "networkConnector"
+          },
+          {
+            "Name": "webFunction"
+          }
+        ]
+      },
+      {
+        "Name": "PassCapacityProvider",
+        "Resources": [
+          {
+            "Name": "capacityProvider"
+          }
+        ]
+      },
+      {
+        "Name": "PublishVersion",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "lambda:CodeSigningConfigArn"
+        ],
+        "Name": "PutFunctionCodeSigningConfig",
+        "Resources": [
+          {
+            "Name": "code signing config"
+          },
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "Name": "PutFunctionConcurrency",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "Name": "PutFunctionRecursionConfig",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "Name": "PutFunctionScalingConfig",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "Name": "PutRuntimeManagementConfig",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "lambda:FunctionUrlAuthType",
+          "lambda:Principal"
+        ],
+        "Name": "RemovePermission",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "TagResource",
+        "Resources": [
+          {
+            "Name": "capacityProvider"
+          },
+          {
+            "Name": "code signing config"
+          },
+          {
+            "Name": "eventSourceMapping"
+          },
+          {
+            "Name": "function"
+          },
+          {
+            "Name": "microvmImage"
+          },
+          {
+            "Name": "networkConnector"
+          },
+          {
+            "Name": "webFunction"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:TagKeys"
+        ],
+        "Name": "UntagResource",
+        "Resources": [
+          {
+            "Name": "capacityProvider"
+          },
+          {
+            "Name": "code signing config"
+          },
+          {
+            "Name": "eventSourceMapping"
+          },
+          {
+            "Name": "function"
+          },
+          {
+            "Name": "microvmImage"
+          },
+          {
+            "Name": "networkConnector"
+          },
+          {
+            "Name": "webFunction"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "lambda:FunctionArn"
+        ],
+        "Name": "UpdateEventSourceMapping",
+        "Resources": [
+          {
+            "Name": "eventSourceMapping"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateFunctionCode",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "lambda:Layer",
+          "lambda:SecurityGroupIds",
+          "lambda:SubnetIds",
+          "lambda:VpcIds"
+        ],
+        "Name": "UpdateFunctionConfiguration",
+        "Resources": [
+          {
+            "Name": "function"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:lambda:${Region}:${Account}:capacity-provider:${CapacityProviderName}"
+        ],
+        "Name": "capacityProvider"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:lambda:${Region}:${Account}:code-signing-config:${CodeSigningConfigId}"
+        ],
+        "Name": "code signing config"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:lambda:${Region}:${Account}:event-source-mapping:${UUID}"
+        ],
+        "Name": "eventSourceMapping"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:lambda:${Region}:${Account}:function:${FunctionName}"
+        ],
+        "Name": "function"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:lambda:${Region}:${Account}:layer:${LayerName}:${LayerVersion}"
+        ],
+        "Name": "layerVersion"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:lambda:${Region}:${Account}:microvm-image:${MicrovmImageName}"
+        ],
+        "Name": "microvmImage"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:lambda:${Region}:${Account}:network-connector:${NetworkConnectorId}"
+        ],
+        "Name": "networkConnector"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:lambda:${Region}:${Account}:web-function/${FunctionName}"
+        ],
+        "Name": "webFunction"
+      }
+    ]
+  },
+  "logs": {
+    "Actions": [
+      {
+        "Name": "AssociateKmsKey",
+        "Resources": [
+          {
+            "Name": "log-group"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "CreateDelivery",
+        "Resources": [
+          {
+            "Name": "delivery"
+          },
+          {
+            "Name": "delivery-destination"
+          },
+          {
+            "Name": "delivery-source"
+          }
+        ]
+      },
+      {
+        "Name": "CreateLogDelivery"
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "CreateLogGroup",
+        "Resources": [
+          {
+            "Name": "log-group"
+          }
+        ]
+      },
+      {
+        "Name": "CreateLogStream",
+        "Resources": [
+          {
+            "Name": "log-stream"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteDataProtectionPolicy",
+        "Resources": [
+          {
+            "Name": "log-group"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteDelivery",
+        "Resources": [
+          {
+            "Name": "delivery"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteDeliveryDestination",
+        "Resources": [
+          {
+            "Name": "delivery-destination"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteDeliveryDestinationPolicy",
+        "Resources": [
+          {
+            "Name": "delivery-destination"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteDeliverySource",
+        "Resources": [
+          {
+            "Name": "delivery-destination"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteIndexPolicy"
+      },
+      {
+        "Name": "DeleteLogGroup",
+        "Resources": [
+          {
+            "Name": "log-group"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteMetricFilter",
+        "Resources": [
+          {
+            "Name": "log-group"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteResourcePolicy"
+      },
+      {
+        "Name": "DeleteRetentionPolicy",
+        "Resources": [
+          {
+            "Name": "log-group"
+          }
+        ]
+      },
+      {
+        "Name": "DescribeDeliveries"
+      },
+      {
+        "Name": "DescribeDeliveryDestinations"
+      },
+      {
+        "Name": "DescribeDeliverySources"
+      },
+      {
+        "Name": "DescribeIndexPolicies"
+      },
+      {
+        "Name": "DescribeLogGroups"
+      },
+      {
+        "Name": "DescribeLogStreams",
+        "Resources": [
+          {
+            "Name": "log-group"
+          }
+        ]
+      },
+      {
+        "Name": "DescribeMetricFilters",
+        "Resources": [
+          {
+            "Name": "log-group"
+          }
+        ]
+      },
+      {
+        "Name": "DescribeResourcePolicies"
+      },
+      {
+        "Name": "DisassociateKmsKey",
+        "Resources": [
+          {
+            "Name": "log-group"
+          }
+        ]
+      },
+      {
+        "Name": "GetDataProtectionPolicy",
+        "Resources": [
+          {
+            "Name": "log-group"
+          }
+        ]
+      },
+      {
+        "Name": "GetDelivery",
+        "Resources": [
+          {
+            "Name": "delivery"
+          }
+        ]
+      },
+      {
+        "Name": "GetDeliveryDestination",
+        "Resources": [
+          {
+            "Name": "delivery-destination"
+          }
+        ]
+      },
+      {
+        "Name": "GetDeliveryDestinationPolicy",
+        "Resources": [
+          {
+            "Name": "delivery-destination"
+          }
+        ]
+      },
+      {
+        "Name": "GetDeliverySource",
+        "Resources": [
+          {
+            "Name": "delivery-source"
+          }
+        ]
+      },
+      {
+        "Name": "ListTagsForResource",
+        "Resources": [
+          {
+            "Name": "anomaly-detector"
+          },
+          {
+            "Name": "delivery"
+          },
+          {
+            "Name": "delivery-destination"
+          },
+          {
+            "Name": "delivery-source"
+          },
+          {
+            "Name": "destination"
+          },
+          {
+            "Name": "log-group"
+          },
+          {
+            "Name": "lookup-table"
+          }
+        ]
+      },
+      {
+        "Name": "PutBearerTokenAuthentication",
+        "Resources": [
+          {
+            "Name": "log-group"
+          }
+        ]
+      },
+      {
+        "Name": "PutDataProtectionPolicy",
+        "Resources": [
+          {
+            "Name": "log-group"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys",
+          "logs:DeliveryDestinationResourceArn"
+        ],
+        "Name": "PutDeliveryDestination",
+        "Resources": [
+          {
+            "Name": "delivery-destination"
+          }
+        ]
+      },
+      {
+        "Name": "PutDeliveryDestinationPolicy",
+        "Resources": [
+          {
+            "Name": "delivery-destination"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys",
+          "logs:LogGeneratingResourceArns"
+        ],
+        "Name": "PutDeliverySource",
+        "Resources": [
+          {
+            "Name": "delivery-source"
+          }
+        ]
+      },
+      {
+        "Name": "PutIndexPolicy"
+      },
+      {
+        "Name": "PutLogEvents",
+        "Resources": [
+          {
+            "Name": "log-stream"
+          }
+        ]
+      },
+      {
+        "Name": "PutLogGroupDeletionProtection",
+        "Resources": [
+          {
+            "Name": "log-group"
+          }
+        ]
+      },
+      {
+        "Name": "PutMetricFilter",
+        "Resources": [
+          {
+            "Name": "log-group"
+          }
+        ]
+      },
+      {
+        "Name": "PutResourcePolicy"
+      },
+      {
+        "Name": "PutRetentionPolicy",
+        "Resources": [
+          {
+            "Name": "log-group"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "TagResource",
+        "Resources": [
+          {
+            "Name": "anomaly-detector"
+          },
+          {
+            "Name": "delivery"
+          },
+          {
+            "Name": "delivery-destination"
+          },
+          {
+            "Name": "delivery-source"
+          },
+          {
+            "Name": "destination"
+          },
+          {
+            "Name": "log-group"
+          },
+          {
+            "Name": "lookup-table"
+          },
+          {
+            "Name": "scheduled-query"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:TagKeys"
+        ],
+        "Name": "UntagResource",
+        "Resources": [
+          {
+            "Name": "anomaly-detector"
+          },
+          {
+            "Name": "delivery"
+          },
+          {
+            "Name": "delivery-destination"
+          },
+          {
+            "Name": "delivery-source"
+          },
+          {
+            "Name": "destination"
+          },
+          {
+            "Name": "log-group"
+          },
+          {
+            "Name": "lookup-table"
+          },
+          {
+            "Name": "scheduled-query"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "UpdateDeliveryConfiguration",
+        "Resources": [
+          {
+            "Name": "delivery"
+          },
+          {
+            "Name": "delivery-destination"
+          },
+          {
+            "Name": "delivery-source"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:logs:${Region}:${Account}:anomaly-detector:${DetectorId}"
+        ],
+        "Name": "anomaly-detector"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:logs:${Region}:${Account}:delivery:${DeliveryName}"
+        ],
+        "Name": "delivery"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:logs:${Region}:${Account}:delivery-destination:${DeliveryDestinationName}"
+        ],
+        "Name": "delivery-destination"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:logs:${Region}:${Account}:delivery-source:${DeliverySourceName}"
+        ],
+        "Name": "delivery-source"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:logs:${Region}:${Account}:destination:${DestinationName}"
+        ],
+        "Name": "destination"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:logs:${Region}:${Account}:log-group:${LogGroupName}"
+        ],
+        "Name": "log-group"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:logs:${Region}:${Account}:log-group:${LogGroupName}:log-stream:${LogStreamName}"
+        ],
+        "Name": "log-stream"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:logs:${Region}:${Account}:lookup-table:${LookupTableName}"
+        ],
+        "Name": "lookup-table"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:logs:${Region}:${Account}:scheduled-query:${ScheduledQueryId}"
+        ],
+        "Name": "scheduled-query"
+      }
+    ]
+  },
+  "s3": {
+    "Actions": [
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys",
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:locationconstraint",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-acl",
+          "s3:x-amz-bucket-namespace",
+          "s3:x-amz-content-sha256",
+          "s3:x-amz-grant-full-control",
+          "s3:x-amz-grant-read",
+          "s3:x-amz-grant-read-acp",
+          "s3:x-amz-grant-write",
+          "s3:x-amz-grant-write-acp",
+          "s3:x-amz-object-ownership"
+        ],
+        "Name": "CreateBucket",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "CreateBucketMetadataTableConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "DeleteBucket",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "DeleteBucketMetadataTableConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "DeleteBucketPolicy",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "DeleteBucketWebsite",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:AccessGrantsInstanceArn",
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:if-match",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "DeleteObject",
+        "Resources": [
+          {
+            "Name": "accesspointobject"
+          },
+          {
+            "Name": "object"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetAccelerateConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetAnalyticsConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetBucketAbac",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetBucketAcl",
+        "Resources": [
+          {
+            "Name": "accesspoint"
+          },
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetBucketCORS",
+        "Resources": [
+          {
+            "Name": "accesspoint"
+          },
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetBucketLogging",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetBucketMetadataTableConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetBucketNotification",
+        "Resources": [
+          {
+            "Name": "accesspoint"
+          },
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:signatureversion"
+        ],
+        "Name": "GetBucketObjectLockConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetBucketOwnershipControls",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetBucketPolicy",
+        "Resources": [
+          {
+            "Name": "accesspoint"
+          },
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetBucketPublicAccessBlock",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetBucketTagging",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetBucketVersioning",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetBucketWebsite",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetEncryptionConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetIntelligentTieringConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetInventoryConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetLifecycleConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetMetricsConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:AccessGrantsInstanceArn",
+          "s3:ExistingObjectTag/<key>",
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetObject",
+        "Resources": [
+          {
+            "Name": "accesspointobject"
+          },
+          {
+            "Name": "object"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:AccessGrantsInstanceArn",
+          "s3:ExistingObjectTag/<key>",
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:versionid",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetObjectVersion",
+        "Resources": [
+          {
+            "Name": "accesspointobject"
+          },
+          {
+            "Name": "object"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "GetReplicationConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "ListAllMyBuckets"
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:AccessGrantsInstanceArn",
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:delimiter",
+          "s3:max-keys",
+          "s3:prefix",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "ListBucket",
+        "Resources": [
+          {
+            "Name": "accesspoint"
+          },
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "ListTagsForResource",
+        "Resources": [
+          {
+            "Name": "accessgrant"
+          },
+          {
+            "Name": "accessgrantsinstance"
+          },
+          {
+            "Name": "accessgrantslocation"
+          },
+          {
+            "Name": "accesspoint"
+          },
+          {
+            "Name": "bucket"
+          },
+          {
+            "Name": "storagelensgroup"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutAccelerateConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutAnalyticsConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutBucketAbac",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-acl",
+          "s3:x-amz-content-sha256",
+          "s3:x-amz-grant-full-control",
+          "s3:x-amz-grant-read",
+          "s3:x-amz-grant-read-acp",
+          "s3:x-amz-grant-write",
+          "s3:x-amz-grant-write-acp"
+        ],
+        "Name": "PutBucketAcl",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutBucketCORS",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutBucketLogging",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutBucketNotification",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion"
+        ],
+        "Name": "PutBucketObjectLockConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutBucketOwnershipControls",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutBucketPolicy",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutBucketPublicAccessBlock",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutBucketTagging",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutBucketVersioning",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutBucketWebsite",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutEncryptionConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutIntelligentTieringConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:InventoryAccessibleOptionalFields",
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutInventoryConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutLifecycleConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutMetricsConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:AccessGrantsInstanceArn",
+          "s3:ExistingObjectTag/<key>",
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-acl",
+          "s3:x-amz-content-sha256",
+          "s3:x-amz-grant-full-control",
+          "s3:x-amz-grant-read",
+          "s3:x-amz-grant-read-acp",
+          "s3:x-amz-grant-write",
+          "s3:x-amz-grant-write-acp",
+          "s3:x-amz-storage-class"
+        ],
+        "Name": "PutObjectAcl",
+        "Resources": [
+          {
+            "Name": "accesspointobject"
+          },
+          {
+            "Name": "object"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:isReplicationPauseRequest",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "PutReplicationConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys",
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "TagResource",
+        "Resources": [
+          {
+            "Name": "accessgrant"
+          },
+          {
+            "Name": "accessgrantsinstance"
+          },
+          {
+            "Name": "accessgrantslocation"
+          },
+          {
+            "Name": "accesspoint"
+          },
+          {
+            "Name": "bucket"
+          },
+          {
+            "Name": "storagelensgroup"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:TagKeys",
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "UntagResource",
+        "Resources": [
+          {
+            "Name": "accessgrant"
+          },
+          {
+            "Name": "accessgrantsinstance"
+          },
+          {
+            "Name": "accessgrantslocation"
+          },
+          {
+            "Name": "accesspoint"
+          },
+          {
+            "Name": "bucket"
+          },
+          {
+            "Name": "storagelensgroup"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "UpdateBucketMetadataAnnotationTableConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "UpdateBucketMetadataInventoryTableConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "s3:ResourceAccount",
+          "s3:TlsVersion",
+          "s3:authType",
+          "s3:signatureAge",
+          "s3:signatureversion",
+          "s3:x-amz-content-sha256"
+        ],
+        "Name": "UpdateBucketMetadataJournalTableConfiguration",
+        "Resources": [
+          {
+            "Name": "bucket"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:s3:${Region}:${Account}:access-grants/default/grant/${Token}"
+        ],
+        "Name": "accessgrant"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:s3:${Region}:${Account}:access-grants/default"
+        ],
+        "Name": "accessgrantsinstance"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:s3:${Region}:${Account}:access-grants/default/location/${Token}"
+        ],
+        "Name": "accessgrantslocation"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:s3:${Region}:${Account}:accesspoint/${AccessPointName}"
+        ],
+        "Name": "accesspoint"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:s3:${Region}:${Account}:accesspoint/${AccessPointName}/object/${ObjectName}"
+        ],
+        "Name": "accesspointobject"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:s3:::${BucketName}"
+        ],
+        "Name": "bucket"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:s3:::${BucketName}/${ObjectName}"
+        ],
+        "Name": "object"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:s3:${Region}:${Account}:storage-lens-group/${Name}"
+        ],
+        "Name": "storagelensgroup"
+      }
+    ]
+  },
+  "sns": {
+    "Actions": [
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "CreateTopic",
+        "Resources": [
+          {
+            "Name": "topic"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteTopic",
+        "Resources": [
+          {
+            "Name": "topic"
+          }
+        ]
+      },
+      {
+        "Name": "GetDataProtectionPolicy",
+        "Resources": [
+          {
+            "Name": "topic"
+          }
+        ]
+      },
+      {
+        "Name": "GetSubscriptionAttributes",
+        "Resources": [
+          {
+            "Name": "topic"
+          }
+        ]
+      },
+      {
+        "Name": "GetTopicAttributes",
+        "Resources": [
+          {
+            "Name": "topic"
+          }
+        ]
+      },
+      {
+        "Name": "ListSubscriptions"
+      },
+      {
+        "Name": "ListSubscriptionsByTopic",
+        "Resources": [
+          {
+            "Name": "topic"
+          }
+        ]
+      },
+      {
+        "Name": "ListTagsForResource",
+        "Resources": [
+          {
+            "Name": "topic"
+          }
+        ]
+      },
+      {
+        "Name": "ListTopics"
+      },
+      {
+        "Name": "PutDataProtectionPolicy",
+        "Resources": [
+          {
+            "Name": "topic"
+          }
+        ]
+      },
+      {
+        "Name": "SetSubscriptionAttributes",
+        "Resources": [
+          {
+            "Name": "topic"
+          }
+        ]
+      },
+      {
+        "Name": "SetTopicAttributes",
+        "Resources": [
+          {
+            "Name": "topic"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "sns:Endpoint",
+          "sns:Protocol"
+        ],
+        "Name": "Subscribe",
+        "Resources": [
+          {
+            "Name": "topic"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "TagResource",
+        "Resources": [
+          {
+            "Name": "topic"
+          }
+        ]
+      },
+      {
+        "Name": "Unsubscribe",
+        "Resources": [
+          {
+            "Name": "topic"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:TagKeys"
+        ],
+        "Name": "UntagResource",
+        "Resources": [
+          {
+            "Name": "topic"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:sns:${Region}:${Account}:${TopicName}"
+        ],
+        "Name": "topic"
+      }
+    ]
+  },
+  "sqs": {
+    "Actions": [
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "CreateQueue",
+        "Resources": [
+          {
+            "Name": "queue"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteQueue",
+        "Resources": [
+          {
+            "Name": "queue"
+          }
+        ]
+      },
+      {
+        "Name": "GetQueueAttributes",
+        "Resources": [
+          {
+            "Name": "queue"
+          }
+        ]
+      },
+      {
+        "Name": "GetQueueUrl",
+        "Resources": [
+          {
+            "Name": "queue"
+          }
+        ]
+      },
+      {
+        "Name": "ListQueueTags",
+        "Resources": [
+          {
+            "Name": "queue"
+          }
+        ]
+      },
+      {
+        "Name": "ListQueues"
+      },
+      {
+        "Name": "SetQueueAttributes",
+        "Resources": [
+          {
+            "Name": "queue"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "TagQueue",
+        "Resources": [
+          {
+            "Name": "queue"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:TagKeys"
+        ],
+        "Name": "UntagQueue",
+        "Resources": [
+          {
+            "Name": "queue"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:sqs:${Region}:${Account}:${QueueName}"
+        ],
+        "Name": "queue"
+      }
+    ]
+  },
+  "ssm": {
+    "Actions": [
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:ResourceTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "AddTagsToResource",
+        "Resources": [
+          {
+            "Name": "association"
+          },
+          {
+            "Name": "automation-execution"
+          },
+          {
+            "Name": "cloud-connector"
+          },
+          {
+            "Name": "document"
+          },
+          {
+            "Name": "instance"
+          },
+          {
+            "Name": "maintenancewindow"
+          },
+          {
+            "Name": "managed-instance"
+          },
+          {
+            "Name": "opsitem"
+          },
+          {
+            "Name": "opsmetadata"
+          },
+          {
+            "Name": "parameter"
+          },
+          {
+            "Name": "patchbaseline"
+          },
+          {
+            "Name": "task"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:ResourceTag/${TagKey}"
+        ],
+        "Name": "DeleteParameter",
+        "Resources": [
+          {
+            "Name": "parameter"
+          }
+        ]
+      },
+      {
+        "Name": "DescribeParameters"
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:ResourceTag/${TagKey}"
+        ],
+        "Name": "GetParameters",
+        "Resources": [
+          {
+            "Name": "parameter"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:ResourceTag/${TagKey}"
+        ],
+        "Name": "ListTagsForResource",
+        "Resources": [
+          {
+            "Name": "association"
+          },
+          {
+            "Name": "automation-execution"
+          },
+          {
+            "Name": "cloud-connector"
+          },
+          {
+            "Name": "document"
+          },
+          {
+            "Name": "maintenancewindow"
+          },
+          {
+            "Name": "managed-instance"
+          },
+          {
+            "Name": "opsitem"
+          },
+          {
+            "Name": "opsmetadata"
+          },
+          {
+            "Name": "parameter"
+          },
+          {
+            "Name": "patchbaseline"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys",
+          "ssm:Overwrite",
+          "ssm:Policies"
+        ],
+        "Name": "PutParameter",
+        "Resources": [
+          {
+            "Name": "parameter"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:ResourceTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "RemoveTagsFromResource",
+        "Resources": [
+          {
+            "Name": "association"
+          },
+          {
+            "Name": "automation-execution"
+          },
+          {
+            "Name": "cloud-connector"
+          },
+          {
+            "Name": "document"
+          },
+          {
+            "Name": "instance"
+          },
+          {
+            "Name": "maintenancewindow"
+          },
+          {
+            "Name": "managed-instance"
+          },
+          {
+            "Name": "opsitem"
+          },
+          {
+            "Name": "opsmetadata"
+          },
+          {
+            "Name": "parameter"
+          },
+          {
+            "Name": "patchbaseline"
+          },
+          {
+            "Name": "task"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:ssm:${Region}:${Account}:association/${AssociationId}"
+        ],
+        "Name": "association"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:ssm:${Region}:${Account}:automation-execution/${AutomationExecutionId}"
+        ],
+        "Name": "automation-execution"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:ssm:${Region}:${Account}:cloud-connector/${CloudConnectorId}"
+        ],
+        "Name": "cloud-connector"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:ssm:${Region}:${Account}:document/${DocumentName}"
+        ],
+        "Name": "document"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:ec2:${Region}:${Account}:instance/${InstanceId}"
+        ],
+        "Name": "instance"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:ssm:${Region}:${Account}:maintenancewindow/${ResourceId}"
+        ],
+        "Name": "maintenancewindow"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:ssm:${Region}:${Account}:managed-instance/${InstanceId}"
+        ],
+        "Name": "managed-instance"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:ssm:${Region}:${Account}:opsitem/${ResourceId}"
+        ],
+        "Name": "opsitem"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:ssm:${Region}:${Account}:opsmetadata/${ResourceId}"
+        ],
+        "Name": "opsmetadata"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:ssm:${Region}:${Account}:parameter/${ParameterNameWithoutLeadingSlash}"
+        ],
+        "Name": "parameter"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:ssm:${Region}:${Account}:patchbaseline/${PatchBaselineIdResourceId}"
+        ],
+        "Name": "patchbaseline"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:ecs:${Region}:${Account}:task/${TaskId}"
+        ],
+        "Name": "task"
+      }
+    ]
+  },
+  "states": {
+    "Actions": [
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "CreateStateMachine",
+        "Resources": [
+          {
+            "Name": "statemachine"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteStateMachine",
+        "Resources": [
+          {
+            "Name": "statemachine"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "states:StateMachineQualifier"
+        ],
+        "Name": "DescribeStateMachine",
+        "Resources": [
+          {
+            "Name": "statemachine"
+          }
+        ]
+      },
+      {
+        "Name": "ListStateMachines"
+      },
+      {
+        "Name": "ListTagsForResource",
+        "Resources": [
+          {
+            "Name": "activity"
+          },
+          {
+            "Name": "statemachine"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "TagResource",
+        "Resources": [
+          {
+            "Name": "activity"
+          },
+          {
+            "Name": "statemachine"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:TagKeys"
+        ],
+        "Name": "UntagResource",
+        "Resources": [
+          {
+            "Name": "activity"
+          },
+          {
+            "Name": "statemachine"
+          }
+        ]
+      },
+      {
+        "ActionConditionKeys": [
+          "aws:RequestTag/${TagKey}",
+          "aws:TagKeys"
+        ],
+        "Name": "UpdateStateMachine",
+        "Resources": [
+          {
+            "Name": "statemachine"
+          }
+        ]
+      }
+    ],
+    "Resources": [
+      {
+        "ARNFormats": [
+          "arn:${Partition}:states:${Region}:${Account}:activity:${ActivityName}"
+        ],
+        "Name": "activity"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:states:${Region}:${Account}:stateMachine:${StateMachineName}"
+        ],
+        "Name": "statemachine"
+      }
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "apiUrl": "https://example.execute-api.us-east-1.amazonaws.com/prod",
+  "cognitoDomain": "oerf-example.auth.us-east-1.amazoncognito.com",
+  "userPoolClientId": "client-id",
+  "wsUrl": "wss://example.execute-api.us-east-1.amazonaws.com/prod",
+  "region": "us-east-1",
+  "userPoolId": "us-east-1_example"
+}

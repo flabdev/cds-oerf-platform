@@ -67,14 +67,14 @@ test("allowance publication stops when draft validation reports issues", async (
 
 test("missing Cognito settings keep the sample desk", () => {
   assert.equal(liveConfig({}).mode, "demo");
-  assert.equal(liveConfig({ VITE_API_URL: "https://api.example.com" }).mode, "demo");
+  assert.equal(liveConfig({ apiUrl: "https://api.example.com" }).mode, "demo");
 });
 
 test("a live config drops a trailing slash and the https prefix", () => {
   const config = liveConfig({
-    VITE_API_URL: "https://api.example.com/",
-    VITE_COGNITO_DOMAIN: "https://oerf.auth.us-east-1.amazoncognito.com/",
-    VITE_USER_POOL_CLIENT_ID: "client-1",
+    apiUrl: "https://api.example.com/",
+    cognitoDomain: "https://oerf.auth.us-east-1.amazoncognito.com/",
+    userPoolClientId: "client-1",
   });
   assert.equal(config.mode, "live");
   assert.equal(config.apiUrl, "https://api.example.com");
@@ -84,10 +84,10 @@ test("a live config drops a trailing slash and the https prefix", () => {
 
 test("dev live mode calls the Vite proxy instead of RestApiUrl", () => {
   const config = liveConfig({
-    DEV: true,
-    VITE_API_URL: "https://api.example.com/prod/",
-    VITE_COGNITO_DOMAIN: "oerf.auth.us-east-1.amazoncognito.com",
-    VITE_USER_POOL_CLIENT_ID: "client-1",
+    dev: true,
+    apiUrl: "https://api.example.com/prod/",
+    cognitoDomain: "oerf.auth.us-east-1.amazoncognito.com",
+    userPoolClientId: "client-1",
   });
   assert.equal(config.mode, "live");
   assert.equal(config.apiUrl, "/api");
@@ -95,10 +95,10 @@ test("dev live mode calls the Vite proxy instead of RestApiUrl", () => {
 
 test("the websocket url is the compute stack output", () => {
   const config = liveConfig({
-    VITE_API_URL: "https://api.example.com",
-    VITE_COGNITO_DOMAIN: "oerf.auth.us-east-1.amazoncognito.com",
-    VITE_USER_POOL_CLIENT_ID: "client-1",
-    VITE_WS_URL: "wss://abc.execute-api.us-east-1.amazonaws.com/prod/",
+    apiUrl: "https://api.example.com",
+    cognitoDomain: "oerf.auth.us-east-1.amazoncognito.com",
+    userPoolClientId: "client-1",
+    wsUrl: "wss://abc.execute-api.us-east-1.amazonaws.com/prod/",
   });
   assert.equal(config.wsUrl, "wss://abc.execute-api.us-east-1.amazonaws.com/prod");
 });

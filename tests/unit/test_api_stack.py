@@ -1,13 +1,16 @@
 """Template assertions for the dashboard API stack. No AWS calls."""
 
 import json
+from pathlib import Path
 
 import aws_cdk as cdk
 import pytest
 from aws_cdk import aws_sqs as sqs
 from aws_cdk.assertions import Template
 
-from infra.stacks.api_stack import OerfApiStack
+from infra.naming import Stage
+from infra.stacks import api_stack as api_stack_module
+from infra.stacks.api_stack import OerfApiStack, require_desk_build
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
 from infra.ws_clients import DASHBOARD_CLIENT_PARAMETER
@@ -21,7 +24,7 @@ WEBSOCKET_URL = "wss://abc.execute-api.us-east-1.amazonaws.com/prod"
 def templates() -> tuple[Template, Template]:
     app = cdk.App()
     env = cdk.Environment(account=ACCOUNT, region=REGION)
-    data = OerfDataStack(app, "OerfDataStack", env=env)
+    data = OerfDataStack(app, "OerfDataStack", stage=Stage("main"), env=env)
     refs = cdk.Stack(app, "InboundRefs", env=env)
     queue = sqs.Queue(refs, "InboundQueue")
     stack = OerfApiStack(
@@ -30,6 +33,7 @@ def templates() -> tuple[Template, Template]:
         data_stack=data,
         inbound_queue=queue,
         websocket_url=WEBSOCKET_URL,
+        stage=Stage("main"),
         env=env,
     )
     return Template.from_stack(stack), Template.from_stack(refs)
@@ -96,7 +100,7 @@ def test_stage_throttles_and_logs_the_request_line(template: Template) -> None:
 def test_throttle_limits_come_from_context() -> None:
     app = cdk.App(context={"api:throttleRate": "5", "api:throttleBurst": "9"})
     env = cdk.Environment(account=ACCOUNT, region=REGION)
-    data = OerfDataStack(app, "OerfDataStack", env=env)
+    data = OerfDataStack(app, "OerfDataStack", stage=Stage("main"), env=env)
     refs = cdk.Stack(app, "InboundRefs", env=env)
     queue = sqs.Queue(refs, "InboundQueue")
     stack = OerfApiStack(
@@ -105,6 +109,7 @@ def test_throttle_limits_come_from_context() -> None:
         data_stack=data,
         inbound_queue=queue,
         websocket_url=WEBSOCKET_URL,
+        stage=Stage("main"),
         env=env,
     )
     stage = next(iter(Template.from_stack(stack).find_resources("AWS::ApiGateway::Stage").values()))
@@ -312,14 +317,17 @@ def test_websocket_is_the_compute_endpoint_and_cors_is_cloudfront(
 def test_websocket_allow_list_matches_the_hosted_ui_client() -> None:
     app = cdk.App()
     env = cdk.Environment(account=ACCOUNT, region=REGION)
-    data = OerfDataStack(app, "OerfDataStack", env=env)
-    compute = OerfComputeStack(app, "OerfComputeStack", data_stack=data, env=env)
+    data = OerfDataStack(app, "OerfDataStack", stage=Stage("main"), env=env)
+    compute = OerfComputeStack(
+        app, "OerfComputeStack", data_stack=data, stage=Stage("main"), env=env
+    )
     api = OerfApiStack(
         app,
         "OerfApiStack",
         data_stack=data,
         inbound_queue=compute.inbound_queue,
         websocket_url=WEBSOCKET_URL,
+        stage=Stage("main"),
         env=env,
     )
     api_template = Template.from_stack(api)
@@ -335,6 +343,220 @@ def test_websocket_allow_list_matches_the_hosted_ui_client() -> None:
     assert variables["DASHBOARD_CLIENT_PARAMETER"] == DASHBOARD_CLIENT_PARAMETER
     assert variables["ALLOWED_CLIENT_IDS"] == variables["USER_POOL_CLIENT_ID"]
     assert variables["USER_POOL_CLIENT_ID"] != parameter["Properties"]["Value"]
+
+
+def test_managed_login_is_absent_unless_the_flag_is_set(template: Template) -> None:
+    domain = next(iter(template.find_resources("AWS::Cognito::UserPoolDomain").values()))
+    assert "ManagedLoginVersion" not in domain["Properties"]
+    assert template.find_resources("AWS::Cognito::ManagedLoginBranding") == {}
+
+
+def _dashboard_templates(context: dict[str, str]) -> tuple[Template, Template]:
+    app = cdk.App(context=context)
+    env = cdk.Environment(account=ACCOUNT, region=REGION)
+    stage = Stage("dev")
+    data = OerfDataStack(app, "OerfDataStack", stage=stage, env=env)
+    refs = cdk.Stack(app, "InboundRefs", env=env)
+    queue = sqs.Queue(refs, "InboundQueue")
+    api = OerfApiStack(
+        app,
+        "OerfApiStack",
+        data_stack=data,
+        inbound_queue=queue,
+        websocket_url=WEBSOCKET_URL,
+        stage=stage,
+        env=env,
+    )
+    return Template.from_stack(data), Template.from_stack(api)
+
+
+def _only(template: Template, resource_type: str) -> tuple[str, dict]:
+    found = template.find_resources(resource_type)
+    assert len(found) == 1, resource_type
+    return next(iter(found.items()))
+
+
+def test_managed_login_keeps_the_pool_domain_and_client() -> None:
+    off_data, off_api = _dashboard_templates({})
+    on_data, on_api = _dashboard_templates({"auth:managedLogin": "true"})
+
+    off_pool_id, off_pool = _only(off_data, "AWS::Cognito::UserPool")
+    on_pool_id, on_pool = _only(on_data, "AWS::Cognito::UserPool")
+    off_domain_id, off_domain = _only(off_api, "AWS::Cognito::UserPoolDomain")
+    on_domain_id, on_domain = _only(on_api, "AWS::Cognito::UserPoolDomain")
+    off_client_id, off_client = _only(off_api, "AWS::Cognito::UserPoolClient")
+    on_client_id, on_client = _only(on_api, "AWS::Cognito::UserPoolClient")
+
+    assert on_pool_id == off_pool_id
+    assert on_domain_id == off_domain_id
+    assert on_client_id == off_client_id
+    assert on_pool["Properties"] == off_pool["Properties"]
+    assert on_pool["Properties"]["UserPoolTier"] == "ESSENTIALS"
+    assert on_client["Properties"] == off_client["Properties"]
+    assert on_domain["Properties"]["Domain"] == off_domain["Properties"]["Domain"]
+    assert on_domain["Properties"]["UserPoolId"] == off_domain["Properties"]["UserPoolId"]
+    assert "ManagedLoginVersion" not in off_domain["Properties"]
+    assert on_domain["Properties"]["ManagedLoginVersion"] == 2
+
+    assert off_api.find_resources("AWS::Cognito::ManagedLoginBranding") == {}
+    branding_id, branding = _only(on_api, "AWS::Cognito::ManagedLoginBranding")
+    assert branding_id.startswith("DashboardManagedLoginBranding")
+    props = branding["Properties"]
+    assert props["UseCognitoProvidedValues"] is True
+    assert "Settings" not in props
+    assert "Assets" not in props
+    assert props["ClientId"] == {"Ref": on_client_id}
+    assert props["UserPoolId"] == on_domain["Properties"]["UserPoolId"]
+    assert {"Ref": on_domain_id} in branding["DependsOn"] or on_domain_id in branding["DependsOn"]
+
+
+def test_managed_login_branding_file_supplies_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    branding_file = tmp_path / "managed-login-branding.json"
+    branding_file.write_text(
+        json.dumps(
+            {
+                "Settings": {
+                    "componentClasses": {"form": {"lightMode": {"logo": {"enabled": True}}}}
+                },
+                "Assets": [
+                    {
+                        "Category": "FORM_LOGO",
+                        "ColorMode": "DYNAMIC",
+                        "Extension": "PNG",
+                        "Bytes": "aGVsbG8=",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(api_stack_module, "MANAGED_LOGIN_BRANDING", branding_file)
+    _data, api = _dashboard_templates({"auth:managedLogin": "true"})
+    _logical_id, branding = _only(api, "AWS::Cognito::ManagedLoginBranding")
+    props = branding["Properties"]
+    assert props["UseCognitoProvidedValues"] is False
+    assert props["Settings"]["componentClasses"]["form"]["lightMode"]["logo"]["enabled"] is True
+    assert props["Assets"] == [
+        {
+            "Category": "FORM_LOGO",
+            "ColorMode": "DYNAMIC",
+            "Extension": "PNG",
+            "Bytes": "aGVsbG8=",
+        }
+    ]
+
+
+def test_managed_login_branding_file_must_contain_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    branding_file = tmp_path / "managed-login-branding.json"
+    branding_file.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(api_stack_module, "MANAGED_LOGIN_BRANDING", branding_file)
+    with pytest.raises(ValueError, match="must be a JSON object with Settings"):
+        _dashboard_templates({"auth:managedLogin": "true"})
+
+
+def test_desk_publish_is_off_unless_the_flag_is_set(template: Template) -> None:
+    assert template.find_resources("Custom::CDKBucketDeployment") == {}
+    assert "DeskConfigUrl" not in template.find_outputs("*")
+
+
+def test_desk_publish_requires_the_vite_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api_stack_module, "DESK_DIST", tmp_path / "missing")
+    with pytest.raises(ValueError, match=r"build web/ first: cd web && npm ci && npm run build"):
+        _published_template()
+
+
+def test_desk_publish_uploads_the_build_and_writes_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dist = tmp_path / "dist"
+    _write_dist(dist)
+    monkeypatch.setattr(api_stack_module, "DESK_DIST", dist)
+    published = _published_template()
+    assert "DeskConfigUrl" in published.find_outputs("*")
+    deployments = published.find_resources("Custom::CDKBucketDeployment")
+    assert len(deployments) == 3
+    rendered = json.dumps(deployments)
+    assert '"Prune": true' in rendered or '"Prune": "true"' in rendered
+    assert "config.json" in rendered
+    assert "assets/*" in rendered
+    assert "no-cache" in rendered
+    assert "immutable" in rendered
+    assert "/*" in rendered
+    functions = published.find_resources("AWS::Lambda::Function")
+    memory = [
+        props["Properties"].get("MemorySize")
+        for props in functions.values()
+        if props["Properties"].get("MemorySize") == 1024
+    ]
+    assert memory and set(memory) == {1024}
+    _assert_desk_writer_can_put_without_kms(published)
+
+
+def test_desk_publish_retains_uploaded_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dist = tmp_path / "dist"
+    _write_dist(dist)
+    monkeypatch.setattr(api_stack_module, "DESK_DIST", dist)
+    deployments = _published_template().find_resources("Custom::CDKBucketDeployment")
+    assert len(deployments) == 3
+    for logical_id, resource in deployments.items():
+        assert resource["Properties"]["RetainOnDelete"] is True, logical_id
+
+
+def _published_template() -> Template:
+    app = cdk.App(context={"desk:publish": "true"})
+    env = cdk.Environment(account=ACCOUNT, region=REGION)
+    data = OerfDataStack(app, "OerfDataStack", stage=Stage("main"), env=env)
+    refs = cdk.Stack(app, "InboundRefs", env=env)
+    queue = sqs.Queue(refs, "InboundQueue")
+    stack = OerfApiStack(
+        app,
+        "OerfApiStack",
+        data_stack=data,
+        inbound_queue=queue,
+        websocket_url=WEBSOCKET_URL,
+        stage=Stage("main"),
+        env=env,
+    )
+    return Template.from_stack(stack)
+
+
+def _write_dist(dist: Path) -> None:
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>desk</title>\n", encoding="utf-8")
+    (dist / "assets" / "app.js").write_text("console.log('ok')\n", encoding="utf-8")
+
+
+def _assert_desk_writer_can_put_without_kms(template: Template) -> None:
+    actions: list[str] = []
+    for policy in template.find_resources("AWS::IAM::Policy").values():
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            if statement.get("Effect") == "Deny":
+                continue
+            raw = statement.get("Action", [])
+            names = [raw] if isinstance(raw, str) else list(raw)
+            actions.extend(names)
+    assert any(name.startswith("s3:PutObject") for name in actions)
+    assert any(name.startswith("s3:DeleteObject") for name in actions)
+    assert "cloudfront:CreateInvalidation" in actions
+    assert not any(name.startswith("kms:") for name in actions)
+    buckets = template.find_resources("AWS::S3::Bucket")
+    encryption = next(iter(buckets.values()))["Properties"]["BucketEncryption"]
+    assert encryption["ServerSideEncryptionConfiguration"][0]["ServerSideEncryptionByDefault"] == {
+        "SSEAlgorithm": "AES256"
+    }
+
+
+def test_require_desk_build_names_the_missing_vite_build(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="build web/ first"):
+        require_desk_build(tmp_path)
 
 
 def _authorizer_env(template: Template) -> dict[str, object]:
