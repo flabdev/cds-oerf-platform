@@ -4,11 +4,20 @@ title = "cds-oerf-platform"
 useDefault = true
 
 [allowlist]
-description = "Fixtures, seed tokens, and IAM docs that mention example ARNs"
+description = "Fixtures, seed tokens, IAM docs, and generated caches"
 paths = [
-  '''tests/''',
-  '''sim/seed/''',
-  '''docs/''',
+  '''tests[/\\]''',
+  '''sim[/\\]seed[/\\]''',
+  '''docs[/\\]''',
+  '''(?:^|[/\\])\.jsii-cache(?:-ssm)?(?:[/\\]|$)''',
+  '''(?:^|[/\\])\.venv(?:[/\\]|$)''',
+  '''(?:^|[/\\])venv(?:[/\\]|$)''',
+  '''(?:^|[/\\])node_modules(?:[/\\]|$)''',
+  '''(?:^|[/\\])cdk\.out(?:[/\\]|$)''',
+  '''(?:^|[/\\])\.pytest_cache(?:[/\\]|$)''',
+  '''(?:^|[/\\])\.ruff_cache(?:[/\\]|$)''',
+  '''(?:^|[/\\])__pycache__(?:[/\\]|$)''',
+  '''\.egg-info(?:[/\\]|$)''',
 ]
 regexes = [
   '''\$\{PHONE_[A-Z0-9_]+\}''',
