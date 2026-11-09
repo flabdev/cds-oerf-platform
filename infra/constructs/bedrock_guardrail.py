@@ -14,6 +14,8 @@ from pathlib import Path
 from aws_cdk import Stack, aws_bedrock as bedrock
 from constructs import Construct
 
+from infra.naming import Stage
+
 _CONFIG = Path(__file__).resolve().parents[1] / "config" / "guardrail.json"
 # Source us-east-1, profile us.guardrail.v1:0. Destination regions from
 # https://docs.aws.amazon.com/bedrock/latest/userguide/guardrail-profiles-permissions.html
@@ -28,6 +30,7 @@ class BedrockGuardrail(Construct):
         scope: Construct,
         construct_id: str,
         *,
+        stage: Stage,
         config_path: Path | None = None,
     ) -> None:
         super().__init__(scope, construct_id)
@@ -44,7 +47,7 @@ class BedrockGuardrail(Construct):
         self.guardrail = bedrock.CfnGuardrail(
             self,
             "Resource",
-            name=config["name"],
+            name=stage.res("guardrail"),
             description=config["description"],
             blocked_input_messaging=config["blocked_input_message"],
             blocked_outputs_messaging=config["blocked_output_message"],

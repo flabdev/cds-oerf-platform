@@ -28,7 +28,11 @@ Boundaries this module keeps:
   engagement step that replaces it owns the reply contract (ADR-017), and OERF-203
   confirms the wiring against this output.
 * Duplicate, unknown, late, or sender-mismatched messages are acknowledged and
-  logged without a Step Functions call. A failure before the callback releases the
+  logged without a Step Functions call. An event this stage does not own (a
+  status with no single waiting engagement, a reply with no owned engagement,
+  an opt-out from an unregistered sender, or media from an unmatched sender)
+  is acknowledged with no write and one line
+  ``inbound.ignored reason=not_owned``. A failure before the callback releases the
   dedupe id and is reported as an SQS partial-batch failure so it can be retried.
 * No ``states:SendTaskFailure`` is sent. The agreement in section 5 keeps reply
   classification in the engagement Interpret step (ADR-017), and the state machine
@@ -64,7 +68,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from oerf.platform.channels.engagement import DynamoEngagementStore, Engagement, EngagementStore
-from oerf.platform.channels.optout import handle_reply
+from oerf.platform.channels.optout import handle_reply, is_opt_out
 from oerf.platform.channels.phone_id import _whatsapp_phone_number_id as _resolve_phone_number_id
 from oerf.platform.channels.registry import (
     DynamoPhoneRegistry,
@@ -424,6 +428,12 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
         return _process_dashboard(body, dependencies)
     prepared = whatsapp_event_body(body)
     if prepared is None:
+        # A status for a recipient with no single waiting engagement is not
+        # this stage's send. Skip the OUTMSG# write. One waiting engagement
+        # still stores the wamid so a later quote can correlate.
+        if whatsapp_status_ids(body) and not _status_has_one_waiting(body, dependencies):
+            _log_not_owned("status")
+            return "ignored"
         _record_whatsapp_status(body, dependencies)
         log(
             logger,
@@ -434,6 +444,14 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
         )
         return "ignored"
     message, context_id = _normalize_provider(prepared)
+    # A message id already accepted follows the dedupe path, including a
+    # second delivery after the engagement was answered. An id this stage
+    # has never accepted, and does not own, is dropped before that write.
+    if dependencies.dedupe.stored(message.provider_msg_id) is None:
+        unowned = _unowned_kind(message, context_id, dependencies)
+        if unowned is not None:
+            _log_not_owned(unowned)
+            return "ignored"
     received = _parse_received_at(message.received_at)
     if dependencies.dedupe.register(
         message_id=message.provider_msg_id,
@@ -892,6 +910,58 @@ def _dedupe_id(body: dict[str, Any]) -> str | None:
     if not isinstance(prepared, dict):
         return None
     return _nonblank(prepared.get("provider_msg_id")) or _nonblank(prepared.get("message_id"))
+
+
+def _log_not_owned(kind: str) -> None:
+    """One line for an event this stage must not act on. No number and no body."""
+
+    log(
+        logger,
+        logging.INFO,
+        f"inbound.ignored reason=not_owned kind={kind}",
+        outcome="ignored",
+        count=1,
+    )
+
+
+def _status_has_one_waiting(body: dict[str, Any], dependencies: InboundDependencies) -> bool:
+    """True when any status recipient has exactly one waiting engagement."""
+
+    for _wamid, recipient in whatsapp_status_ids(body):
+        if len(dependencies.engagements.for_address("whatsapp", recipient)) == 1:
+            return True
+    return False
+
+
+def _unowned_kind(
+    message: NormalizedMessage,
+    context_id: str | None,
+    dependencies: InboundDependencies,
+) -> str | None:
+    """Kind token when this stage must ignore the message before any write.
+
+    A registered sender's opt-out is owned: the existing path records it.
+    A quote that misses, or a reply with no quote, is owned when exactly one
+    waiting engagement matches the sender. That is the case where both stages
+    act if both have that engagement. Anything else writes nothing.
+    """
+
+    if is_opt_out(message.text):
+        if dependencies.registry is None:
+            return None
+        if dependencies.registry.resolve_sender(message.sender).unknown:
+            return "opt_out"
+        return None
+    if context_id and dependencies.engagements.correlate(context_id) is not None:
+        return None
+    waiting = dependencies.engagements.for_address(message.channel, message.sender)
+    if len(waiting) == 1:
+        return None
+    if message.media or message.type != "text":
+        return "media"
+    if context_id:
+        return "button"
+    return "text"
 
 
 def _record_whatsapp_status(body: dict[str, Any], dependencies: InboundDependencies) -> None:

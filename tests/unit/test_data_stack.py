@@ -12,6 +12,7 @@ import pytest
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk.assertions import Template
 
+from infra.naming import Stage
 from infra.stacks.data_stack import OerfDataStack
 from infra.step_functions import (
     ASL_ENGAGE_PLACEHOLDERS,
@@ -50,6 +51,7 @@ def stack() -> OerfDataStack:
     return OerfDataStack(
         app,
         "OerfDataStack",
+        stage=Stage("main"),
         env=cdk.Environment(account=ACCOUNT, region=REGION),
     )
 
@@ -558,6 +560,7 @@ def test_tables_use_the_aws_managed_key_when_kms_managed() -> None:
     kms_stack = OerfDataStack(
         app,
         "OerfDataStack",
+        stage=Stage("main"),
         env=cdk.Environment(account=ACCOUNT, region=REGION),
     )
     kms_template = Template.from_stack(kms_stack)
@@ -858,6 +861,7 @@ def test_agentcore_enables_one_transaction_search_config() -> None:
     data = OerfDataStack(
         app,
         "OerfDataStack",
+        stage=Stage("main"),
         env=cdk.Environment(account=ACCOUNT, region=REGION),
     )
     template = Template.from_stack(data)

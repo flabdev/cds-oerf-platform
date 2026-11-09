@@ -3,13 +3,16 @@ name: CI
 # Pull-request and main-branch checks for this repo. A failing job blocks the change.
 #
 # Python installs the package with the dev extra, then runs ruff, pytest with the aws
-# marker excluded, pytest -m security as its own step, and four CDK synths: the default
-# stacks, dashboard:enabled=true,
-# whatsapp:wabaId, and agentcore:enabled=true. Every synth passes
+# marker excluded, pytest -m security as its own step, and CDK synths for stage=main
+# (default, dashboard, WhatsApp WABA id, AgentCore) and stage=dev (the same set
+# except the WABA id, which dev rejects, plus the laptop-only CI role stack).
+# Every synth passes
 # -c account=000000000000 so ambient credentials cannot replace the placeholder.
 # --lookups false makes no AWS API calls. The AgentCore synth stages the image
 # asset only. The image is built on deploy, not here.
-# Web runs npm ci and node --test in web/.
+# Web runs npm ci, node --test, the production build, and a check that the
+# built JavaScript has no stage hosts or client ids. The Python job builds
+# web/ once more so it can synth stage=dev with desk:publish=true.
 #
 # The job token can read the repo and nothing else. It does not request OIDC or AWS
 # credentials. Manual deploy stays in deploy.yml.
@@ -19,6 +22,7 @@ on:
   push:
     branches:
       - main
+  workflow_call:
 
 permissions:
   contents: read
@@ -26,7 +30,7 @@ permissions:
 jobs:
   python:
     name: Python
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     defaults:
@@ -66,23 +70,59 @@ jobs:
         run: npm install -g aws-cdk@2.1145.0
 
       - name: CDK synth
-        run: cdk synth --lookups false --quiet -c account=000000000000
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=main
 
       - name: CDK synth with dashboard
-        run: cdk synth --lookups false --quiet -c account=000000000000 -c dashboard:enabled=true
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=main -c dashboard:enabled=true
 
       - name: CDK synth with WhatsApp WABA id
-        run: cdk synth --lookups false --quiet -c account=000000000000 -c whatsapp:wabaId=waba-0000000000000000
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=main -c whatsapp:wabaId=waba-0000000000000000
 
       # DockerImageAsset fingerprints the context into cdk.out. cdk synth does
       # not publish assets, so this step does not run docker build. deploy.yml
       # builds the linux/arm64 image when the agentcore input is true.
       - name: CDK synth with AgentCore
-        run: cdk synth --lookups false --quiet -c account=000000000000 -c agentcore:enabled=true
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=main -c agentcore:enabled=true
+
+      # Dev omits whatsapp:wabaId. That flag fails synthesis because main owns
+      # the single WABA event destination.
+      - name: CDK synth dev
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=dev
+
+      - name: CDK synth dev with dashboard
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=dev -c dashboard:enabled=true
+
+      - name: CDK synth dev with AgentCore
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=dev -c agentcore:enabled=true
+
+      # OerfCiStack-dev is not part of a normal dev synth. This fake provider
+      # ARN only checks that the stack synthesizes. GitHub does not deploy it.
+      - name: CDK synth dev CI deploy role
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=dev -c ci:deployRoleStack=true -c github:oidcProviderArn=arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com -c dev:guardrailArn=arn:aws:bedrock:us-east-1:000000000000:guardrail/ciplaceholder1
+
+      # desk:publish reads web/dist. The synths above leave the flag off, so
+      # they do not need this build. Node 24 is web/.nvmrc.
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the desk
+        working-directory: web
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          npm run check:build
+
+      - name: CDK synth dev with desk publish
+        run: cdk synth --lookups false --quiet -c account=000000000000 -c stage=dev -c dashboard:enabled=true -c desk:publish=true
 
   web:
     name: Web
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     defaults:
@@ -97,7 +137,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -106,3 +146,9 @@ jobs:
 
       - name: Test
         run: node --test
+
+      - name: Build
+        run: npm run build
+
+      - name: Check the build has no stage values
+        run: npm run check:build

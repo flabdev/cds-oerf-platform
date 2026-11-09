@@ -43,7 +43,8 @@ def test_mocked_channels_read_the_contact_registry() -> None:
     assert parameters.names == []
 
 
-def test_live_channels_read_the_demo_numbers_parameter() -> None:
+def test_live_channels_read_the_demo_numbers_parameter(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEMO_NUMBERS_PREFIX", "/oerf/dev/demo-numbers")
     parameters = _Parameters({"/oerf/dev/demo-numbers/t1/driver/C-T1-DRV": f"  {LIVE_VALUE}  "})
 
     found = resolve_party_address(
@@ -59,7 +60,8 @@ def test_live_channels_read_the_demo_numbers_parameter() -> None:
     assert parameters.names == ["/oerf/dev/demo-numbers/t1/driver/C-T1-DRV"]
 
 
-def test_live_driver_address_is_contact_specific() -> None:
+def test_live_driver_address_is_contact_specific(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEMO_NUMBERS_PREFIX", "/oerf/dev/demo-numbers")
     parameters = _Parameters(
         {
             "/oerf/dev/demo-numbers/t1/driver/C-T1-ANANDA": "+15550100901",
@@ -82,6 +84,18 @@ def test_live_driver_address_is_contact_specific() -> None:
     ]
 
 
+def test_live_driver_address_uses_stage_configured_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEMO_NUMBERS_PREFIX", "/oerf/demo-numbers")
+    parameters = _Parameters({"/oerf/demo-numbers/t1/driver/C-T1-DRV": LIVE_VALUE})
+
+    found = resolve_party_address(
+        "t1", "driver", "C-T1-DRV", registry=None, parameters=parameters, live=True
+    )
+
+    assert found == LIVE_VALUE
+    assert parameters.names == ["/oerf/demo-numbers/t1/driver/C-T1-DRV"]
+
+
 def test_driver_parameter_name_requires_contact_id() -> None:
     with pytest.raises(AddressError, match="tenant and contact"):
         resolve_party_address(
@@ -100,7 +114,8 @@ def test_live_non_driver_address_keeps_role_parameter() -> None:
     assert parameters.names == ["/oerf/demo-numbers/t1/ops_manager"]
 
 
-def test_an_empty_parameter_names_no_number() -> None:
+def test_an_empty_parameter_names_no_number(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEMO_NUMBERS_PREFIX", "/oerf/dev/demo-numbers")
     parameters = _Parameters({"/oerf/dev/demo-numbers/t1/driver/C-T1-DRV": "   "})
 
     with pytest.raises(AddressError) as error:

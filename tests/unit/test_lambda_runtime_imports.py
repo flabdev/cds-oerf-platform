@@ -19,6 +19,7 @@ from pathlib import Path
 import aws_cdk as cdk
 import boto3
 
+from infra.naming import Stage
 from infra.runtime_asset import LAMBDA_PLATFORM, VENDORED_REQUIREMENTS, WHEELS
 from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
@@ -105,14 +106,17 @@ def test_each_python_lambda_imports_from_its_asset(tmp_path: Path) -> None:
         },
     )
     env = cdk.Environment(account=_ACCOUNT, region=_REGION)
-    data = OerfDataStack(app, "OerfDataStack", env=env)
-    compute = OerfComputeStack(app, "OerfComputeStack", data_stack=data, env=env)
+    data = OerfDataStack(app, "OerfDataStack", stage=Stage("main"), env=env)
+    compute = OerfComputeStack(
+        app, "OerfComputeStack", data_stack=data, stage=Stage("main"), env=env
+    )
     api = OerfApiStack(
         app,
         "OerfApiStack",
         data_stack=data,
         inbound_queue=compute.inbound_queue,
         websocket_url="https://example.execute-api.us-east-1.amazonaws.com/prod",
+        stage=Stage("main"),
         env=env,
     )
     OerfObservabilityStack(
@@ -122,6 +126,7 @@ def test_each_python_lambda_imports_from_its_asset(tmp_path: Path) -> None:
         dead_letter_queues=[compute.inbound_dlq, compute.ingest_dlq, compute.stream_dlq],
         state_machines=[data.cold_chain_state_machine, data.engage_party_state_machine],
         channel_router_log_group=compute.channel_router_fn.log_group,
+        stage=Stage("main"),
         env=env,
     )
     app.synth()

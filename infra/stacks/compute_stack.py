@@ -8,6 +8,7 @@ One role, one 30-day log group, and active tracing per function.
 from __future__ import annotations
 
 import os
+import re
 
 from aws_cdk import (
     CfnOutput,
@@ -36,10 +37,10 @@ from infra.constructs.bedrock_guardrail import BedrockGuardrail
 from infra.constructs.social_messaging_arns import phone_number_arn
 from infra.constructs.waba_event_destination import WabaEventDestination
 from infra.iam_conditions import pin_source_account
+from infra.naming import Stage, qualify_dev_names
 from infra.runtime_asset import runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
-from infra.step_functions import STEP_FUNCTION_NAMES, STEP_HANDLERS
-from infra.ws_clients import DASHBOARD_CLIENT_PARAMETER
+from infra.step_functions import STEP_HANDLERS, step_function_names_for
 
 # Task-token APIs have no resource type in the IAM Service Authorization
 # Reference. The resource stays "*"; see docs/security/iam-exceptions.md.
@@ -47,8 +48,23 @@ _TASK_TOKEN_ACTIONS = ["states:SendTaskSuccess"]
 _INBOUND_TIMEOUT = Duration.seconds(30)
 _VISIBILITY_MULTIPLE = 6
 _DEFAULT_INGEST_CONCURRENCY = 5
-_WA_PHONE_NUMBER_ID_PARAM = "/oerf/whatsapp/phone-number-id"
 _DEFAULT_MODEL_ID = "amazon.nova-lite-v1:0"
+
+def _with_dev_name(
+    stage: Stage,
+    environment: dict[str, str],
+    key: str,
+    value: str,
+) -> dict[str, str]:
+    """Add a name env var on dev only.
+
+    The handler defaults to the main value. Setting the same key on main
+    would add a line the current template does not have.
+    """
+
+    if stage.is_main:
+        return environment
+    return {**environment, key: value}
 
 
 def _context_enabled(scope: Construct, key: str, *, default: bool) -> bool:
@@ -59,6 +75,42 @@ def _context_enabled(scope: Construct, key: str, *, default: bool) -> bool:
     if isinstance(raw, bool):
         return raw
     return str(raw).strip().lower() not in {"false", "0", "no"}
+
+
+# Standard SNS topic ARN in this partition. A FIFO name is still one topic name.
+_SNS_TOPIC_ARN = re.compile(
+    r"^arn:aws:sns:(?P<region>[a-z0-9-]+):(?P<account>\d{12}):(?P<name>[A-Za-z0-9_.-]{1,256})$"
+)
+
+
+def _shared_inbound_topic_arn(scope: Construct, stage: Stage) -> str | None:
+    """Main's inbound topic, imported by dev. Unset keeps this stage's own topic.
+
+    The WABA event destination stays on main. Dev subscribes its queue to that
+    topic instead of calling ``PutWhatsAppBusinessAccountEventDestinations``.
+    """
+
+    raw = _context_str(scope, "whatsapp:sharedInboundTopicArn").strip()
+    if not raw:
+        return None
+    if stage.is_main:
+        raise ValueError(
+            "whatsapp:sharedInboundTopicArn cannot be set for stage=main. "
+            "Main owns the WhatsApp event destination. "
+            "Pass the ARN only with stage=dev."
+        )
+    stack = Stack.of(scope)
+    match = _SNS_TOPIC_ARN.fullmatch(raw)
+    if (
+        match is None
+        or match.group("region") != stack.region
+        or match.group("account") != stack.account
+    ):
+        raise ValueError(
+            "whatsapp:sharedInboundTopicArn must be an SNS topic ARN "
+            "in this stack's account and region."
+        )
+    return raw
 
 
 def _context_str(scope: Construct, key: str, default: str = "") -> str:
@@ -100,9 +152,28 @@ class OerfComputeStack(Stack):
         scope: Construct,
         construct_id: str,
         data_stack: OerfDataStack,
+        *,
+        stage: Stage,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
+        self.stage = stage
+        # The WABA has one event destination. Main owns it. Dev must not
+        # pass the id, or synthesis would try to replace main's destination.
+        waba_id = _context_str(self, "whatsapp:wabaId")
+        if waba_id and not stage.is_main:
+            raise ValueError(
+                "whatsapp:wabaId cannot be set for stage=dev. The WhatsApp "
+                "Business Account has one event destination, and stage=main owns it. "
+                "Synthesize dev without whatsapp:wabaId. Sending still uses "
+                "whatsapp:phoneNumberId."
+            )
+        # Fail before the rest of the stack. An empty value leaves every
+        # template identical to a synth that never heard of the key.
+        shared_inbound_topic_arn = _shared_inbound_topic_arn(self, stage)
+        phone_param = stage.ssm("whatsapp/phone-number-id")
+        demo_numbers_param = stage.ssm("demo-numbers/*")
+        dashboard_client_param = stage.ssm("ws-allowed-clients/dashboard")
 
         # Shared asset. Packaged from the repo root so imports stay ``oerf.*``
         # and do not shadow the stdlib ``platform`` module. The allow-list is
@@ -117,11 +188,16 @@ class OerfComputeStack(Stack):
         if _context_enabled(self, "demo:seedDevices", default=False):
             self.device_seed_fn = self._function(
                 "DeviceSeedFunction",
-                function_name="oerf-device-seed",
+                function_name=stage.res("device-seed"),
                 handler="oerf.platform.channels.devices.seed_handler",
                 code=lambda_code,
                 timeout=Duration.seconds(30),
-                environment={"ROUTING_TABLE_NAME": data_stack.routing_table.table_name},
+                environment=_with_dev_name(
+                    stage,
+                    {"ROUTING_TABLE_NAME": data_stack.routing_table.table_name},
+                    "SEED_PHYSICAL_ID",
+                    stage.res("demo-device-seed"),
+                ),
             )
             data_stack.routing_table.grant_write_data(self.device_seed_fn)
             seed_provider = cr.Provider(
@@ -152,21 +228,26 @@ class OerfComputeStack(Stack):
             )
         self.channel_router_fn = self._function(
             "ChannelRouterFunction",
-            function_name="oerf-channel-router",
+            function_name=stage.res("channel-router"),
             handler="oerf.platform.channels.router.handler",
             code=lambda_code,
             timeout=Duration.seconds(30),
-            environment={
-                "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
-                "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
-                "TENANT_TABLE_NAME": data_stack.tenant_table.table_name,
-                "USE_MOCK_WHATSAPP": channel_mock,
-                "USE_MOCK_SMS": channel_mock,
-                "WHATSAPP_PHONE_NUMBER_ID": whatsapp_phone_number_id,
-                "WA_PHONE_NUMBER_ID_PARAM": _WA_PHONE_NUMBER_ID_PARAM,
-                "SES_SOURCE_EMAIL": ses_source_email,
-                "USE_MOCK_EMAIL": channel_mock,
-            },
+            environment=_with_dev_name(
+                stage,
+                {
+                    "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
+                    "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
+                    "TENANT_TABLE_NAME": data_stack.tenant_table.table_name,
+                    "USE_MOCK_WHATSAPP": channel_mock,
+                    "USE_MOCK_SMS": channel_mock,
+                    "WHATSAPP_PHONE_NUMBER_ID": whatsapp_phone_number_id,
+                    "WA_PHONE_NUMBER_ID_PARAM": phone_param,
+                    "SES_SOURCE_EMAIL": ses_source_email,
+                    "USE_MOCK_EMAIL": channel_mock,
+                },
+                "DEMO_NUMBERS_PREFIX",
+                stage.ssm("demo-numbers"),
+            ),
         )
         data_stack.routing_table.grant_read_write_data(self.channel_router_fn)
         incident_arn = data_stack.incident_table.table_arn
@@ -235,10 +316,12 @@ class OerfComputeStack(Stack):
                 resources=[
                     (
                         f"arn:aws:ssm:{self.region}:{self.account}:parameter"
-                        "/oerf/whatsapp/phone-number-id"
+                        f"{phone_param}"
                     ),
-                    (f"arn:aws:ssm:{self.region}:{self.account}:parameter/oerf/demo-numbers/*"),
-                    (f"arn:aws:ssm:{self.region}:{self.account}:parameter/oerf/dev/demo-numbers/*"),
+                    (
+                        f"arn:aws:ssm:{self.region}:{self.account}:parameter"
+                        f"{demo_numbers_param}"
+                    ),
                 ],
             )
         )
@@ -253,12 +336,12 @@ class OerfComputeStack(Stack):
         # foundation-model ARN. Converse is authorized as bedrock:InvokeModel.
         # ApplyGuardrail covers the guardrail and the US profile in each
         # destination region. See BedrockGuardrail.apply_resources.
-        self.guardrail = BedrockGuardrail(self, "Guardrail")
+        self.guardrail = BedrockGuardrail(self, "Guardrail", stage=stage)
         bedrock_model_id = _context_str(self, "bedrock:modelId", _DEFAULT_MODEL_ID)
         bedrock_mock = "false" if _context_enabled(self, "channels:live", default=False) else "true"
         self.evidence_analyzer_fn = self._function(
             "EvidenceAnalyzerFunction",
-            function_name="oerf-evidence-analyzer",
+            function_name=stage.res("evidence-analyzer"),
             handler="oerf.platform.evidence.vision.handler",
             code=lambda_code,
             timeout=Duration.seconds(60),
@@ -273,7 +356,8 @@ class OerfComputeStack(Stack):
             },
         )
         # EventBridge avoids an S3 bucket -> compute Lambda cross-stack reference.
-        # Only incident-scoped inbound images match; analyzer outputs go to DynamoDB.
+        # One wildcard keeps the rule under EventBridge complexity limits; the
+        # analyzer accepts only incident-scoped inbound jpg, png, and webp keys.
         data_stack.evidence_bucket.grant_read(self.evidence_analyzer_fn)
         evidence_rule = events.Rule(
             self,
@@ -283,13 +367,7 @@ class OerfComputeStack(Stack):
                 detail_type=["Object Created"],
                 detail={
                     "bucket": {"name": [data_stack.evidence_bucket.bucket_name]},
-                    "object": {
-                        "key": [
-                            {"wildcard": "tenants/*/inbound/*/*/*.jpg"},
-                            {"wildcard": "tenants/*/inbound/*/*/*.png"},
-                            {"wildcard": "tenants/*/inbound/*/*/*.webp"},
-                        ]
-                    },
+                    "object": {"key": [{"wildcard": "tenants/*/inbound/*"}]},
                 },
             ),
         )
@@ -315,7 +393,7 @@ class OerfComputeStack(Stack):
         # It does not call SES. ADR-008 keeps channel send on the router.
         self.report_generator_fn = self._function(
             "ReportGeneratorFunction",
-            function_name="oerf-report-generator",
+            function_name=stage.res("report-generator"),
             handler="oerf.platform.report.generator.handler",
             code=lambda_code,
             timeout=Duration.seconds(30),
@@ -332,7 +410,7 @@ class OerfComputeStack(Stack):
         # WebSocket $connect authorizer.
         user_pool_client = data_stack.user_pool.add_client(
             "OerfHttpApiClient",
-            user_pool_client_name="oerf-http-api-client",
+            user_pool_client_name=stage.res("http-api-client"),
             generate_secret=False,
         )
 
@@ -341,7 +419,7 @@ class OerfComputeStack(Stack):
         # ---------------------------------------------------------
         self.ws_handler_fn = self._function(
             "WsHandlerFunction",
-            function_name="oerf-ws-handler",
+            function_name=stage.res("ws-handler"),
             handler="oerf.platform.api.ws_handler.handler",
             code=lambda_code,
             timeout=Duration.seconds(10),
@@ -357,7 +435,7 @@ class OerfComputeStack(Stack):
         # https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_GetUser.html
         self.ws_authorizer_fn = self._function(
             "WsAuthorizerFunction",
-            function_name="oerf-ws-authorizer",
+            function_name=stage.res("ws-authorizer"),
             handler="oerf.platform.api.ws_authorizer.handler",
             code=lambda_code,
             timeout=Duration.seconds(10),
@@ -366,7 +444,7 @@ class OerfComputeStack(Stack):
                 "USER_POOL_ID": data_stack.user_pool.user_pool_id,
                 "USER_POOL_CLIENT_ID": user_pool_client.user_pool_client_id,
                 "ALLOWED_CLIENT_IDS": user_pool_client.user_pool_client_id,
-                "DASHBOARD_CLIENT_PARAMETER": DASHBOARD_CLIENT_PARAMETER,
+                "DASHBOARD_CLIENT_PARAMETER": dashboard_client_param,
             },
         )
         # The dashboard client id is published by OerfApiStack. Naming the
@@ -377,7 +455,7 @@ class OerfComputeStack(Stack):
                 resources=[
                     (
                         f"arn:aws:ssm:{self.region}:{self.account}:parameter"
-                        f"{DASHBOARD_CLIENT_PARAMETER}"
+                        f"{dashboard_client_param}"
                     )
                 ],
             )
@@ -386,14 +464,14 @@ class OerfComputeStack(Stack):
         ws_authorizer = authorizers.WebSocketLambdaAuthorizer(
             "OerfWsAuthorizer",
             self.ws_authorizer_fn,
-            authorizer_name="oerf-ws-authorizer",
+            authorizer_name=stage.res("ws-authorizer"),
             identity_source=["route.request.querystring.token"],
         )
 
         self.ws_api = apigwv2.WebSocketApi(
             self,
             "OerfWebSocketApi",
-            api_name="oerf-ws-api",
+            api_name=stage.res("ws-api"),
             connect_route_options=apigwv2.WebSocketRouteOptions(
                 integration=integrations.WebSocketLambdaIntegration(
                     "ConnectIntegration", self.ws_handler_fn
@@ -437,7 +515,7 @@ class OerfComputeStack(Stack):
         # ---------------------------------------------------------
         self.stream_broadcaster_fn = self._function(
             "StreamBroadcasterFunction",
-            function_name="oerf-stream-broadcaster",
+            function_name=stage.res("stream-broadcaster"),
             handler="oerf.platform.api.stream_broadcaster.handler",
             code=lambda_code,
             timeout=Duration.seconds(15),
@@ -509,7 +587,7 @@ class OerfComputeStack(Stack):
         self.inbound_topic = sns.Topic(
             self,
             "InboundTopic",
-            display_name="oerf-inbound",
+            display_name=stage.res("inbound"),
             fifo=False,
             enforce_ssl=True,
         )
@@ -533,19 +611,31 @@ class OerfComputeStack(Stack):
                 queue=self.inbound_dlq,
             ),
         )
-        self.inbound_topic.add_subscription(subscriptions.SqsSubscription(self.inbound_queue))
-        waba_id = _context_str(self, "whatsapp:wabaId")
+        # SqsSubscription() with no extra properties is main's subscription:
+        # raw delivery off, no filter policy, no subscription redrive. The
+        # queue redrive (maxReceiveCount 3) is a property of the queue.
+        # When the shared ARN is set, the queue subscribes only to that topic.
+        # The dev topic stays, with nothing publishing to it and no queue
+        # grant, so a later publish there cannot deliver a second copy. The
+        # queue logical id and the Lambda event source stay on InboundQueue.
+        if shared_inbound_topic_arn is None:
+            self.inbound_topic.add_subscription(subscriptions.SqsSubscription(self.inbound_queue))
+        else:
+            sns.Topic.from_topic_arn(
+                self, "SharedInboundTopic", shared_inbound_topic_arn
+            ).add_subscription(subscriptions.SqsSubscription(self.inbound_queue))
         if waba_id:
             WabaEventDestination(
                 self,
                 "WabaEventDestination",
                 topic=self.inbound_topic,
                 waba_id=waba_id,
+                stage=stage,
             )
 
         self.inbound_fn = self._function(
             "InboundFunction",
-            function_name="oerf-inbound",
+            function_name=stage.res("inbound"),
             handler="oerf.platform.inbound.handler.handler",
             code=lambda_code,
             timeout=_INBOUND_TIMEOUT,
@@ -556,7 +646,7 @@ class OerfComputeStack(Stack):
                 "PLATFORM_TABLE_NAME": data_stack.platform_table.table_name,
                 "EVIDENCE_BUCKET_NAME": data_stack.evidence_bucket.bucket_name,
                 "STATE_MACHINE_ARN": data_stack.cold_chain_state_machine.state_machine_arn,
-                "WA_PHONE_NUMBER_ID_PARAM": _WA_PHONE_NUMBER_ID_PARAM,
+                "WA_PHONE_NUMBER_ID_PARAM": phone_param,
                 "WHATSAPP_PHONE_NUMBER_ID": whatsapp_phone_number_id,
                 "INBOUND_MEDIA_MAX_BYTES": str(10 * 1024 * 1024),
                 "LOG_LEVEL": "INFO",
@@ -586,7 +676,7 @@ class OerfComputeStack(Stack):
                 resources=[
                     (
                         f"arn:aws:ssm:{self.region}:{self.account}:parameter"
-                        "/oerf/whatsapp/phone-number-id"
+                        f"{phone_param}"
                     )
                 ],
             )
@@ -609,7 +699,7 @@ class OerfComputeStack(Stack):
         # ---------------------------------------------------------
         self.action_handler_fn = self._function(
             "ActionHandlerFunction",
-            function_name="oerf-action-handler",
+            function_name=stage.res("action-handler"),
             handler="oerf.platform.api.action_handler.handler",
             code=lambda_code,
             timeout=Duration.seconds(15),
@@ -624,7 +714,7 @@ class OerfComputeStack(Stack):
         self.http_api = apigwv2.HttpApi(
             self,
             "OerfHttpApi",
-            api_name="oerf-http-api",
+            api_name=stage.res("http-api"),
             cors_preflight=apigwv2.CorsPreflightOptions(
                 allow_headers=["Content-Type", "Authorization"],
                 allow_methods=[
@@ -666,7 +756,7 @@ class OerfComputeStack(Stack):
         )
         self.ingest_fn = self._function(
             "IngestFunction",
-            function_name="oerf-ingest",
+            function_name=stage.res("ingest"),
             handler="oerf.platform.ingest.handler.handler",
             code=lambda_code,
             timeout=Duration.seconds(30),
@@ -728,6 +818,7 @@ class OerfComputeStack(Stack):
             agent = AgentCoreRuntime(
                 self,
                 "AgentCore",
+                stage=stage,
                 incident_table=data_stack.incident_table,
                 tenant_table=data_stack.tenant_table,
                 guardrail_resources=self.guardrail.apply_resources,
@@ -738,13 +829,17 @@ class OerfComputeStack(Stack):
             self.agent_runtime_arn = agent.agent_runtime_arn
             # Export names cannot contain underscores. The env name stays
             # AGENT_RUNTIME_ARN; this export is the cross-stack form.
+            # Exports are unique in the account, so dev gets a suffix.
             CfnOutput(
                 self,
                 "AgentRuntimeArn",
                 value=agent.agent_runtime_arn,
-                export_name="AGENT-RUNTIME-ARN",
+                export_name=stage.export_name("AGENT-RUNTIME-ARN"),
             )
-            _trace_delivery_waits_for(agent.runtime, data_stack)
+            # Dev does not create Transaction Search. Tracing still turns on.
+            # Delivery waits only when this stack created the account config.
+            if data_stack.transaction_search_config is not None:
+                _trace_delivery_waits_for(agent.runtime, data_stack)
 
         # ---------------------------------------------------------
         # 10. Cold-chain step functions. Names are fixed so the data stack
@@ -767,6 +862,8 @@ class OerfComputeStack(Stack):
         if data_stack not in self.dependencies:
             self.add_stack_dependency(data_stack)
         pin_source_account(self)
+        if not stage.is_main:
+            qualify_dev_names(self)
 
     def _step_functions(self, data_stack: OerfDataStack, code: lambda_.Code) -> None:
         """One function and one role per cold-chain phase."""
@@ -785,7 +882,7 @@ class OerfComputeStack(Stack):
             "escalate": (True, False),
             "cancel": (True, True),
         }
-        for phase, function_name in STEP_FUNCTION_NAMES.items():
+        for phase, function_name in step_function_names_for(self.stage).items():
             failure = phase in failure_grants
             construct_id = failure_ids.get(phase, f"{phase.capitalize()}Function")
             environment = {
@@ -869,7 +966,7 @@ class OerfComputeStack(Stack):
         del data_stack
         self._function(
             "CadenceFunction",
-            function_name="oerf-engage-cadence",
+            function_name=self.stage.res("engage-cadence"),
             handler="oerf.platform.cadence.engage.handler",
             code=code,
             timeout=Duration.seconds(30),
@@ -878,7 +975,7 @@ class OerfComputeStack(Stack):
         )
         self._function(
             "EngageLifecycleFunction",
-            function_name="oerf-engage-lifecycle",
+            function_name=self.stage.res("engage-lifecycle"),
             handler="oerf.platform.cadence.engagement_lifecycle.handler",
             code=code,
             timeout=Duration.seconds(30),
@@ -892,9 +989,15 @@ class OerfComputeStack(Stack):
                 "AGENTCORE_ENABLED": "true",
                 "AGENT_RUNTIME_ARN": self.agent_runtime_arn,
             }
+        environment = _with_dev_name(
+            self.stage,
+            environment,
+            "AGENT_SESSION_PREFIX",
+            self.stage.res("interpret"),
+        )
         interpret = self._function(
             "InterpretFunction",
-            function_name="oerf-engage-interpret",
+            function_name=self.stage.res("engage-interpret"),
             handler="oerf.platform.cadence.interpret.handler",
             code=code,
             timeout=Duration.seconds(30),
