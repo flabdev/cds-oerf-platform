@@ -125,6 +125,55 @@ def _replay(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvel
     )
 
 
+@handles("OPEN")
+def open_incident(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
+    """Record the incident ingest opened, and pin the configuration it decides on.
+
+    ``OPEN`` was the last cold-chain state still served by the workflow stub. The
+    ingest rule has already created the incident and taken the shipment lock, so
+    this step only confirms the incident really is ``OPEN``, records the pinned
+    configuration the run will decide on, and hands the same envelope to
+    ``GatherContext``. It does not move the incident, so a retried invocation
+    replays the stored response instead of writing twice.
+
+    The state-machine wiring that points ``OPEN`` at a real function is C0's job;
+    this handler is the deterministic behaviour it will invoke.
+    """
+    replay = _replay(envelope, dependencies)
+    if replay is not None:
+        return replay
+
+    workflow = dict(envelope.workflow)
+    incident = incident_for(envelope, dependencies)
+    if incident.state != "OPEN":
+        raise StepError(
+            f"incident {incident.incident_id} is {incident.state}; "
+            f"step {envelope.step} must run while it is OPEN"
+        )
+    config = pinned_config(incident, dependencies)
+    workflow["opened_at"] = incident.opened_at
+    workflow["config_version"] = config.version
+    workflow["config_source"] = config.source
+    outcome = decision(
+        "open.record_incident",
+        config=config,
+        inputs={"shipment_id": envelope.shipment_id, "reason": incident.reason},
+        status="open",
+    )
+    return apply(
+        WorkflowStep(
+            step=envelope.step,
+            workflow=workflow,
+            decision=outcome,
+            result={"status": "open"},
+            incident_state="OPEN",
+            current_stage="OPEN",
+        ),
+        envelope,
+        dependencies,
+    )
+
+
 @handles("GatherContext")
 def gather_context(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
     """Assemble the context the later deterministic rules read.
@@ -470,6 +519,62 @@ def assess(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
 #: Approval statuses that let the workflow act on the recommended recovery.
 APPROVED_STATUSES = ("approved", "auto_proceed")
 
+#: Every status the definition's ``ApprovalDecision`` understands.
+_APPROVAL_STATUSES = frozenset({"approved", "auto_proceed", "rejected", "cancelled"})
+_APPROVAL_APPROVE = frozenset({"approve", "approved", "accept", "accepted", "yes"})
+_APPROVAL_REJECT = frozenset({"reject", "rejected", "deny", "denied", "no"})
+_APPROVAL_CANCEL = frozenset({"cancel", "cancelled", "canceled"})
+
+#: Partner-confirmation answers a facility reply may carry.
+_FACILITY_ACCEPT = frozenset({"accept", "accepted", "confirm", "confirmed", "yes", "answer"})
+_FACILITY_DECLINE = frozenset({"decline", "declined", "reject", "rejected", "no", "busy"})
+
+
+def _approval_sources(
+    workflow: Mapping[str, Any], envelope: StepEnvelope
+) -> list[Mapping[str, Any]]:
+    """Where the approver's decision may sit in the workflow or the envelope."""
+    sources: list[Mapping[str, Any]] = []
+    for key in ("approval_response",):
+        nested = mapping(workflow, key)
+        if nested:
+            sources.append(nested)
+    projection = getattr(envelope, "approval", None)
+    if isinstance(projection, Mapping):
+        sources.append(dict(projection))
+    return sources
+
+
+def _approval_verdict(
+    workflow: Mapping[str, Any], envelope: StepEnvelope
+) -> dict[str, Any] | None:
+    """The approver's decision and any option they chose, or ``None`` if absent.
+
+    The approval is a human reply, so it arrives on the envelope rather than
+    being derived here. Several shapes are accepted so the app stack is not
+    forced into one nesting: a boolean ``approved``, or a ``status``/``decision``
+    string that maps onto a value ``ApprovalDecision`` reads.
+    """
+    for source in _approval_sources(workflow, envelope):
+        option_id = text(source, "option_id") or text(source, "option")
+        approved = field(source, "approved")
+        if isinstance(approved, bool):
+            return {"status": "approved" if approved else "rejected", "option_id": option_id}
+        for key in ("status", "decision"):
+            value = text(source, key)
+            if value is None:
+                continue
+            folded = value.strip().lower()
+            if folded in _APPROVAL_STATUSES:
+                return {"status": folded, "option_id": option_id}
+            if folded in _APPROVAL_APPROVE:
+                return {"status": "approved", "option_id": option_id}
+            if folded in _APPROVAL_REJECT:
+                return {"status": "rejected", "option_id": option_id}
+            if folded in _APPROVAL_CANCEL:
+                return {"status": "cancelled", "option_id": option_id}
+    return None
+
 
 def _gate(envelope: StepEnvelope, workflow: Mapping[str, Any], name: str) -> dict[str, Any] | None:
     """Read a gate record from the workflow accumulator or the envelope root.
@@ -560,6 +665,272 @@ def _require_pre_approved_facility(facility: Mapping[str, Any], resolved: Any, s
         return
     named = text(facility, "facility_id") or text(facility, "id")
     raise StepError(f"facility {named!r} is not pre-approved, so step {step} must not use it")
+
+
+@handles("Approval")
+def approval(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
+    """Record the approver's decision, or auto-proceed within the pinned limits.
+
+    The definition routes to ``Approval`` only when ``Assess`` found a feasible
+    recovery that needs a human. The ops manager's reply names the outcome, and
+    ``ApprovalDecision`` reads ``$.approval.status``: an approval or an
+    ``auto_proceed`` continues to ``SecureFacility``, a cancellation cancels, and
+    a rejection or an absent status escalates. When the pinned configuration lets
+    a within-limits recovery proceed without a human and ``Assess`` already routed
+    to ``auto_proceed``, this step records ``auto_proceed`` so the run does not sit
+    waiting for a reply it does not need.
+
+    This step neither sends nor resumes anything: the approval send that stores
+    the task token on ``ENG#`` and the inbound resume are the router's and C0's
+    wiring. It records the engagement the send will use, so the definition and
+    the router agree on the id and the ``approval_fast`` policy.
+    """
+    replay = _replay(envelope, dependencies)
+    if replay is not None:
+        return replay
+
+    workflow = dict(envelope.workflow)
+    incident = incident_for(envelope, dependencies)
+    config = pinned_config(incident, dependencies)
+    resolved = config.resolved
+    approval_config = resolved.approval
+    approver_role = approval_config.approver_role
+    policy = select_policy(
+        approver_role,
+        "approve",
+        dict(resolved.cadence),
+        load_policies(),
+    )
+    assessment = mapping(workflow, "assessment") or {}
+    within_limits = _within_pre_approved_limits(resolved)
+    verdict = _approval_verdict(workflow, envelope)
+    if verdict is None:
+        if (
+            approval_config.auto_proceed_if_within_limits
+            and within_limits
+            and text(assessment, "route") == "auto_proceed"
+        ):
+            verdict = {
+                "status": "auto_proceed",
+                "option_id": text(assessment, "recommended_option"),
+            }
+        else:
+            raise MissingStepInput(
+                "Approval needs the approver's decision, or an auto-proceed within limits"
+            )
+    request = {
+        "engagement_id": f"ENG-{envelope.incident_id}-{approver_role}-approve",
+        "policy_id": policy.policy_id,
+        "role": approver_role,
+        "ask": "approve",
+        "escalation_chain": list(approval_config.escalation_chain),
+    }
+    record = {
+        "status": verdict["status"],
+        "option_id": verdict.get("option_id"),
+        "approver_role": approver_role,
+        "engagement_id": request["engagement_id"],
+        "policy_id": policy.policy_id,
+        "within_pre_approved_limits": within_limits,
+        "decided_at": dependencies.stamp(),
+        "config_version": config.version,
+        "config_source": config.source,
+    }
+    outcome = decision(
+        "approval.record",
+        config=config,
+        inputs={"approver_role": approver_role, "route": text(assessment, "route")},
+        status=record["status"],
+        option_id=record["option_id"],
+        auto_proceed=record["status"] == "auto_proceed",
+    )
+    workflow["approval"] = record
+    workflow["approval_request"] = request
+    return apply(
+        WorkflowStep(
+            step=envelope.step,
+            workflow=workflow,
+            decision=outcome,
+            result={"status": record["status"], "option_id": record["option_id"]},
+            incident_state="AWAITING_APPROVAL",
+            current_stage="AWAITING_APPROVAL",
+        ),
+        envelope,
+        dependencies,
+    )
+
+
+def _facility_accepted(
+    confirmation: Mapping[str, Any], workflow: Mapping[str, Any]
+) -> bool | None:
+    """The partner's confirmed answer, or ``None`` when they have not replied.
+
+    A confirmed decline is ``False`` and a confirmed accept is ``True``. An accept
+    recorded without a partner confirmation - ``Act`` running straight after a
+    pre-approved recommendation - is ``True`` as well, so a facility that never
+    had to reply is not reported as declined.
+
+    A ``facility`` record this step wrote earlier carries ``decided_at``; it is the
+    outcome, not a partner reply, so it is skipped. That keeps a decline for one
+    facility from being re-read as the answer for the next facility the ranking
+    offers.
+    """
+    sources: list[Mapping[str, Any]] = [confirmation]
+    carried = mapping(workflow, "facility") or {}
+    if carried and "decided_at" not in carried:
+        sources.append(carried)
+    for source in sources:
+        for key in ("accepted", "confirmed", "answer"):
+            value = field(source, key)
+            if isinstance(value, bool):
+                return value
+        intent = text(source, "intent") or text(source, "status")
+        if intent is not None:
+            folded = intent.strip().lower()
+            if folded in _FACILITY_ACCEPT:
+                return True
+            if folded in _FACILITY_DECLINE:
+                return False
+    return None
+
+
+def _next_feasible_facility(
+    assessment: Mapping[str, Any], chosen: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """The next ranked feasible facility option after the one just requested."""
+    ranked = field(assessment, "options")
+    if not isinstance(ranked, Sequence) or isinstance(ranked, (str, bytes)):
+        return None
+    chosen_id = text(chosen, "id")
+    candidates = [
+        dict(item)
+        for item in ranked
+        if isinstance(item, Mapping)
+        and field(item, "feasible") is True
+        and (text(item, "kind") or "facility") == "facility"
+        and text(item, "id") != chosen_id
+    ]
+    if not candidates:
+        return None
+    current_rank = field(chosen, "rank")
+    if isinstance(current_rank, int) and not isinstance(current_rank, bool):
+        better = [
+            item
+            for item in candidates
+            if isinstance(field(item, "rank"), int)
+            and not isinstance(field(item, "rank"), bool)
+            and field(item, "rank") > current_rank
+        ]
+        if better:
+            candidates = better
+    return min(candidates, key=lambda item: field(item, "rank") or 0)
+
+
+def _option_facility_id(option: Mapping[str, Any] | None) -> str | None:
+    """The facility id a ranked option names, or ``None``."""
+    if option is None:
+        return None
+    return text(option, "facility_id") or text(option, "id")
+
+
+@handles("SecureFacility")
+def secure_facility(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
+    """Confirm the facility the recovery chose, or decline to the next one.
+
+    ``FacilityAccepted?`` reads ``$.facility.accepted``. The recommended (or the
+    approver's chosen) facility is accepted when it is pre-approved and the
+    partner confirmation says so; otherwise this step records a decline together
+    with the next feasible candidate the ranking already produced, so the workflow
+    can request that facility instead of escalating on the first refusal. The
+    ``facility_a_declines`` scenario is exactly this path: A refuses and the run
+    continues with B. Only when no further feasible facility remains is there
+    nothing to try, and the definition's ``FacilityAccepted?`` default escalates.
+
+    This step does not send the request: the facility engagement send is the
+    router's work, and wiring this handler into the ASL is C0's. It records the
+    partner the send will target and the next candidate to try on a decline.
+    """
+    replay = _replay(envelope, dependencies)
+    if replay is not None:
+        return replay
+
+    workflow = dict(envelope.workflow)
+    context = _required_mapping(workflow, "context", envelope.step)
+    assessment = _required_mapping(workflow, "assessment", envelope.step)
+    incident = incident_for(envelope, dependencies)
+    config = pinned_config(incident, dependencies)
+    option = _chosen_option(workflow, assessment, envelope, envelope.step)
+    facility = _facility_for(context, option, envelope.step)
+    if facility is None:
+        # A continue option never needs a facility partner to accept.
+        record = {
+            "accepted": True,
+            "facility_id": None,
+            "kind": "continue",
+            "decided_at": dependencies.stamp(),
+            "config_version": config.version,
+            "config_source": config.source,
+        }
+        workflow["facility"] = record
+        return apply(
+            WorkflowStep(
+                step=envelope.step,
+                workflow=workflow,
+                decision=decision(
+                    "facility.accept",
+                    config=config,
+                    inputs={"kind": "continue"},
+                    accepted=True,
+                ),
+                result={"accepted": True, "facility_id": None},
+                incident_state="SECURING_FACILITY",
+                current_stage="SECURING_FACILITY",
+            ),
+            envelope,
+            dependencies,
+        )
+
+    facility_id = text(facility, "facility_id") or text(facility, "id")
+    confirmation = mapping(workflow, "facility_response") or {}
+    accepted = _facility_accepted(confirmation, workflow)
+    if accepted is None:
+        # No partner answer yet: request this facility. ``_require_pre_approved_facility``
+        # still refuses a facility the pinned limits do not cover.
+        _require_pre_approved_facility(facility, config.resolved, envelope.step)
+        accepted = True
+    next_option = _next_feasible_facility(assessment, option)
+    record = {
+        "accepted": bool(accepted),
+        "facility_id": facility_id,
+        "kind": "facility",
+        "contact_id": text(facility, "contact_id"),
+        "next_option_id": text(next_option, "id") if next_option is not None else None,
+        "next_facility_id": _option_facility_id(next_option) if next_option is not None else None,
+        "decided_at": dependencies.stamp(),
+        "config_version": config.version,
+        "config_source": config.source,
+    }
+    outcome = decision(
+        "facility.accept",
+        config=config,
+        inputs={"facility_id": facility_id, "declined": accepted is False},
+        accepted=record["accepted"],
+        facility_id=facility_id,
+        next_option_id=record["next_option_id"],
+    )
+    workflow["facility"] = record
+    return apply(
+        WorkflowStep(
+            step=envelope.step,
+            workflow=workflow,
+            decision=outcome,
+            result={"accepted": record["accepted"], "facility_id": facility_id},
+            incident_state="SECURING_FACILITY",
+            current_stage="SECURING_FACILITY",
+        ),
+        envelope,
+        dependencies,
+    )
 
 
 @handles("Act")

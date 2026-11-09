@@ -458,3 +458,187 @@ def test_a_suggestion_is_never_authoritative_over_the_rule() -> None:
     assert provenance["source"] == "deterministic_rules"
     assert provenance["ai_assisted"] is True
     assert provenance["suggestion"] == suggestion
+
+
+def _approval_workflow(**values: Any) -> dict[str, Any]:
+    workflow: dict[str, Any] = {
+        "context": {"range_c": [2, 8], "allowance_minutes": 45},
+        "assessment": {
+            "route": "approval",
+            "needs_approval": True,
+            "recommended_option": "FAC-A",
+            "options": [
+                {"id": "FAC-A", "kind": "facility", "feasible": True, "rank": 1, "drive_min": 9},
+                {"id": "FAC-B", "kind": "facility", "feasible": True, "rank": 2, "drive_min": 21},
+            ],
+        },
+    }
+    workflow.update(values)
+    return workflow
+
+
+def _at_awaiting_approval() -> StepDependencies:
+    """Dependencies for an incident that has reached ``AWAITING_APPROVAL``."""
+
+    config = get_config(TENANT, "cold_chain_excursion")
+    incidents = IncidentRepository(clock=lambda: NOW)
+    incident = incidents.create(
+        tenant_id=TENANT,
+        shipment_id=SHIPMENT,
+        reason="temperature excursion",
+        config_version=config.version,
+        config_snapshot=config.model_dump(),
+    )
+    previous = "OPEN"
+    for next_state in ("DIAGNOSING", "ASSESSING", "AWAITING_APPROVAL"):
+        incidents.transition(TENANT, incident.incident_id, from_state=previous, to_state=next_state)
+        previous = next_state
+    return StepDependencies(
+        incidents=incidents,
+        results=MemoryStepResultStore(clock=lambda: NOW),
+        clock=lambda: NOW,
+    )
+
+
+def test_open_records_the_pinned_config_and_replays() -> None:
+    """C8: OPEN was the last cold-chain stub; the handler pins config and is idempotent."""
+
+    dependencies = _dependencies("OPEN")
+    envelope = _envelope("OPEN", workflow={"trigger": {"temperature_c": 9.2}})
+
+    result = HANDLERS["OPEN"](envelope, dependencies)
+    retry = HANDLERS["OPEN"](_envelope("OPEN"), dependencies)
+
+    incident = dependencies.incidents.get(TENANT, INCIDENT_ID)
+    assert result.incident_state == "OPEN"
+    assert result.current_stage == "OPEN"
+    assert result.workflow["config_version"] == incident.config_version
+    assert result.workflow["opened_at"] == incident.opened_at
+    assert result.decision is not None and result.decision["rule"] == "open.record_incident"
+    assert retry == result
+    assert incident.state == "OPEN"
+
+
+def test_open_refuses_when_the_incident_already_moved() -> None:
+    dependencies = _dependencies("DIAGNOSING")
+
+    with pytest.raises(StepError, match="must run while it is OPEN"):
+        HANDLERS["OPEN"](_envelope("OPEN", workflow={}), dependencies)
+
+
+def test_approval_records_the_approvers_decision() -> None:
+    """C5: the ops-manager reply names the outcome ApprovalDecision reads."""
+
+    dependencies = _at_awaiting_approval()
+    envelope = _envelope(
+        "Approval",
+        workflow=_approval_workflow(
+            approval_response={"status": "approved", "option_id": "FAC-B"}
+        ),
+    )
+
+    result = HANDLERS["Approval"](envelope, dependencies)
+
+    assert result.approval is not None
+    assert result.approval["status"] == "approved"
+    assert result.approval["option_id"] == "FAC-B"
+    assert result.approval["approver_role"] == "ops_manager"
+    assert result.approval["policy_id"] == "approval_fast"
+    assert result.workflow["approval_request"]["engagement_id"].endswith("-ops_manager-approve")
+    assert result.incident_state == "AWAITING_APPROVAL"
+
+
+def test_approval_auto_proceeds_within_limits_without_a_reply() -> None:
+    dependencies = _at_awaiting_approval()
+    envelope = _envelope(
+        "Approval",
+        workflow=_approval_workflow(
+            assessment={
+                "route": "auto_proceed",
+                "needs_approval": False,
+                "recommended_option": "FAC-A",
+                "options": [{"id": "FAC-A", "kind": "facility", "feasible": True}],
+            }
+        ),
+    )
+
+    result = HANDLERS["Approval"](envelope, dependencies)
+
+    assert result.approval is not None
+    assert result.approval["status"] == "auto_proceed"
+    assert result.approval["option_id"] == "FAC-A"
+
+
+def test_approval_without_a_decision_or_auto_proceed_fails() -> None:
+    dependencies = _at_awaiting_approval()
+
+    with pytest.raises(MissingStepInput, match="approver's decision"):
+        HANDLERS["Approval"](_envelope("Approval", workflow=_approval_workflow()), dependencies)
+
+
+def _facility_context() -> dict[str, Any]:
+    return {
+        "range_c": [2, 8],
+        "allowance_minutes": 45,
+        "facilities": [
+            {"id": "FAC-A", "drive_min": 9, "capacity_available": True, "approved": True},
+            {"id": "FAC-B", "drive_min": 21, "capacity_available": True, "approved": True},
+        ],
+    }
+
+
+def test_secure_facility_decline_moves_to_the_next_feasible_facility() -> None:
+    """C6: facility_a_declines continues to FAC-B instead of escalating."""
+
+    dependencies = _dependencies("SECURING_FACILITY")
+    envelope = _envelope(
+        "SecureFacility",
+        workflow=_approval_workflow(
+            facility_response={"status": "declined"}, context=_facility_context()
+        ),
+    )
+
+    result = HANDLERS["SecureFacility"](envelope, dependencies)
+
+    assert result.facility is not None
+    assert result.facility["accepted"] is False
+    assert result.facility["facility_id"] == "FAC-A"
+    assert result.facility["next_option_id"] == "FAC-B"
+    assert result.facility["next_facility_id"] == "FAC-B"
+    assert result.incident_state == "SECURING_FACILITY"
+
+
+def test_secure_facility_decline_with_no_fallback_leaves_nothing_to_try() -> None:
+    dependencies = _dependencies("SECURING_FACILITY")
+    envelope = _envelope(
+        "SecureFacility",
+        workflow=_approval_workflow(
+            facility_response={"status": "declined"},
+            assessment={
+                "route": "approval",
+                "recommended_option": "FAC-A",
+                "options": [{"id": "FAC-A", "kind": "facility", "feasible": True, "rank": 1}],
+            },
+            context=_facility_context(),
+        ),
+    )
+
+    result = HANDLERS["SecureFacility"](envelope, dependencies)
+
+    assert result.facility is not None
+    assert result.facility["accepted"] is False
+    assert result.facility["next_option_id"] is None
+
+
+def test_secure_facility_accepts_a_pre_approved_facility() -> None:
+    dependencies = _dependencies("SECURING_FACILITY")
+    envelope = _envelope(
+        "SecureFacility",
+        workflow=_approval_workflow(context=_facility_context()),
+    )
+
+    result = HANDLERS["SecureFacility"](envelope, dependencies)
+
+    assert result.facility is not None
+    assert result.facility["accepted"] is True
+    assert result.facility["facility_id"] == "FAC-A"
