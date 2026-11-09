@@ -8,7 +8,8 @@ The body is a provider message: ``channel`` is ``whatsapp``, and there is no
         --shipment PH-2841 --role driver --button running
 
 The address comes from :func:`resolve_party_address`. Mocked channels use the
-contact registry. Live channels use ``/oerf/demo-numbers/{tenant}/{role}``.
+contact registry. Live drivers use ``/oerf/dev/demo-numbers/{tenant}/driver/{contact_id}``;
+other roles use ``/oerf/demo-numbers/{tenant}/{role}``.
 The command prints the shipment and the message id. It does not print the number.
 """
 

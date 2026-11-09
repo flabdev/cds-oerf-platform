@@ -26,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from oerf.platform.agent.context import DOMAIN
-from oerf.platform.channels.address import demo_number_name
+from oerf.platform.channels.address import driver_demo_number_name
 from oerf.platform.ingest.handler import DETAIL_TYPE, SOURCE
 from oerf.platform.storage.dynamo import incident_pk, iso_z, key
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
@@ -595,20 +595,30 @@ def machine_active(stepfunctions: Any, arn: str, expected_name: str) -> bool:
 
 
 def driver_parameter_exists(ssm: Any, tenant_id: str) -> bool:
-    """True when the driver parameter is present. The value is discarded."""
+    """True when every seeded driver contact has a parameter; values are discarded."""
 
-    parameter_name = demo_number_name(tenant_id, "driver")
-    try:
-        found = ssm.get_parameter(Name=parameter_name, WithDecryption=True)
-    except Exception as exc:
-        if _error_code(exc) == "ParameterNotFound":
-            return False
-        raise DemoError("could not read the driver parameter") from None
-    parameter = found.get("Parameter") if isinstance(found, dict) else None
-    if not isinstance(parameter, dict):
+    drivers = [
+        str(contact["contact_id"])
+        for contact in load_seed(tenant_id)["contacts"]
+        if contact.get("party_role") == "driver"
+    ]
+    if not drivers:
         return False
-    parameter.pop("Value", None)
-    return bool(parameter.get("Name"))
+    for contact_id in drivers:
+        parameter_name = driver_demo_number_name(tenant_id, contact_id)
+        try:
+            found = ssm.get_parameter(Name=parameter_name, WithDecryption=True)
+        except Exception as exc:
+            if _error_code(exc) == "ParameterNotFound":
+                return False
+            raise DemoError("could not read a driver parameter") from None
+        parameter = found.get("Parameter") if isinstance(found, dict) else None
+        if not isinstance(parameter, dict):
+            return False
+        parameter.pop("Value", None)
+        if not parameter.get("Name"):
+            return False
+    return True
 
 
 def safe_range(dynamodb: Any, table: str, tenant_id: str, shipment_id: str) -> tuple[float, float]:

@@ -1007,6 +1007,7 @@ def test_channel_mocks_default_true_and_whatsapp_is_unscoped_without_a_phone_id(
     assert _resource_list(parameter[0]["Resource"]) == [
         f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/oerf/whatsapp/phone-number-id",
         f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/oerf/demo-numbers/*",
+        f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/oerf/dev/demo-numbers/*",
     ]
     vision = functions_by_name(template)["oerf-evidence-analyzer"]["Environment"]["Variables"]
     assert vision["USE_MOCK_BEDROCK"] == "true"

@@ -94,7 +94,7 @@ make demo-run TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
 
 `demo-run` is prep, the sensor, the mocked driver reply, then status. `BUTTON` defaults to `running`. `demo-reply` also accepts `stopped`.
 
-Preflight prints one `PASS` or `FAIL` line per check. The caller must be the account passed as `--account`. Any other account stops the command before it reads another service. `OerfDataStack`, `OerfComputeStack`, `OerfApiStack`, and `OerfObservabilityStack` must be in a `*_COMPLETE` status. `oerf-cold-chain` and `oerf-engage-party` must exist. A runtime-seed dry run must report no changes. `--live` also requires the driver parameter `/oerf/demo-numbers/{tenant}/driver`. The value is not printed.
+Preflight prints one `PASS` or `FAIL` line per check. The caller must be the account passed as `--account`. Any other account stops the command before it reads another service. `OerfDataStack`, `OerfComputeStack`, `OerfApiStack`, and `OerfObservabilityStack` must be in a `*_COMPLETE` status. `oerf-cold-chain` and `oerf-engage-party` must exist. A runtime-seed dry run must report no changes. `--live` also requires the seeded drivers' parameters `/oerf/dev/demo-numbers/{tenant}/driver/{contact_id}`. The values are not printed.
 
 Prep applies the tenant reset with reseed, writes the runtime seed, and requires the next reset dry run to report zero. It prints one summary line.
 

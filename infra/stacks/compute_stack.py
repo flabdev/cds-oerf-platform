@@ -238,6 +238,7 @@ class OerfComputeStack(Stack):
                         "/oerf/whatsapp/phone-number-id"
                     ),
                     (f"arn:aws:ssm:{self.region}:{self.account}:parameter/oerf/demo-numbers/*"),
+                    (f"arn:aws:ssm:{self.region}:{self.account}:parameter/oerf/dev/demo-numbers/*"),
                 ],
             )
         )
