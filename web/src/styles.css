@@ -730,25 +730,27 @@ button.profile[aria-expanded="true"] {
   background: color-mix(in oklch, var(--ink) 8%, transparent);
 }
 
-.meter i {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  transform: scaleX(var(--share, 0));
-  transform-origin: left;
-  background: color-mix(in oklch longer hue, var(--heat) calc((1 - var(--share, 1)) * 100%), var(--glacier));
+.meter .ratio-bar,
+.option-bar .ratio-bar {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
-.meter.spent i {
-  background: var(--heat);
+.meter-fill {
+  fill: var(--glacier);
+}
+
+.meter.low .meter-fill {
+  fill: var(--amber);
+}
+
+.meter.spent .meter-fill {
+  fill: var(--heat);
 }
 
 .meter.unknown {
   background: repeating-linear-gradient(-45deg, var(--line) 0 4px, transparent 4px 8px);
-}
-
-.meter.unknown i {
-  display: none;
 }
 
 .meter.big {
@@ -756,7 +758,9 @@ button.profile[aria-expanded="true"] {
   border-radius: 6px;
 }
 
-.meter.big i {
+.meter.big .meter-fill {
+  transform-box: fill-box;
+  transform-origin: 0 50%;
   animation: drain-in 900ms var(--ease) both;
 }
 
@@ -764,19 +768,18 @@ button.profile[aria-expanded="true"] {
   position: relative;
 }
 
-.hero-meter::after {
-  content: "";
+.hero-meter-ticks {
   position: absolute;
   inset: 0;
-  border-radius: 6px;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
-  background: repeating-linear-gradient(
-    90deg,
-    transparent 0,
-    transparent calc(100% / var(--ticks, 9) - 2px),
-    var(--paper) calc(100% / var(--ticks, 9) - 2px),
-    var(--paper) calc(100% / var(--ticks, 9))
-  );
+}
+
+.hero-meter-ticks line {
+  stroke: var(--paper);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
 }
 
 @keyframes drain-in {
@@ -1247,13 +1250,8 @@ button.profile[aria-expanded="true"] {
   overflow: hidden;
 }
 
-.option-bar i {
-  display: block;
-  height: 100%;
-  width: calc(var(--use) * 100%);
-  border-radius: inherit;
-  background: var(--glacier);
-  transition: width 400ms var(--ease);
+.option-bar-fill {
+  fill: var(--glacier);
 }
 
 .option-fit {
@@ -1262,8 +1260,8 @@ button.profile[aria-expanded="true"] {
   font-size: 0.8rem;
 }
 
-.option.blocked .option-bar i {
-  background: var(--heat);
+.option.blocked .option-bar-fill {
+  fill: var(--heat);
 }
 
 .option.blocked {
@@ -1549,19 +1547,53 @@ button.profile[aria-expanded="true"] {
   gap: 0.85rem;
 }
 
-.allowance-edit input[type="range"] {
+.allowance-slider {
+  position: relative;
   flex: 1;
-  height: 6px;
-  border-radius: 999px;
-  appearance: none;
-  background: linear-gradient(
-    to right,
-    var(--glacier) calc(var(--fill, 0.5) * 100%),
-    color-mix(in oklch, var(--ink) 10%, transparent) 0
-  );
+  display: flex;
+  align-items: center;
+  height: 1.15rem;
 }
 
-.allowance-edit input[type="range"]::-webkit-slider-thumb {
+.allowance-slider-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: 6px;
+  pointer-events: none;
+}
+
+.allowance-slider-rest {
+  fill: color-mix(in oklch, var(--ink) 10%, transparent);
+}
+
+.allowance-slider-fill {
+  fill: var(--glacier);
+}
+
+.allowance-slider input[type="range"] {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 1.15rem;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+}
+
+.allowance-slider input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px;
+  background: transparent;
+}
+
+.allowance-slider input[type="range"]::-moz-range-track {
+  height: 6px;
+  border: none;
+  background: transparent;
+}
+
+.allowance-slider input[type="range"]::-webkit-slider-thumb {
   width: 1.15rem;
   height: 1.15rem;
   border: 3px solid var(--paper);
@@ -1571,7 +1603,7 @@ button.profile[aria-expanded="true"] {
   box-shadow: 0 0 0 1px var(--ink);
 }
 
-.allowance-edit input[type="range"]::-moz-range-thumb {
+.allowance-slider input[type="range"]::-moz-range-thumb {
   width: 1rem;
   height: 1rem;
   border: 3px solid var(--paper);

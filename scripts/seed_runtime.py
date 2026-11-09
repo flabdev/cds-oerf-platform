@@ -60,6 +60,11 @@ SYNTHETIC_E164 = {
     "ops_director": "+15550100006",
     "qa_lead": "+15550100007",
 }
+#: Extra t1 drivers. Live numbers stay in SSM, never in this map.
+SYNTHETIC_E164_BY_CONTACT = {
+    "C-T1-DRV-ANANDA": "+15550100011",
+    "C-T1-DRV-VIVEK": "+15550100012",
+}
 _KINDS = ("meta", "shipments", "facilities", "contacts", "phones", "config")
 _SKIP = frozenset({"PK", "SK", "pk", "sk"})
 _DRAFT_SKIP = frozenset(
@@ -208,7 +213,8 @@ def _synthetic_contact(row: dict[str, Any]) -> tuple[str, str, str, str, str]:
     """Tenant, contact, role, canonical E.164, and the ``opt_in`` string."""
 
     role = str(row["party_role"])
-    number = SYNTHETIC_E164.get(role)
+    contact_id = str(row["contact_id"])
+    number = SYNTHETIC_E164_BY_CONTACT.get(contact_id) or SYNTHETIC_E164.get(role)
     if number is None:
         raise ValueError(f"no synthetic number for role {role!r}")
     opted_in = "true" if row.get("opt_in") is True else "false"
@@ -300,9 +306,10 @@ def seed_live_contacts(
     counts: dict[str, int] = {}
     cache: dict[str, str | None] = {}
     for role, rows in grouped.items():
+        live_rows = [row for row in rows if row.get("live_contacts") is not False]
         changed = 0
         missing: list[str] = []
-        for row in rows:
+        for row in live_rows:
             contact_id = str(row["contact_id"])
             name = _demo_number_name(
                 tenant_id, role, contact_id if role == "driver" else None
@@ -325,7 +332,7 @@ def seed_live_contacts(
                 ),
                 apply=apply,
             )
-        if missing and len(missing) == len(rows):
+        if missing and len(missing) == len(live_rows):
             print(f"skipped {tenant_id} live-contacts {role} (no parameter)")
             continue
         for contact_id in missing:

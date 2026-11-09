@@ -18,6 +18,29 @@ export function resolveProxyApiUrl(envApiUrl, configText) {
   return envApiUrl;
 }
 
+function missingConfigJson404() {
+  return {
+    name: "missing-config-json-404",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const path = String(req.url || "").split("?")[0];
+        if (path !== "/config.json") {
+          next();
+          return;
+        }
+        try {
+          fs.accessSync(new URL("./public/config.json", import.meta.url));
+        } catch {
+          res.statusCode = 404;
+          res.end();
+          return;
+        }
+        next();
+      });
+    },
+  };
+}
+
 export function apiProxy(apiUrl) {
   const remote = String(apiUrl || "")
     .trim()
@@ -45,7 +68,7 @@ export default defineConfig(({ mode }) => {
     configText = "";
   }
   return {
-    plugins: [react()],
+    plugins: [react(), missingConfigJson404()],
     server: {
       proxy: apiProxy(resolveProxyApiUrl(env.VITE_API_URL, configText)),
     },

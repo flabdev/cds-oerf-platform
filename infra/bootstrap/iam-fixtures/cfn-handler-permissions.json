@@ -453,6 +453,32 @@
       "cloudfront:UpdateOriginAccessControl"
     ]
   },
+  "AWS::CloudFront::ResponseHeadersPolicy": {
+    "create": [
+      "cloudfront:CreateResponseHeadersPolicy",
+      "cloudfront:GetResponseHeadersPolicy",
+      "cloudfront:TagResource"
+    ],
+    "delete": [
+      "cloudfront:DeleteResponseHeadersPolicy",
+      "cloudfront:GetResponseHeadersPolicy"
+    ],
+    "list": [
+      "cloudfront:ListResponseHeadersPolicies"
+    ],
+    "read": [
+      "cloudfront:GetResponseHeadersPolicy",
+      "cloudfront:GetResponseHeadersPolicyConfig",
+      "cloudfront:ListTagsForResource"
+    ],
+    "update": [
+      "cloudfront:GetResponseHeadersPolicy",
+      "cloudfront:ListTagsForResource",
+      "cloudfront:TagResource",
+      "cloudfront:UntagResource",
+      "cloudfront:UpdateResponseHeadersPolicy"
+    ]
+  },
   "AWS::CloudWatch::Alarm": {
     "create": [
       "cloudwatch:DescribeAlarms",
