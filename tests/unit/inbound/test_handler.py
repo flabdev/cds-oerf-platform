@@ -282,6 +282,57 @@ def test_quoted_correlation_takes_precedence_over_address_matches(setup_inbound)
     assert callbacks.calls[0]["taskToken"] == "secret-task-token"
 
 
+def test_each_driver_resumes_only_their_own_shipment_engagement(setup_inbound) -> None:
+    """B2/B3: two shipments, two drivers, one address each (ADR-016)."""
+
+    deps, engagements, registry, callbacks, first = setup_inbound
+    registry.register_contact("trusted-tenant", "contact-2", "driver", "+15550000002")
+    second = engagements.open_engagement(
+        "trusted-tenant",
+        "incident-2",
+        "engagement-2",
+        "driver",
+        "confirm",
+        "policy-1",
+        "second-task-token",
+        {"shipment_id": "ship-2"},
+        contact_id="contact-2",
+        rung=1,
+        deadline=DEADLINE,
+    )
+    engagements.register_outbound("outbound-2", second)
+    engagements.register_address("whatsapp", "+15550000001", first)
+    engagements.register_address("whatsapp", "+15550000002", second)
+
+    # Driver 2's unquoted free text may only reach driver 2's incident.
+    second_reply = {**_provider("incoming-2", text="dock 9"), "from": "+15550000002"}
+    second_reply.pop("context_msg_id")
+    assert process_message(second_reply, deps) == "resumed"
+
+    assert len(callbacks.calls) == 1
+    assert callbacks.calls[0]["taskToken"] == "second-task-token"
+    assert engagements.get("trusted-tenant", "incident-1", "engagement-1").status == "WAITING"
+    assert engagements.get("trusted-tenant", "incident-2", "engagement-2").status == "ANSWERED"
+
+    # Driver 1's own reply still resumes driver 1's engagement.
+    first_reply = _provider("incoming-3", text="yes")
+    assert process_message(first_reply, deps) == "resumed"
+    assert callbacks.calls[1]["taskToken"] == "secret-task-token"
+
+
+def test_a_driver_cannot_resume_another_drivers_quoted_engagement(setup_inbound) -> None:
+    """Quoting another shipment's message id does not cross the ownership check."""
+
+    deps, engagements, registry, callbacks, _first = setup_inbound
+    registry.register_contact("trusted-tenant", "contact-2", "driver", "+15550000002")
+
+    other_driver = {**_provider("incoming-2"), "from": "+15550000002"}
+
+    assert process_message(other_driver, deps) == "ignored"
+    assert callbacks.calls == []
+    assert engagements.get("trusted-tenant", "incident-1", "engagement-1").status == "WAITING"
+
+
 def test_media_evidence_is_stored_and_key_is_forwarded(setup_inbound) -> None:
     deps, _engagements, _registry, callbacks, opened = setup_inbound
     stored: list[tuple[str, str, str, str, str | None]] = []

@@ -16,9 +16,10 @@ config when no config is stored or ``PP-2-8-45`` is not already 45 minutes.
 Contact phones come from ``SYNTHETIC_E164`` (the fictional 555-01xx range).
 It does not read SSM, write a real number, write fault codes or incidents, or
 publish readings unless ``--live-contacts`` is set. That flag reads
-``/oerf/demo-numbers/{tenant}/{role}`` and writes one ``PHONE#`` ownership row
-per seeded contact of that role. It prints the role and the count only. A role
-with no parameter is skipped. An empty or invalid value stops the command.
+``/oerf/demo-numbers/{tenant}/{role}`` for non-drivers and
+``/oerf/dev/demo-numbers/{tenant}/driver/{contact_id}`` for drivers, writing
+one ``PHONE#`` ownership row per seeded contact. It prints role and count only.
+A missing parameter is skipped. An empty or invalid value stops the command.
 ``--roles`` limits the read to those seeded roles.
 """
 
@@ -32,7 +33,10 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from oerf.platform.agent.context import DOMAIN
-from oerf.platform.channels.address import demo_number_name
+from oerf.platform.channels.address import (
+    demo_number_name,
+    driver_demo_number_name,
+)
 from oerf.platform.storage.dynamo import canonical_e164, contact_sk, key, phone_pk, s, text
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 from oerf.platform.tenancy.publisher import ConfigPublisher
@@ -43,8 +47,9 @@ STACK = "OerfDataStack"
 DEMO_TENANTS = ("t1", "t2", "sbx")
 PROFILE_ID = "PP-2-8-45"
 #: Fictional NANP numbers. 555-0100 through 555-0199 are reserved for fiction.
-#: Mocked channels read these from the contact registry. Live channels read
-#: SSM ``/oerf/demo-numbers/{tenant}/{role}`` and never this map.
+#: SSM ``/oerf/demo-numbers/{tenant}/{role}`` for non-drivers and
+#: ``/oerf/dev/demo-numbers/{tenant}/driver/{contact_id}`` for drivers. The
+#: values are never logged.
 SYNTHETIC_E164 = {
     "driver": "+15550100001",
     "ops": "+15550100002",
@@ -276,12 +281,14 @@ def seed_live_contacts(
     apply: bool,
     roles: Collection[str] | None = None,
 ) -> dict[str, int]:
-    """Write one ``PHONE#`` row per seeded contact from that role's SSM number.
+    """Write one ``PHONE#`` row per seeded contact from that contact's SSM number.
 
     The return value is ``role -> row count`` for parameters that exist. It
     does not contain the number. A missing parameter is printed and omitted.
-    Contacts that share a role share one SecureString and keep their own
-    contact id, which is what inbound ownership compares.
+    Non-driver roles share one SecureString per role. Each driver has its own
+    ``/oerf/dev/demo-numbers/{tenant}/driver/{contact_id}`` parameter, and the
+    ``PHONE#`` row keeps that contact id, which is what inbound ownership
+    compares.
     """
 
     if tenant_id not in DEMO_TENANTS:
@@ -297,37 +304,57 @@ def seed_live_contacts(
                 raise SystemExit(f"unknown role {role}")
         grouped = {role: grouped[role] for role in roles}
     counts: dict[str, int] = {}
+    cache: dict[str, str | None] = {}
     for role, rows in grouped.items():
-        number = _demo_number(ssm, tenant_id, role)
-        if number is None:
-            print(f"skipped {tenant_id} live-contacts {role} (no parameter)")
-            continue
         live_rows = [row for row in rows if row.get("live_contacts") is not False]
-        counts[role] = sum(
-            _put(
+        changed = 0
+        missing: list[str] = []
+        for row in live_rows:
+            contact_id = str(row["contact_id"])
+            name = _demo_number_name(
+                tenant_id, role, contact_id if role == "driver" else None
+            )
+            if name not in cache:
+                cache[name] = _demo_number(ssm, name)
+            number = cache[name]
+            if number is None:
+                missing.append(contact_id)
+                continue
+            changed += _put(
                 client,
                 routing_table,
                 _ownership_item(
                     str(row["tenant_id"]),
-                    str(row["contact_id"]),
+                    contact_id,
                     role,
                     number,
                     "true" if row.get("opt_in") is True else "false",
                 ),
                 apply=apply,
             )
-            for row in live_rows
-        )
+        if missing and len(missing) == len(live_rows):
+            print(f"skipped {tenant_id} live-contacts {role} (no parameter)")
+            continue
+        for contact_id in missing:
+            print(f"skipped {tenant_id} live-contacts {role}/{contact_id} (no parameter)")
+        counts[role] = changed
     return counts
 
 
-def _demo_number(ssm: Any, tenant_id: str, role: str) -> str | None:
+def _demo_number_name(tenant_id: str, role: str, contact_id: str | None) -> str:
+    """The SSM name for one seeded contact. Drivers are contact-scoped."""
+
+    if role == "driver" and contact_id is not None:
+        return driver_demo_number_name(tenant_id, contact_id)
+    return demo_number_name(tenant_id, role)
+
+
+def _demo_number(ssm: Any, name: str) -> str | None:
     """Read one SecureString. A missing parameter returns ``None``.
 
     An empty or invalid value exits. The value is not included in an error.
     """
 
-    name = demo_number_name(tenant_id, role)
     try:
         found = ssm.get_parameter(Name=name, WithDecryption=True)
     except Exception as exc:
@@ -489,7 +516,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--live-contacts",
         action="store_true",
-        help="Write PHONE# rows from SSM /oerf/demo-numbers/{tenant}/{role}.",
+        help="Write PHONE# rows from role/contact SSM demo-number parameters.",
     )
     parser.add_argument(
         "--roles",

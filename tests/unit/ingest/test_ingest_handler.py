@@ -199,6 +199,7 @@ def test_ph2841_seed_profile_reaches_gather_context() -> None:
     shipment = start_input["workflow"]["shipment"]
     assert shipment["product_profile"] == "PP-2-8-45"
     assert shipment["product_profile_id"] == "PP-2-8-45"
+    assert shipment["driver"] == "C-T1-DRV"
     assert row.get("product_profile_id") is None
     gathered = gather_context(
         StepEnvelope(

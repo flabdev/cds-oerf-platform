@@ -7,7 +7,10 @@ from decimal import Decimal
 import pytest
 
 from oerf.platform.agent.context import DOMAIN
-from oerf.platform.channels.address import resolve_party_address
+from oerf.platform.channels.address import (
+    driver_demo_number_name,
+    resolve_party_address,
+)
 from oerf.platform.channels.engagement_send import _request
 from oerf.platform.channels.registry import DynamoPhoneRegistry
 from oerf.platform.ingest.handler import DynamoShipmentReader
@@ -297,7 +300,7 @@ def _session(client: _RejectWrites, *, ssm_raises: bool = False) -> type:
 
 
 _LIVE = {
-    "/oerf/demo-numbers/t1/driver": "+15550100901",
+    "/oerf/dev/demo-numbers/t1/driver/C-T1-DRV": "+15550100901",
     "/oerf/demo-numbers/t1/ops_manager": "15550100902",
     "/oerf/demo-numbers/t1/qa": "+15550100904",
     "/oerf/demo-numbers/t1/facility": "+15550100903",
@@ -329,7 +332,7 @@ def test_live_contacts_point_the_ssm_number_at_the_seeded_contact() -> None:
     assert counts == {"driver": 1, "ops_manager": 1, "qa": 1, "facility": 2}
     assert client.writes == written + 5
     assert ssm.calls == [
-        ("/oerf/demo-numbers/t1/driver", True),
+        ("/oerf/dev/demo-numbers/t1/driver/C-T1-DRV", True),
         ("/oerf/demo-numbers/t1/ops_manager", True),
         ("/oerf/demo-numbers/t1/qa", True),
         ("/oerf/demo-numbers/t1/facility", True),
@@ -350,6 +353,21 @@ def test_live_contacts_point_the_ssm_number_at_the_seeded_contact() -> None:
     assert client.writes == written + 5
 
 
+def test_live_contacts_excludes_seeded_opt_out_contacts(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sim.seed.load import load_seed
+
+    seed = load_seed("t1")
+    monkeypatch.setattr("scripts.seed_runtime.load_seed", lambda _tenant: seed)
+    client = FakeDynamoClient()
+    ssm = _Ssm(_LIVE)
+
+    counts = seed_live_contacts(client, "routing", "t1", ssm, apply=True, roles=("driver",))
+
+    assert counts == {"driver": 1}
+    assert ssm.calls == [("/oerf/dev/demo-numbers/t1/driver/C-T1-DRV", True)]
+    assert client.writes == 1
+
+
 def test_live_contacts_dry_run_reads_ssm_and_does_not_write() -> None:
     ssm = _Ssm(_LIVE)
 
@@ -357,7 +375,44 @@ def test_live_contacts_dry_run_reads_ssm_and_does_not_write() -> None:
 
     assert counts["driver"] == 1
     assert counts["facility"] == 2
-    assert ssm.calls[0] == ("/oerf/demo-numbers/t1/driver", True)
+    assert ssm.calls[0] == ("/oerf/dev/demo-numbers/t1/driver/C-T1-DRV", True)
+
+
+def test_live_contacts_point_each_driver_parameter_at_its_own_contact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sim.seed.load import load_seed
+
+    seed = load_seed("t1")
+    contacts = seed["contacts"]
+    original = contacts[0]
+    contacts.extend(
+        {
+            **original,
+            "SK": f"CONTACT#{contact_id}",
+            "contact_id": contact_id,
+            "label": label,
+        }
+        for contact_id, label in (("C-T1-ANANDA", "Ananda"), ("C-T1-MUDITA", "Mudita"))
+    )
+    monkeypatch.setattr("scripts.seed_runtime.load_seed", lambda _tenant: seed)
+    client = FakeDynamoClient()
+    numbers = {
+        driver_demo_number_name("t1", "C-T1-DRV"): "+15550100901",
+        driver_demo_number_name("t1", "C-T1-ANANDA"): "+15550100911",
+        driver_demo_number_name("t1", "C-T1-MUDITA"): "+15550100912",
+    }
+    ssm = _Ssm(numbers)
+
+    counts = seed_live_contacts(client, "routing", "t1", ssm, apply=True, roles=("driver",))
+
+    assert counts == {"driver": 3}
+    assert [name for name, decrypted in ssm.calls] == list(numbers)
+    registry = DynamoPhoneRegistry(client, "routing", TABLE)
+    assert registry.resolve_sender("+15550100901").matches[0].contact_id == "C-T1-DRV"
+    assert registry.resolve_sender("+15550100911").matches[0].contact_id == "C-T1-ANANDA"
+    assert registry.resolve_sender("+15550100912").matches[0].contact_id == "C-T1-MUDITA"
+    assert registry.resolve_sender("+15550100911").matches[0].tenant_id == "t1"
 
 
 def test_live_contacts_flag_prints_role_and_count_only(
@@ -392,27 +447,29 @@ def test_unreadable_demo_number_does_not_echo_the_value() -> None:
         def get_parameter(self, *, Name: str, WithDecryption: bool) -> dict[str, object]:
             raise RuntimeError(f"Value={secret}")
 
-    with pytest.raises(SystemExit, match="could not read /oerf/demo-numbers/t1/driver") as raised:
+    parameter_name = driver_demo_number_name("t1", "C-T1-DRV")
+    with pytest.raises(SystemExit, match=f"could not read {parameter_name}") as raised:
         seed_live_contacts(FakeDynamoClient(), "routing", "t1", _Leak(), apply=True)
-
     assert secret not in str(raised.value)
     assert "15550100901" not in str(raised.value)
 
 
 def test_empty_demo_number_does_not_echo_the_value() -> None:
     raw = "not-a-phone"
-    ssm = _Ssm({"/oerf/demo-numbers/t1/driver": raw})
+    ssm = _Ssm({"/oerf/dev/demo-numbers/t1/driver/C-T1-DRV": raw})
 
-    with pytest.raises(SystemExit, match="could not read /oerf/demo-numbers/t1/driver") as raised:
+    parameter_name = driver_demo_number_name("t1", "C-T1-DRV")
+    with pytest.raises(SystemExit, match=f"could not read {parameter_name}") as raised:
         seed_live_contacts(FakeDynamoClient(), "routing", "t1", ssm, apply=False)
 
     assert raw not in str(raised.value)
 
 
 def test_blank_demo_number_exits() -> None:
-    ssm = _Ssm({"/oerf/demo-numbers/t1/driver": "   "})
+    ssm = _Ssm({"/oerf/dev/demo-numbers/t1/driver/C-T1-DRV": "   "})
 
-    with pytest.raises(SystemExit, match="could not read /oerf/demo-numbers/t1/driver"):
+    parameter_name = driver_demo_number_name("t1", "C-T1-DRV")
+    with pytest.raises(SystemExit, match=f"could not read {parameter_name}"):
         seed_live_contacts(FakeDynamoClient(), "routing", "t1", ssm, apply=False)
 
 
@@ -421,7 +478,7 @@ def test_missing_parameter_is_skipped(
 ) -> None:
     client = FakeDynamoClient()
     present = {
-        "/oerf/demo-numbers/t1/driver": "+15550100901",
+        "/oerf/dev/demo-numbers/t1/driver/C-T1-DRV": "+15550100901",
         "/oerf/demo-numbers/t1/ops_manager": "+15550100902",
         "/oerf/demo-numbers/t1/facility": "+15550100903",
     }
@@ -446,7 +503,8 @@ def test_other_ssm_errors_still_exit() -> None:
             raise _Denied()
 
     denied = _Denied()
-    with pytest.raises(SystemExit, match="could not read /oerf/demo-numbers/t1/driver"):
+    parameter_name = driver_demo_number_name("t1", "C-T1-DRV")
+    with pytest.raises(SystemExit, match=f"could not read {parameter_name}"):
         seed_live_contacts(FakeDynamoClient(), "routing", "t1", denied, apply=False)
 
 
@@ -474,7 +532,7 @@ def test_roles_filter_reads_only_the_named_roles(
     )
 
     assert [name for name, decrypted in ssm.calls] == [
-        "/oerf/demo-numbers/t1/driver",
+        "/oerf/dev/demo-numbers/t1/driver/C-T1-DRV",
         "/oerf/demo-numbers/t1/ops_manager",
     ]
     assert all(decrypted for _, decrypted in ssm.calls)

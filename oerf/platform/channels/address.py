@@ -14,6 +14,7 @@ from typing import Protocol
 from oerf.platform.channels.registry import PhoneRegistry
 
 DEMO_NUMBERS_PREFIX = "/oerf/demo-numbers"
+DRIVER_DEMO_NUMBERS_PREFIX = "/oerf/dev/demo-numbers"
 
 
 def demo_numbers_prefix() -> str:
@@ -49,6 +50,25 @@ def demo_number_name(tenant_id: str, role: str) -> str:
     return f"{demo_numbers_prefix()}/{tenant}/{party}"
 
 
+def driver_demo_number_name(
+    tenant_id: str,
+    contact_id: str,
+    *,
+    prefix: str = DRIVER_DEMO_NUMBERS_PREFIX,
+) -> str:
+    """The SSM name for one driver's number; never the number itself.
+
+    Operator tooling defaults to the dev prefix. The runtime passes its
+    stage-specific demo-number prefix so the main stage never reads dev SSM.
+    """
+
+    tenant = tenant_id.strip()
+    contact = contact_id.strip()
+    if not tenant or not contact:
+        raise AddressError("a driver demo-number parameter needs a tenant and contact")
+    return f"{prefix.rstrip('/')}/{tenant}/driver/{contact}"
+
+
 def resolve_party_address(
     tenant_id: str,
     role: str,
@@ -63,7 +83,12 @@ def resolve_party_address(
     if live:
         if parameters is None:
             raise AddressError("live channels need the demo-numbers parameter")
-        value = parameters.get(demo_number_name(tenant_id, role)).strip()
+        parameter_name = (
+            driver_demo_number_name(tenant_id, contact_id, prefix=demo_numbers_prefix())
+            if role.strip() == "driver"
+            else demo_number_name(tenant_id, role)
+        )
+        value = parameters.get(parameter_name).strip()
         if not value:
             raise AddressError("the demo-numbers parameter is empty")
         return value

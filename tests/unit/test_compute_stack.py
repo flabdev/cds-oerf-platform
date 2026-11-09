@@ -1455,6 +1455,25 @@ def _sns_send_statements(template: Template) -> list[dict]:
     return found
 
 
+def test_dev_router_reads_stage_scoped_demo_numbers_parameters() -> None:
+    saved = _without_synth_env()
+    try:
+        template = _synthesize_stage("dev")
+    finally:
+        _restore_env(saved)
+
+    router = functions_by_name(template)["oerf-dev-channel-router"]
+    variables = router["Environment"]["Variables"]
+    assert variables["DEMO_NUMBERS_PREFIX"] == "/oerf/dev/demo-numbers"
+    statements = statements_for_role(template, role_logical_id(router))
+    parameter = _statements_with_action(statements, "ssm:GetParameter")
+    assert len(parameter) == 1
+    assert _resource_list(parameter[0]["Resource"]) == [
+        f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/oerf/dev/whatsapp/phone-number-id",
+        f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/oerf/dev/demo-numbers/*",
+    ]
+
+
 def test_dev_subscribes_its_queue_to_the_shared_inbound_topic(template: Template) -> None:
     """Dev with the ARN matches main's subscription and allows that topic only."""
 

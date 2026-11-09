@@ -191,12 +191,15 @@ def test_preflight_live_checks_the_driver_parameter_without_printing_it(
         "get_parameter",
         {
             "Parameter": {
-                "Name": "/oerf/demo-numbers/t1/driver",
+                "Name": "/oerf/dev/demo-numbers/t1/driver/C-T1-DRV",
                 "Value": PHONE,
                 "Type": "SecureString",
             }
         },
-        {"Name": "/oerf/demo-numbers/t1/driver", "WithDecryption": True},
+        {
+            "Name": "/oerf/dev/demo-numbers/t1/driver/C-T1-DRV",
+            "WithDecryption": True,
+        },
     )
     session.clients["ssm"] = ssm
 
