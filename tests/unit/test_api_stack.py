@@ -5,7 +5,7 @@ from pathlib import Path
 
 import aws_cdk as cdk
 import pytest
-from aws_cdk import aws_cloudfront as cloudfront, aws_sqs as sqs
+from aws_cdk import aws_sqs as sqs
 from aws_cdk.assertions import Template
 
 from infra.naming import Stage
@@ -126,10 +126,48 @@ def test_distribution_uses_the_security_headers_policy(template: Template) -> No
         "DefaultCacheBehavior"
     ]
     assert behavior["ViewerProtocolPolicy"] == "redirect-to-https"
-    assert (
-        behavior["ResponseHeadersPolicyId"]
-        == cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS.response_headers_policy_id
+    policies = template.find_resources("AWS::CloudFront::ResponseHeadersPolicy")
+    assert len(policies) == 1
+    csp = next(iter(policies.values()))["Properties"]["ResponseHeadersPolicyConfig"][
+        "SecurityHeadersConfig"
+    ]["ContentSecurityPolicy"]["ContentSecurityPolicy"]
+    assert "default-src 'none'" in csp
+    assert "style-src 'self'" in csp
+    assert "script-src 'self'" in csp
+    assert "unsafe-inline" not in csp
+    assert "https://*.amazoncognito.com" in csp
+    assert f"https://*.execute-api.{REGION}.amazonaws.com" in csp
+    assert f"wss://*.execute-api.{REGION}.amazonaws.com" in csp
+    policy_id = behavior["ResponseHeadersPolicyId"]
+    assert "Ref" in policy_id or any(
+        policy_id == {"Ref": logical} for logical in policies
     )
+
+
+@pytest.mark.security
+def test_connect_src_uses_the_stack_region() -> None:
+    region = "eu-west-1"
+    app = cdk.App()
+    env = cdk.Environment(account=ACCOUNT, region=region)
+    data = OerfDataStack(app, "OerfDataStack", stage=Stage("main"), env=env)
+    refs = cdk.Stack(app, "InboundRefs", env=env)
+    queue = sqs.Queue(refs, "InboundQueue")
+    stack = OerfApiStack(
+        app,
+        "OerfApiStack",
+        data_stack=data,
+        inbound_queue=queue,
+        websocket_url=f"wss://abc.execute-api.{region}.amazonaws.com/prod",
+        stage=Stage("main"),
+        env=env,
+    )
+    policies = Template.from_stack(stack).find_resources("AWS::CloudFront::ResponseHeadersPolicy")
+    csp = next(iter(policies.values()))["Properties"]["ResponseHeadersPolicyConfig"][
+        "SecurityHeadersConfig"
+    ]["ContentSecurityPolicy"]["ContentSecurityPolicy"]
+    assert f"https://*.execute-api.{region}.amazonaws.com" in csp
+    assert f"wss://*.execute-api.{region}.amazonaws.com" in csp
+    assert "execute-api.us-east-1.amazonaws.com" not in csp
 
 
 @pytest.mark.security

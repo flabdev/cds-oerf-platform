@@ -108,6 +108,26 @@ Status prints the parent execution name and state, the child state, the last eig
 
 Cleanup resets the tenant and requires the dry run to report zero. `make reset-test` and `make reset-demo` remain the lower-level reset. Function log groups have CDK-generated names, so they are not `/aws/lambda/<function-name>`. Find one with `aws logs describe-log-groups --profile <aws-profile> --region us-east-1` and grep the construct id, for example `IngestFunctionLogGroup`.
 
+## Dev stage
+
+Main and dev share the account and `us-east-1`. Dev stacks are `OerfDataStack-dev`, `OerfComputeStack-dev`, `OerfApiStack-dev`, `OerfObservabilityStack-dev`, and `OerfCiStack-dev`. Physical names insert `dev` (`oerf-dev-cold-chain`, `/oerf/dev/...` SSM paths, Cognito and APIs on the same account). Every `cdk` command needs `-c stage=dev` and `-c account=<account-id>`.
+
+Laptop bootstrap, the CI role stack, the first full deploy flags, and IAM simulations live in [infra/bootstrap/README.md](../infra/bootstrap/README.md). That file is the operator procedure for Ananda’s A6 work. This section is the desk-facing summary.
+
+### GitHub
+
+`.github/workflows/deploy.yml` deploys **dev only**. A push to `develop` (except Markdown-only changes) runs CI, then `cdk deploy` with AgentCore and the dashboard on, `desk:publish=true`, `demo:seedDevices` off, and `channels:live` from the GitHub **dev** environment variable `CHANNELS_LIVE` (false when unset). Manual runs: **Actions → Deploy OERF → Run workflow**, **Use workflow from: develop**. The OIDC subject is `environment:dev`. The role is `OerfGitHubDeployRole-dev`; it may change only `*-dev` stacks.
+
+Do not run this workflow from `main`. Main still uses the older GitHub deploy role and stack names without `-dev` (see **First deploy from main** below).
+
+### Laptop
+
+Use profile `Fission-OERF`, Python 3.11 with `aws_cdk` importable, and the oerfdev bootstrap (`CDKToolkit-dev`, qualifier `oerfdev`). First deploy also needs `web/dist` (`cd web && npm ci && npm run build`) when `desk:publish=true`. Pass `whatsapp:phoneNumberId` (End User Messaging phone-number id, never an E.164) and `whatsapp:sharedInboundTopicArn` (main inbound topic). Seed devices only on the first deploy (`demo:seedDevices=true`); later deploys omit that flag.
+
+After deploy, `OerfApiStack-dev` output `DashboardUrl` is the desk. Open `<DashboardUrl>/config.json` and confirm `apiUrl` and `userPoolClientId` are set. Do not paste that file into a ticket. Dev does not use a hand-built `VITE_*` upload.
+
+Post-deploy checks (stack `*_COMPLETE`, `oerf-dev-cold-chain` and `oerf-dev-engage-party` exist, runtime seed dry-run) still need A6 to finish. `make demo-*` names on main (`oerf-cold-chain`) are not the dev names until A7.
+
 ## First deploy from main
 
 Do this once, from `main`, before any later deploy uses the narrowed role.

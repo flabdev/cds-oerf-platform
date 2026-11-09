@@ -16,6 +16,7 @@ from oerf.platform.inbound.handler import (
     handler,
     process_message,
 )
+from oerf.platform.sandbox.join import MemorySandboxStore
 
 NOW = datetime(2026, 10, 20, 10, 20, tzinfo=UTC)
 DEADLINE = datetime(2026, 10, 20, 11, 0, tzinfo=UTC)
@@ -520,3 +521,44 @@ def test_an_unparseable_record_is_reported_for_retry(setup_inbound) -> None:
         configure_dependencies(None)
 
     assert response == {"batchItemFailures": [{"itemIdentifier": "sqs-9"}]}
+
+
+def test_join_opens_a_sandbox_session_and_does_not_resume() -> None:
+    registry = MemoryPhoneRegistry()
+    sandbox = MemorySandboxStore()
+    deps = InboundDependencies(
+        InboundDedupe(clock=lambda: NOW),
+        MemoryEngagementStore(clock=lambda: NOW),
+        CallbackClient(),
+        registry,
+        sandbox=sandbox,
+        clock=lambda: NOW,
+    )
+
+    created = process_message(
+        {
+            "provider": "whatsapp",
+            "message_id": "join-1",
+            "from": "+155500019001",
+            "timestamp": "2026-10-20T10:20:00Z",
+            "text": "JOIN",
+        },
+        deps,
+    )
+    registry.register_contact("t1", "C-T1-DRV", "driver", "+15550000001")
+    rejected = process_message(
+        {
+            "provider": "whatsapp",
+            "message_id": "join-2",
+            "from": "+15550000001",
+            "timestamp": "2026-10-20T10:20:00Z",
+            "text": "join",
+        },
+        deps,
+    )
+
+    assert created == "sandbox_created"
+    assert rejected == "sandbox_rejected"
+    assert sandbox.join_count("2026-10-20") == 1
+    assert sandbox.sessions()[0].tenant_id == "sbx"
+

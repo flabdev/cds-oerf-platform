@@ -191,7 +191,7 @@ Queued message (tenant and user come from the token):
 
 Dedupe key: `INMSG#{action_id}` (section 5). An action whose engagement is no longer waiting is ignored and logged, without a task-token call.
 
-Deployed deviation, Mudita (208/302) to migrate: `POST /incidents/{id}/action` accepts `APPROVE`, `REJECT`, and `OVERRIDE`. The handler does not call `SendTaskSuccess`.
+The frozen route is `POST /incidents/{id}/actions` with `confirm_transfer`, `pick_option`, or `cancel`. The REST dashboard handler queues those verbs. `oerf-action-handler` is GET-only and does not call `SendTaskSuccess`.
 
 `cancel` enters through this queue. The inbound handler stops the execution ingest started (`states:StopExecution` on that machine's executions only). The execution name is `{tenant}-{incident}` after characters outside `A-Za-z0-9_-` are replaced with `-`, the same value ingest passes to `StartExecution`. A pair longer than 80 characters keeps a 20-character tenant prefix, an 8-character SHA-256 of the pair, and the start of the incident id. Inbound rebuilds that name from the stored tenant and incident id under `STATE_MACHINE_ARN`. The handler then sets the incident to `CANCELLED` through the repository, which writes the timeline event and releases the shipment lock (ADR-019). It does not call `states:SendTaskSuccess`. A duplicate `action_id`, or an incident already `CLOSED` or `CANCELLED`, does not call `StopExecution` again. `ExecutionDoesNotExist` means the execution is already finished and is not an error. Authorised roles are `platform_admin`, `tenant_admin`, and `ops_user`. Any other role is ignored. The queued `role` is the token role, not a client field. When `engagement_id` is present, the tenant cancelled is that stored engagement's tenant. Otherwise it is the stored incident's tenant. A message `tenant_id` that does not match the stored engagement is ignored.
 
@@ -424,7 +424,7 @@ Route `subscribe`. Two scopes, both the bound tenant:
 { "scope": "tenant" }
 ```
 
-`incident` requires `incident_id`. `tenant` rejects `incident_id`. A body `tenant_id` is not a field; a client that sends one fails validation. The values `ALL` and `*` are rejected. The deployed handler treats a missing incident id as `ALL` and accepts `*`. That behaviour is non-conformant. Mudita (302) and Ananda (308) migrate it.
+`incident` requires `incident_id`. `tenant` rejects `incident_id`. A body `tenant_id` is not a field; a client that sends one fails validation. The values `ALL` and `*` are rejected. A missing incident id is rejected.
 
 Connection items stay on the routing table: `PK=WS#{connection_id}` / `SK=METADATA`, and `PK=WS_SUB#{tenant_id}` / `SK=CONN#{connection_id}`, with `scope` and, for incident scope, `incident_id`.
 
@@ -659,7 +659,7 @@ Mudita's other ticket numbers in this table are ownership for coordination. They
 | --- | --- | --- |
 | 1 | Resource env vars use `*_TABLE_NAME` and `*_BUCKET_NAME`. | Ananda, 301 (acked) |
 | 2 | Role comes from `cognito:groups`. `custom:role` is dropped. | contract |
-| 3 | Actions are `POST /incidents/{id}/actions` with `confirm_transfer`, `pick_option`, or `cancel`, plus `action_id`, via SQS. The deployed `/action` verbs are non-conformant. | Mudita, 208/302 |
+| 3 | Actions are `POST /incidents/{id}/actions` with `confirm_transfer`, `pick_option`, or `cancel`, plus `action_id`, via SQS. | Mudita, 208/302 |
 | 4 | Incident key `TENANT#{tid}#INC#{iid}` is authoritative. Ingest writes it. | Mudita, 208 |
 | 5 | `states:SendTaskSuccess` belongs only to the inbound handler. | Ananda, 301 |
 | 6 | WebSocket scopes are incident (full sanitized event) and tenant list (summary only). No `ALL`. | Ananda 308, Mudita 302 |

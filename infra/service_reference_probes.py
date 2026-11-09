@@ -97,6 +97,7 @@ def _default_placeholders(values: dict[str, str]) -> dict[str, str]:
         "DistributionId": values.get("dev_distribution_arn", "").rsplit("/", 1)[-1]
         or "EDEV",
         "OriginAccessControlId": "OERFDEVOAC",
+        "ResponseHeadersPolicyId": "OERFDEVRHP",
     }
     guardrail = values.get("dev_guardrail_arn", "")
     if guardrail:

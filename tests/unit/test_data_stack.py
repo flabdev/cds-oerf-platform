@@ -514,6 +514,20 @@ def test_s3_buckets_block_public_access(template: Template) -> None:
         }, logical_id
 
 
+def test_evidence_bucket_transitions_to_infrequent_access(template: Template) -> None:
+    evidence = _bucket(template.find_resources("AWS::S3::Bucket"), "EvidenceBucket")
+    rules = evidence["LifecycleConfiguration"]["Rules"]
+    transitions = [
+        transition
+        for rule in rules
+        for transition in rule.get("Transitions", [])
+    ]
+    assert {
+        "StorageClass": "STANDARD_IA",
+        "TransitionInDays": 30,
+    } in transitions
+
+
 def test_only_evidence_bucket_publishes_object_events_to_eventbridge(template: Template) -> None:
     buckets = template.find_resources("AWS::S3::Bucket")
     evidence = _bucket(buckets, "EvidenceBucket")

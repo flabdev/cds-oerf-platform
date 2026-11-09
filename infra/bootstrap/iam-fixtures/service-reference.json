@@ -1975,6 +1975,14 @@
         "Name": "CreateOriginAccessControl"
       },
       {
+        "Name": "CreateResponseHeadersPolicy",
+        "Resources": [
+          {
+            "Name": "response-headers-policy"
+          }
+        ]
+      },
+      {
         "Name": "DeleteDistribution",
         "Resources": [
           {
@@ -1987,6 +1995,14 @@
         "Resources": [
           {
             "Name": "origin-access-control"
+          }
+        ]
+      },
+      {
+        "Name": "DeleteResponseHeadersPolicy",
+        "Resources": [
+          {
+            "Name": "response-headers-policy"
           }
         ]
       },
@@ -2023,6 +2039,22 @@
         ]
       },
       {
+        "Name": "GetResponseHeadersPolicy",
+        "Resources": [
+          {
+            "Name": "response-headers-policy"
+          }
+        ]
+      },
+      {
+        "Name": "GetResponseHeadersPolicyConfig",
+        "Resources": [
+          {
+            "Name": "response-headers-policy"
+          }
+        ]
+      },
+      {
         "Name": "GetVpcOrigin",
         "Resources": [
           {
@@ -2035,6 +2067,9 @@
       },
       {
         "Name": "ListOriginAccessControls"
+      },
+      {
+        "Name": "ListResponseHeadersPolicies"
       },
       {
         "Name": "ListTagsForResource",
@@ -2059,6 +2094,9 @@
           },
           {
             "Name": "key-value-store"
+          },
+          {
+            "Name": "response-headers-policy"
           },
           {
             "Name": "trust-store"
@@ -2095,6 +2133,9 @@
           },
           {
             "Name": "key-value-store"
+          },
+          {
+            "Name": "response-headers-policy"
           },
           {
             "Name": "streaming-distribution"
@@ -2135,6 +2176,9 @@
             "Name": "key-value-store"
           },
           {
+            "Name": "response-headers-policy"
+          },
+          {
             "Name": "streaming-distribution"
           },
           {
@@ -2166,6 +2210,14 @@
         "Resources": [
           {
             "Name": "origin-access-control"
+          }
+        ]
+      },
+      {
+        "Name": "UpdateResponseHeadersPolicy",
+        "Resources": [
+          {
+            "Name": "response-headers-policy"
           }
         ]
       }
@@ -2218,6 +2270,12 @@
           "arn:${Partition}:cloudfront::${Account}:origin-access-control/${Id}"
         ],
         "Name": "origin-access-control"
+      },
+      {
+        "ARNFormats": [
+          "arn:${Partition}:cloudfront::${Account}:response-headers-policy/${Id}"
+        ],
+        "Name": "response-headers-policy"
       },
       {
         "ARNFormats": [

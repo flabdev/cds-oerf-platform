@@ -153,7 +153,7 @@ def test_first_breach_waits_for_configured_threshold_and_second_starts_once() ->
     incident = deps.incidents.get("t1", second["incident_id"])
     assert incident.config_snapshot["tenant_id"] == "t1"
     readings = deps.incidents.readings("t1", incident.incident_id)
-    assert len(readings) == 1
+    assert [row["temperature_c"] for row in readings] == [9, 9]
     assert readings[0]["temperature_c"] == 9
     assert set(readings[0]) == {
         "pk",
@@ -401,7 +401,7 @@ def test_one_accepted_reading_on_an_open_incident_creates_one_read_row() -> None
         dependencies=deps,
     )
     incident_id = opened["incident_id"]
-    assert len(deps.incidents.readings("t1", incident_id)) == 1
+    assert len(deps.incidents.readings("t1", incident_id)) == 2
 
     accepted = handler(
         _event("steady", temperature=5, detail={"seq": 9, "ts": "2026-10-20T10:26:00Z"}),
@@ -410,7 +410,7 @@ def test_one_accepted_reading_on_an_open_incident_creates_one_read_row() -> None
     )
     assert accepted["status"] == "accepted"
     rows = deps.incidents.readings("t1", incident_id)
-    assert len(rows) == 2
+    assert len(rows) == 3
     suffix = hashlib.sha256(accepted["event_id"].encode("utf-8")).hexdigest()
     assert rows[-1] == {
         "pk": f"TENANT#t1#INC#{incident_id}",
@@ -475,7 +475,7 @@ def test_report_temperature_section_uses_stored_readings(
 
     assert limit == 8
     assert max(temperature for _stamp, temperature in points) == 12.0
-    assert minutes == 6
+    assert minutes == 10
     assert "17.4" not in section
     assert "RF-1" not in section
 
