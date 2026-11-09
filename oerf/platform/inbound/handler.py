@@ -93,7 +93,12 @@ from oerf.platform.incidents.repository import (
     StaleIncidentUpdate,
 )
 from oerf.platform.observability.logging import get_logger, log
-from oerf.platform.sandbox.join import DynamoSandboxStore, SandboxStore, handle_sandbox_message
+from oerf.platform.sandbox.join import (
+    DynamoSandboxStore,
+    SandboxStore,
+    handle_sandbox_message,
+    is_join,
+)
 
 logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
@@ -962,11 +967,14 @@ def _unowned_kind(
     """Kind token when this stage must ignore the message before any write.
 
     A registered sender's opt-out is owned: the existing path records it.
+    Exact JOIN is owned by the sandbox path, including an unknown number.
     A quote that misses, or a reply with no quote, is owned when exactly one
     waiting engagement matches the sender. That is the case where both stages
     act if both have that engagement. Anything else writes nothing.
     """
 
+    if is_join(message.text):
+        return None
     if is_opt_out(message.text):
         if dependencies.registry is None:
             return None

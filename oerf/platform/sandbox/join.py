@@ -141,7 +141,7 @@ def handle_sandbox_message(
         return prior
     if is_opt_out(message.text):
         return _stop(message, registry=registry, store=store)
-    if not _is_join(message.text):
+    if not is_join(message.text):
         return _remember(store, message.provider_msg_id, _plain("ignored", IGNORED_NOTICE))
     e164 = required_text(message.sender, "sender")
     if _production_number(registry, e164):
@@ -519,7 +519,9 @@ def _aware(now: datetime) -> None:
         raise ValueError("now must be timezone-aware")
 
 
-def _is_join(body: str | None) -> bool:
+def is_join(body: str | None) -> bool:
+    """True for the sandbox JOIN command, ignoring case and extra spaces."""
+
     if body is None:
         return False
     return " ".join(body.strip().casefold().split()) == "join"
