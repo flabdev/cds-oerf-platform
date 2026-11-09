@@ -35,6 +35,7 @@ from pydantic import (
 )
 
 OPEN = "OPEN"
+NO_RESPONSE = "NoResponse"
 GATHER_CONTEXT = "GatherContext"
 DIAGNOSE = "Diagnose"
 ASSESS = "Assess"
@@ -74,6 +75,7 @@ STEPS = frozenset(
         "BeginDisposition",
         HANDLE_REOPEN,
         GENERATE_REPORT,
+        NO_RESPONSE,
         QA,
         CLOSE,
         RECORD_FAILURE,
@@ -103,6 +105,8 @@ TASK_EVENT_KEYS = frozenset(
         "containment",
         "qa",
         "task_token",
+        "report",
+        "approval_timeout",
     }
 )
 

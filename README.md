@@ -12,7 +12,7 @@ The deployed shape is in [Architecture](docs/architecture.md). Decisions are ind
 
 Operational Exception Resolution Framework for a cold-chain shipment. A medicine truck must stay inside a temperature band. When it does not, the platform opens one incident for that shipment, ranks recovery options, and accepts inbound replies without handling the same message twice.
 
-The pieces below are libraries and the CDK stacks. GatherContext, Diagnose, Assess, Act, Verify, QA, Close, RecordFailure, Escalate, and Cancel have their own Lambdas. OPEN, Approval, SecureFacility, HandleReopen, and GenerateReport still call a shared stub. Persistence has DynamoDB adapters plus in-memory doubles for tests without AWS.
+The pieces below are libraries and the CDK stacks. Every cold-chain state has its own Lambda: OPEN, GatherContext, Diagnose, Assess, Approval, SecureFacility, Act, Verify, RecordContainment, BeginDisposition, HandleReopen, GenerateReport, QA, Close, NoResponse, RecordFailure, Escalate, and Cancel. Persistence has DynamoDB adapters plus in-memory doubles for tests without AWS.
 
 ## Flow
 
@@ -162,7 +162,8 @@ Package markers with no behavior: `oerf/__init__.py`, `oerf/platform/__init__.py
 | `domains/cold_chain_excursion/schema.json` | JSON Schema for a cold-chain config. Unknown fields are rejected. |
 | `domains/cold_chain_excursion/defaults.json` | Published defaults: profile `PP-2-8-45` (2–8°C, 45 minutes), debounce 2, assessment rates. |
 | `domains/cold_chain_excursion/messages.json` | Message catalog. Only `driver_checkin` has SMS text. |
-| `domains/cold_chain_excursion/statemachine.asl.json` | The `cold_chain_excursion_v1` state machine definition. Every task is `arn:aws:states:::lambda:invoke` pointed at `__STUB_ARN__`, which the data stack replaces with the stub's real ARN at synth time. Retries, timeouts, failure routing, and the approval and QA choice gates live here. |
+| `domains/cold_chain_excursion/statemachine.asl.json` | The `cold_chain_excursion_v1` state machine definition. Every task is `arn:aws:states:::lambda:invoke` pointed at that phase's own function placeholder (`__STEP_*_ARN__`), which the data stack replaces with the function's real ARN at synth time. The shared `__STUB_ARN__` is no longer in the definition. Retries, timeouts, failure routing, and the approval and QA choice gates live here. |
+| `domains/cold_chain_excursion/steps/*.py` | One entry point per phase (`open`, `context`, `diagnose`, `approval`, `secure_facility`, …). Each calls `runtime.run_step` with its phase name, so a task carrying another phase's step is rejected instead of running under the wrong role. `workflow_stub.py` remains the offline simulator's deterministic response and is no longer invoked by the deployed machine. |
 | `domains/cold_chain_excursion/steps/workflow_stub.py` | Temporary deterministic handler shared by every step. It stamps `step_name` into the workflow and returns the shape the following choice state reads. Real handlers replace it step by step. |
 | `domains/__init__.py` | Makes `domains` an importable package so the JSON ships with the install. |
 | `sim/seed/load.py` | Loads a tenant seed directory. Repeatable, no AWS. |

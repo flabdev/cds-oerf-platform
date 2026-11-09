@@ -18,6 +18,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from oerf.platform.agent.reports import ReportPublisher
 from oerf.platform.incidents.repository import (
     TERMINAL_STATES,
     TRANSITIONS,
@@ -48,6 +49,7 @@ STAGE_BY_STEP: dict[str, str] = {
     "BeginDisposition": "AWAITING_DISPOSITION",
     "HandleReopen": "REOPENED",
     "GenerateReport": "AWAITING_DISPOSITION",
+    "NoResponse": "AWAITING_APPROVAL",
     "QA": "AWAITING_DISPOSITION",
     "Close": "CLOSED",
     "RecordFailure": "ESCALATED",
@@ -100,10 +102,14 @@ STEP_POSITIONS: dict[str, StepPosition] = {
     ),
     "RecordContainment": StepPosition(frozenset({"VERIFYING"}), "CONTAINED"),
     "BeginDisposition": StepPosition(frozenset({"CONTAINED"}), "AWAITING_DISPOSITION"),
-    "HandleReopen": StepPosition(frozenset({"VERIFYING", "CONTAINED", "REOPENED"}), "REOPENED"),
+    "HandleReopen": StepPosition(
+        frozenset({"VERIFYING", "CONTAINED", "AWAITING_DISPOSITION", "REOPENED"}),
+        "REOPENED",
+    ),
     "GenerateReport": StepPosition(
         frozenset({"CONTAINED", "AWAITING_DISPOSITION"}), "AWAITING_DISPOSITION"
     ),
+    "NoResponse": StepPosition(frozenset({"AWAITING_APPROVAL"})),
     "QA": StepPosition(frozenset({"CONTAINED", "AWAITING_DISPOSITION"})),
     "Close": StepPosition(frozenset({"AWAITING_DISPOSITION"}), "CLOSED"),
     "RecordFailure": StepPosition(_ANY_STATE),
@@ -127,6 +133,9 @@ _DOWNSTREAM: dict[str, frozenset[str]] = {
     "Verify": frozenset({"CONTAINED", "REOPENED", "AWAITING_DISPOSITION", "CLOSED"}),
     "RecordContainment": frozenset({"CONTAINED", "AWAITING_DISPOSITION", "CLOSED"}),
     "BeginDisposition": frozenset({"AWAITING_DISPOSITION", "CLOSED"}),
+    "HandleReopen": frozenset({"REOPENED", "VERIFYING", "AWAITING_DISPOSITION", "CLOSED"}),
+    "GenerateReport": frozenset({"AWAITING_DISPOSITION", "CLOSED"}),
+    "NoResponse": frozenset({"AWAITING_APPROVAL"}),
     "QA": frozenset({"AWAITING_DISPOSITION", "CLOSED"}),
     "Close": frozenset({"CLOSED"}),
 }
@@ -218,6 +227,7 @@ class StepDependencies:
     results: StepResultPort
     config: ConfigReader | None = None
     facilities: FacilityCatalog | None = None
+    reports: ReportPublisher | None = None
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
 
     def now(self) -> datetime:

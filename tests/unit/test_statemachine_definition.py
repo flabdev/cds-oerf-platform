@@ -36,29 +36,29 @@ ASL_PATH = (
 )
 STUB_PLACEHOLDER = "__STUB_ARN__"
 REAL_PLACEHOLDERS = {
+    "OPEN": "__STEP_OPEN_ARN__",
     "GatherContext": "__STEP_CONTEXT_ARN__",
     "Diagnose": "__STEP_DIAGNOSE_ARN__",
     "Assess": "__STEP_ASSESS_ARN__",
+    "Approval": "__STEP_APPROVAL_ARN__",
+    "SecureFacility": "__STEP_SECURE_FACILITY_ARN__",
     "Act": "__STEP_ACT_ARN__",
     "VerifyLoop": "__STEP_VERIFY_ARN__",
+    "RecordContainment": "__STEP_RECORD_CONTAINMENT_ARN__",
+    "BeginDisposition": "__STEP_BEGIN_DISPOSITION_ARN__",
+    "HandleReopen": "__STEP_HANDLE_REOPEN_ARN__",
+    "GenerateReport": "__STEP_GENERATE_REPORT_ARN__",
     "QA": "__STEP_QA_ARN__",
     "Close": "__STEP_CLOSE_ARN__",
+    "NoResponse": "__STEP_NO_RESPONSE_ARN__",
     "RecordFailure": "__STEP_RECORD_FAILURE_ARN__",
     "Escalate": "__STEP_ESCALATE_ARN__",
     "Cancel": "__STEP_CANCEL_ARN__",
 }
-STUB_COLD_CHAIN_TASKS = frozenset(
-    {
-        "OPEN",
-        "Approval",
-        "SecureFacility",
-        "HandleReopen",
-        "GenerateReport",
-        "NoResponse",
-        "RecordContainment",
-        "BeginDisposition",
-    }
-)
+#: A cold-chain task that still points at the shared stub. C0 wired the last
+#: eight, so the set is empty and the stub is only read by the offline
+#: simulator, not by the deployed definition.
+STUB_COLD_CHAIN_TASKS = frozenset()
 STUB_ENGAGEMENT_TASKS = frozenset()
 NOTICE_TASKS = frozenset({"NotifyContinue", "NotifyDivert"})
 
@@ -180,9 +180,7 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
             else "arn:aws:states:::lambda:invoke"
         )
         assert state["Resource"] == expected_resource, name
-        assert state["Parameters"]["FunctionName"] == REAL_PLACEHOLDERS.get(
-            name, STUB_PLACEHOLDER
-        ), name
+        assert state["Parameters"]["FunctionName"] == REAL_PLACEHOLDERS.get(name), name
         assert state["OutputPath"] == "$.Payload", name
         assert state["Retry"][0]["MaxAttempts"] == 3, name
         assert state["TimeoutSeconds"] == (1800 if name == "Approval" else 60), name
