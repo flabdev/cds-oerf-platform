@@ -1,0 +1,1516 @@
+{
+  "AWS::ApiGateway::Authorizer": {
+    "create": [
+      "apigateway:POST",
+      "iam:PassRole"
+    ],
+    "delete": [
+      "apigateway:DELETE"
+    ],
+    "list": [
+      "apigateway:GET"
+    ],
+    "read": [
+      "apigateway:GET"
+    ],
+    "update": [
+      "apigateway:GET",
+      "apigateway:PATCH",
+      "iam:PassRole"
+    ]
+  },
+  "AWS::ApiGateway::Deployment": {
+    "create": [
+      "apigateway:GET",
+      "apigateway:PATCH",
+      "apigateway:POST",
+      "apigateway:PUT"
+    ],
+    "delete": [
+      "apigateway:DELETE",
+      "apigateway:GET"
+    ],
+    "list": [
+      "apigateway:GET"
+    ],
+    "read": [
+      "apigateway:GET"
+    ],
+    "update": [
+      "apigateway:DELETE",
+      "apigateway:GET",
+      "apigateway:PATCH",
+      "apigateway:PUT"
+    ]
+  },
+  "AWS::ApiGateway::GatewayResponse": {
+    "create": [
+      "apigateway:GET",
+      "apigateway:PUT"
+    ],
+    "delete": [
+      "apigateway:DELETE",
+      "apigateway:GET"
+    ],
+    "list": [
+      "apigateway:GET"
+    ],
+    "read": [
+      "apigateway:GET"
+    ],
+    "update": [
+      "apigateway:GET",
+      "apigateway:PUT"
+    ]
+  },
+  "AWS::ApiGateway::Method": {
+    "create": [
+      "apigateway:GET",
+      "apigateway:PUT",
+      "iam:PassRole"
+    ],
+    "delete": [
+      "apigateway:DELETE"
+    ],
+    "list": [],
+    "read": [
+      "apigateway:GET"
+    ],
+    "update": [
+      "apigateway:DELETE",
+      "apigateway:GET",
+      "apigateway:PUT",
+      "iam:PassRole"
+    ]
+  },
+  "AWS::ApiGateway::Resource": {
+    "create": [
+      "apigateway:POST"
+    ],
+    "delete": [
+      "apigateway:DELETE"
+    ],
+    "list": [
+      "apigateway:GET"
+    ],
+    "read": [
+      "apigateway:GET"
+    ],
+    "update": [
+      "apigateway:GET",
+      "apigateway:PATCH"
+    ]
+  },
+  "AWS::ApiGateway::RestApi": {
+    "create": [
+      "apigateway:GET",
+      "apigateway:PATCH",
+      "apigateway:POST",
+      "apigateway:PUT",
+      "apigateway:UpdateRestApiPolicy",
+      "iam:PassRole",
+      "s3:GetObject"
+    ],
+    "delete": [
+      "apigateway:DELETE"
+    ],
+    "list": [
+      "apigateway:GET"
+    ],
+    "read": [
+      "apigateway:GET"
+    ],
+    "update": [
+      "apigateway:DELETE",
+      "apigateway:GET",
+      "apigateway:PATCH",
+      "apigateway:PUT",
+      "apigateway:UpdateRestApiPolicy",
+      "iam:PassRole",
+      "s3:GetObject"
+    ]
+  },
+  "AWS::ApiGateway::Stage": {
+    "create": [
+      "apigateway:GET",
+      "apigateway:PATCH",
+      "apigateway:POST",
+      "apigateway:PUT"
+    ],
+    "delete": [
+      "apigateway:DELETE"
+    ],
+    "list": [
+      "apigateway:GET"
+    ],
+    "read": [
+      "apigateway:GET"
+    ],
+    "update": [
+      "apigateway:DELETE",
+      "apigateway:GET",
+      "apigateway:PATCH",
+      "apigateway:PUT"
+    ]
+  },
+  "AWS::ApiGatewayV2::Api": {
+    "create": [
+      "apigateway:POST",
+      "apigateway:PUT",
+      "s3:getObject"
+    ],
+    "delete": [
+      "apigateway:DELETE",
+      "apigateway:GET",
+      "s3:getObject"
+    ],
+    "list": [
+      "apigateway:GET",
+      "s3:getObject"
+    ],
+    "read": [
+      "apigateway:GET",
+      "s3:getObject"
+    ],
+    "update": [
+      "apigateway:DELETE",
+      "apigateway:GET",
+      "apigateway:PATCH",
+      "apigateway:POST",
+      "apigateway:PUT",
+      "s3:getObject"
+    ]
+  },
+  "AWS::ApiGatewayV2::Authorizer": {
+    "create": [
+      "apigateway:POST",
+      "iam:PassRole"
+    ],
+    "delete": [
+      "apigateway:DELETE",
+      "apigateway:GET"
+    ],
+    "list": [
+      "apigateway:GET"
+    ],
+    "read": [
+      "apigateway:GET"
+    ],
+    "update": [
+      "apigateway:GET",
+      "apigateway:PATCH",
+      "apigateway:PUT",
+      "iam:PassRole"
+    ]
+  },
+  "AWS::ApiGatewayV2::Integration": {
+    "create": [
+      "apigateway:POST",
+      "iam:PassRole"
+    ],
+    "delete": [
+      "apigateway:DELETE",
+      "apigateway:GET"
+    ],
+    "list": [
+      "apigateway:GET"
+    ],
+    "read": [
+      "apigateway:GET"
+    ],
+    "update": [
+      "apigateway:GET",
+      "apigateway:PATCH",
+      "apigateway:PUT",
+      "iam:PassRole"
+    ]
+  },
+  "AWS::ApiGatewayV2::Route": {
+    "create": [
+      "apigateway:POST"
+    ],
+    "delete": [
+      "apigateway:DELETE",
+      "apigateway:GET"
+    ],
+    "list": [
+      "apigateway:GET"
+    ],
+    "read": [
+      "apigateway:GET"
+    ],
+    "update": [
+      "apigateway:GET",
+      "apigateway:PATCH",
+      "apigateway:PUT"
+    ]
+  },
+  "AWS::ApiGatewayV2::Stage": {
+    "create": [
+      "apigateway:POST",
+      "apigateway:TagResource"
+    ],
+    "delete": [
+      "apigateway:DELETE"
+    ],
+    "list": [
+      "apigateway:GET"
+    ],
+    "read": [
+      "apigateway:GET"
+    ],
+    "update": [
+      "apigateway:DELETE",
+      "apigateway:PATCH",
+      "apigateway:POST",
+      "apigateway:TagResource",
+      "apigateway:UntagResource"
+    ]
+  },
+  "AWS::Bedrock::Guardrail": {
+    "create": [
+      "bedrock:CreateGuardrail",
+      "bedrock:GetGuardrail",
+      "bedrock:ListTagsForResource",
+      "bedrock:TagResource",
+      "kms:CreateGrant",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:GenerateDataKey"
+    ],
+    "delete": [
+      "bedrock:DeleteGuardrail",
+      "bedrock:GetGuardrail",
+      "kms:Decrypt",
+      "kms:RetireGrant"
+    ],
+    "list": [
+      "bedrock:ListGuardrails"
+    ],
+    "read": [
+      "bedrock:GetGuardrail",
+      "bedrock:ListTagsForResource",
+      "kms:Decrypt"
+    ],
+    "update": [
+      "bedrock:GetGuardrail",
+      "bedrock:ListTagsForResource",
+      "bedrock:TagResource",
+      "bedrock:UntagResource",
+      "bedrock:UpdateGuardrail",
+      "kms:CreateGrant",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:GenerateDataKey"
+    ]
+  },
+  "AWS::Bedrock::GuardrailVersion": {
+    "create": [
+      "bedrock:CreateGuardrailVersion",
+      "bedrock:GetGuardrail",
+      "kms:CreateGrant",
+      "kms:Decrypt"
+    ],
+    "delete": [
+      "bedrock:DeleteGuardrail",
+      "bedrock:GetGuardrail",
+      "kms:RetireGrant"
+    ],
+    "list": [],
+    "read": [
+      "bedrock:GetGuardrail",
+      "kms:Decrypt"
+    ],
+    "update": []
+  },
+  "AWS::BedrockAgentCore::Runtime": {
+    "create": [
+      "bedrock-agentcore:CreateAgentRuntime",
+      "bedrock-agentcore:CreateAgentRuntimeEndpoint",
+      "bedrock-agentcore:CreateWorkloadIdentity",
+      "bedrock-agentcore:GetAgentRuntime",
+      "bedrock-agentcore:GetAgentRuntimeEndpoint",
+      "bedrock-agentcore:ListTagsForResource",
+      "bedrock-agentcore:PassCapacityProvider",
+      "bedrock-agentcore:TagResource",
+      "ec2:CreateNetworkInterface",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeVpcs",
+      "iam:CreateServiceLinkedRole",
+      "iam:PassRole",
+      "kms:Decrypt",
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "vpc-lattice:AssociateViaAWSService",
+      "vpc-lattice:CreateServiceNetworkResourceAssociation",
+      "vpc-lattice:GetResourceConfiguration",
+      "vpc-lattice:GetServiceNetworkResourceAssociation",
+      "vpc-lattice:ListServiceNetworkResourceAssociations"
+    ],
+    "delete": [
+      "bedrock-agentcore:DeleteAgentRuntime",
+      "bedrock-agentcore:DeleteAgentRuntimeEndpoint",
+      "bedrock-agentcore:DeleteWorkloadIdentity",
+      "bedrock-agentcore:GetAgentRuntime",
+      "bedrock-agentcore:GetAgentRuntimeEndpoint"
+    ],
+    "list": [
+      "bedrock-agentcore:ListAgentRuntimeEndpoints",
+      "bedrock-agentcore:ListAgentRuntimes"
+    ],
+    "read": [
+      "bedrock-agentcore:GetAgentRuntime",
+      "bedrock-agentcore:GetAgentRuntimeEndpoint",
+      "bedrock-agentcore:ListTagsForResource"
+    ],
+    "update": [
+      "bedrock-agentcore:GetAgentRuntime",
+      "bedrock-agentcore:GetAgentRuntimeEndpoint",
+      "bedrock-agentcore:ListTagsForResource",
+      "bedrock-agentcore:PassCapacityProvider",
+      "bedrock-agentcore:TagResource",
+      "bedrock-agentcore:UntagResource",
+      "bedrock-agentcore:UpdateAgentRuntime",
+      "bedrock-agentcore:UpdateAgentRuntimeEndpoint",
+      "ec2:CreateNetworkInterface",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeVpcs",
+      "iam:CreateServiceLinkedRole",
+      "iam:PassRole",
+      "kms:Decrypt",
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "vpc-lattice:AssociateViaAWSService",
+      "vpc-lattice:CreateServiceNetworkResourceAssociation",
+      "vpc-lattice:GetResourceConfiguration",
+      "vpc-lattice:GetServiceNetworkResourceAssociation",
+      "vpc-lattice:ListServiceNetworkResourceAssociations"
+    ]
+  },
+  "AWS::CloudFormation::CustomResource": {
+    "create": [],
+    "delete": [],
+    "list": [],
+    "read": [],
+    "update": []
+  },
+  "AWS::CloudFront::Distribution": {
+    "create": [
+      "cloudfront:CreateConnectionGroup",
+      "cloudfront:CreateDistribution",
+      "cloudfront:CreateDistributionWithTags",
+      "cloudfront:GetConnectionGroup",
+      "cloudfront:GetDistribution",
+      "cloudfront:GetDistributionConfig",
+      "cloudfront:GetVpcOrigin",
+      "cloudfront:TagResource"
+    ],
+    "delete": [
+      "cloudfront:DeleteDistribution",
+      "cloudfront:GetDistribution",
+      "cloudfront:GetDistributionConfig"
+    ],
+    "list": [
+      "cloudfront:ListDistributions",
+      "cloudfront:ListTagsForResource"
+    ],
+    "read": [
+      "cloudfront:GetDistribution",
+      "cloudfront:GetDistributionConfig",
+      "cloudfront:ListTagsForResource"
+    ],
+    "update": [
+      "cloudfront:CreateConnectionGroup",
+      "cloudfront:GetConnectionGroup",
+      "cloudfront:GetDistribution",
+      "cloudfront:GetDistributionConfig",
+      "cloudfront:GetVpcOrigin",
+      "cloudfront:ListTagsForResource",
+      "cloudfront:TagResource",
+      "cloudfront:UntagResource",
+      "cloudfront:UpdateDistribution",
+      "cloudfront:UpdateDistributionWithStagingConfig"
+    ]
+  },
+  "AWS::CloudFront::OriginAccessControl": {
+    "create": [
+      "cloudfront:CreateOriginAccessControl"
+    ],
+    "delete": [
+      "cloudfront:DeleteOriginAccessControl",
+      "cloudfront:GetOriginAccessControl"
+    ],
+    "list": [
+      "cloudfront:ListOriginAccessControls"
+    ],
+    "read": [
+      "cloudfront:GetOriginAccessControl"
+    ],
+    "update": [
+      "cloudfront:GetOriginAccessControl",
+      "cloudfront:UpdateOriginAccessControl"
+    ]
+  },
+  "AWS::CloudWatch::Alarm": {
+    "create": [
+      "cloudwatch:DescribeAlarms",
+      "cloudwatch:ListTagsForResource",
+      "cloudwatch:PutMetricAlarm",
+      "cloudwatch:TagResource"
+    ],
+    "delete": [
+      "cloudwatch:DeleteAlarms",
+      "cloudwatch:DescribeAlarms"
+    ],
+    "list": [
+      "cloudwatch:DescribeAlarms"
+    ],
+    "read": [
+      "cloudwatch:DescribeAlarms",
+      "cloudwatch:ListTagsForResource"
+    ],
+    "update": [
+      "cloudwatch:DescribeAlarms",
+      "cloudwatch:ListTagsForResource",
+      "cloudwatch:PutMetricAlarm",
+      "cloudwatch:TagResource",
+      "cloudwatch:UntagResource"
+    ]
+  },
+  "AWS::CloudWatch::Dashboard": {
+    "create": [
+      "cloudwatch:GetDashboard",
+      "cloudwatch:PutDashboard",
+      "cloudwatch:TagResource"
+    ],
+    "delete": [
+      "cloudwatch:DeleteDashboards",
+      "cloudwatch:GetDashboard"
+    ],
+    "list": [
+      "cloudwatch:ListDashboards"
+    ],
+    "read": [
+      "cloudwatch:GetDashboard",
+      "cloudwatch:ListTagsForResource"
+    ],
+    "update": [
+      "cloudwatch:ListTagsForResource",
+      "cloudwatch:PutDashboard",
+      "cloudwatch:TagResource",
+      "cloudwatch:UntagResource"
+    ]
+  },
+  "AWS::Cognito::UserPool": {
+    "create": [
+      "cognito-idp:CreateUserPool",
+      "cognito-idp:DescribeUserPool",
+      "cognito-idp:SetUserPoolMfaConfig",
+      "cognito-idp:TagResource",
+      "iam:CreateServiceLinkedRole",
+      "iam:PassRole",
+      "kms:CreateGrant",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKey",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:ReEncryptFrom",
+      "kms:ReEncryptTo"
+    ],
+    "delete": [
+      "cognito-idp:DeleteUserPool"
+    ],
+    "list": [
+      "cognito-idp:ListUserPools"
+    ],
+    "read": [
+      "cognito-idp:DescribeUserPool",
+      "cognito-idp:GetUserPoolMfaConfig",
+      "kms:Decrypt",
+      "kms:DescribeKey"
+    ],
+    "update": [
+      "cognito-idp:AddCustomAttributes",
+      "cognito-idp:DescribeUserPool",
+      "cognito-idp:GetUserPoolMfaConfig",
+      "cognito-idp:ListTagsForResource",
+      "cognito-idp:SetUserPoolMfaConfig",
+      "cognito-idp:TagResource",
+      "cognito-idp:UntagResource",
+      "cognito-idp:UpdateUserPool",
+      "iam:PassRole",
+      "kms:CreateGrant",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKey",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:ReEncryptFrom",
+      "kms:ReEncryptTo"
+    ]
+  },
+  "AWS::Cognito::UserPoolClient": {
+    "create": [
+      "cognito-idp:CreateUserPoolClient",
+      "iam:CreateServiceLinkedRole",
+      "iam:PassRole",
+      "iam:PutRolePolicy"
+    ],
+    "delete": [
+      "cognito-idp:DeleteUserPoolClient",
+      "iam:DeleteRolePolicy",
+      "iam:PutRolePolicy"
+    ],
+    "list": [
+      "cognito-idp:ListUserPoolClients"
+    ],
+    "read": [
+      "cognito-idp:DescribeUserPoolClient",
+      "cognito-idp:ListUserPoolClientSecrets"
+    ],
+    "update": [
+      "cognito-idp:UpdateUserPoolClient",
+      "iam:PassRole",
+      "iam:PutRolePolicy"
+    ]
+  },
+  "AWS::Cognito::UserPoolDomain": {
+    "create": [
+      "cloudfront:updateDistribution",
+      "cognito-idp:CreateUserPoolDomain",
+      "cognito-idp:DescribeUserPoolDomain",
+      "kms:CreateGrant",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:ReEncryptFrom",
+      "kms:ReEncryptTo"
+    ],
+    "delete": [
+      "cognito-idp:DeleteUserPoolDomain",
+      "cognito-idp:DescribeUserPoolDomain",
+      "kms:CreateGrant",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:ReEncryptFrom",
+      "kms:ReEncryptTo"
+    ],
+    "list": [],
+    "read": [
+      "cognito-idp:DescribeUserPoolDomain",
+      "kms:CreateGrant",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:ReEncryptFrom",
+      "kms:ReEncryptTo"
+    ],
+    "update": [
+      "cloudfront:updateDistribution",
+      "cognito-idp:DescribeUserPoolDomain",
+      "cognito-idp:UpdateUserPoolDomain",
+      "kms:CreateGrant",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:ReEncryptFrom",
+      "kms:ReEncryptTo"
+    ]
+  },
+  "AWS::Cognito::UserPoolGroup": {
+    "create": [
+      "cognito-idp:CreateGroup",
+      "cognito-idp:GetGroup",
+      "iam:PassRole",
+      "iam:PutRolePolicy"
+    ],
+    "delete": [
+      "cognito-idp:DeleteGroup",
+      "cognito-idp:GetGroup",
+      "iam:PutRolePolicy"
+    ],
+    "list": [
+      "cognito-idp:ListGroups"
+    ],
+    "read": [
+      "cognito-idp:GetGroup"
+    ],
+    "update": [
+      "cognito-idp:UpdateGroup",
+      "iam:PassRole",
+      "iam:PutRolePolicy"
+    ]
+  },
+  "AWS::DynamoDB::Table": {
+    "create": [
+      "dynamodb:AssociateTableReplica",
+      "dynamodb:BatchWriteItem",
+      "dynamodb:CreateTable",
+      "dynamodb:CreateTableReplica",
+      "dynamodb:DeleteItem",
+      "dynamodb:DescribeContinuousBackups",
+      "dynamodb:DescribeContributorInsights",
+      "dynamodb:DescribeImport",
+      "dynamodb:DescribeKinesisStreamingDestination",
+      "dynamodb:DescribeTable",
+      "dynamodb:DescribeTimeToLive",
+      "dynamodb:DisableKinesisStreamingDestination",
+      "dynamodb:EnableKinesisStreamingDestination",
+      "dynamodb:GetItem",
+      "dynamodb:GetResourcePolicy",
+      "dynamodb:ImportTable",
+      "dynamodb:ListTagsOfResource",
+      "dynamodb:PutItem",
+      "dynamodb:PutResourcePolicy",
+      "dynamodb:Query",
+      "dynamodb:Scan",
+      "dynamodb:TagResource",
+      "dynamodb:UpdateContinuousBackups",
+      "dynamodb:UpdateContributorInsights",
+      "dynamodb:UpdateItem",
+      "dynamodb:UpdateTable",
+      "dynamodb:UpdateTimeToLive",
+      "iam:CreateServiceLinkedRole",
+      "kinesis:DescribeStream",
+      "kinesis:PutRecords",
+      "kms:CreateGrant",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:ListAliases",
+      "kms:RevokeGrant",
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:DescribeLogGroups",
+      "logs:DescribeLogStreams",
+      "logs:PutLogEvents",
+      "logs:PutRetentionPolicy",
+      "s3:GetObject",
+      "s3:GetObjectMetadata",
+      "s3:ListBucket"
+    ],
+    "delete": [
+      "dynamodb:DeleteTable",
+      "dynamodb:DescribeTable"
+    ],
+    "list": [
+      "dynamodb:ListTables"
+    ],
+    "read": [
+      "dynamodb:DescribeContinuousBackups",
+      "dynamodb:DescribeContributorInsights",
+      "dynamodb:DescribeKinesisStreamingDestination",
+      "dynamodb:DescribeTable",
+      "dynamodb:DescribeTimeToLive",
+      "dynamodb:GetResourcePolicy",
+      "dynamodb:ListTagsOfResource"
+    ],
+    "update": [
+      "dynamodb:AssociateTableReplica",
+      "dynamodb:BatchWriteItem",
+      "dynamodb:CreateTable",
+      "dynamodb:CreateTableReplica",
+      "dynamodb:DeleteItem",
+      "dynamodb:DeleteResourcePolicy",
+      "dynamodb:DescribeContinuousBackups",
+      "dynamodb:DescribeContributorInsights",
+      "dynamodb:DescribeKinesisStreamingDestination",
+      "dynamodb:DescribeTable",
+      "dynamodb:DescribeTimeToLive",
+      "dynamodb:DisableKinesisStreamingDestination",
+      "dynamodb:EnableKinesisStreamingDestination",
+      "dynamodb:GetItem",
+      "dynamodb:GetResourcePolicy",
+      "dynamodb:ListTagsOfResource",
+      "dynamodb:PutItem",
+      "dynamodb:PutResourcePolicy",
+      "dynamodb:Query",
+      "dynamodb:Scan",
+      "dynamodb:TagResource",
+      "dynamodb:UntagResource",
+      "dynamodb:UpdateContinuousBackups",
+      "dynamodb:UpdateContributorInsights",
+      "dynamodb:UpdateItem",
+      "dynamodb:UpdateKinesisStreamingDestination",
+      "dynamodb:UpdateTable",
+      "dynamodb:UpdateTimeToLive",
+      "iam:CreateServiceLinkedRole",
+      "kinesis:DescribeStream",
+      "kinesis:PutRecords",
+      "kms:CreateGrant",
+      "kms:DescribeKey",
+      "kms:ListAliases",
+      "kms:RevokeGrant"
+    ]
+  },
+  "AWS::Events::EventBus": {
+    "create": [
+      "events:CreateEventBus",
+      "events:DescribeEventBus",
+      "events:ListTagsForResource",
+      "events:PutPermission",
+      "events:TagResource",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKey",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:ReEncrypt",
+      "kms:ReEncryptFrom",
+      "kms:ReEncryptTo"
+    ],
+    "delete": [
+      "events:DeleteEventBus",
+      "events:DescribeEventBus",
+      "events:ListTagsForResource",
+      "events:RemovePermission",
+      "events:UntagResource",
+      "events:UpdateEventBus"
+    ],
+    "list": [
+      "events:ListEventBuses",
+      "events:ListTagsForResource"
+    ],
+    "read": [
+      "events:DescribeEventBus",
+      "events:ListTagsForResource"
+    ],
+    "update": [
+      "events:DescribeEventBus",
+      "events:PutPermission",
+      "events:TagResource",
+      "events:UntagResource",
+      "events:UpdateEventBus",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKey",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:ReEncrypt",
+      "kms:ReEncryptFrom",
+      "kms:ReEncryptTo"
+    ]
+  },
+  "AWS::Events::Rule": {
+    "create": [
+      "events:DescribeRule",
+      "events:PutRule",
+      "events:PutTargets",
+      "events:TagResource",
+      "iam:PassRole"
+    ],
+    "delete": [
+      "events:DeleteRule",
+      "events:DescribeRule",
+      "events:ListTargetsByRule",
+      "events:RemoveTargets",
+      "iam:PassRole"
+    ],
+    "list": [
+      "events:ListRules"
+    ],
+    "read": [
+      "events:DescribeRule",
+      "events:ListTagsForResource",
+      "events:ListTargetsByRule",
+      "iam:PassRole"
+    ],
+    "update": [
+      "events:DescribeRule",
+      "events:PutRule",
+      "events:PutTargets",
+      "events:RemoveTargets",
+      "events:TagResource",
+      "events:UntagResource",
+      "iam:PassRole"
+    ]
+  },
+  "AWS::IAM::Policy": {
+    "create": [
+      "iam:GetGroupPolicy",
+      "iam:GetRolePolicy",
+      "iam:GetUserPolicy",
+      "iam:PutGroupPolicy",
+      "iam:PutRolePolicy",
+      "iam:PutUserPolicy"
+    ],
+    "delete": [
+      "iam:DeleteGroupPolicy",
+      "iam:DeleteRolePolicy",
+      "iam:DeleteUserPolicy"
+    ],
+    "list": [],
+    "read": [],
+    "update": [
+      "iam:DeleteGroupPolicy",
+      "iam:DeleteRolePolicy",
+      "iam:DeleteUserPolicy",
+      "iam:PutGroupPolicy",
+      "iam:PutRolePolicy",
+      "iam:PutUserPolicy"
+    ]
+  },
+  "AWS::IAM::Role": {
+    "create": [
+      "iam:AttachRolePolicy",
+      "iam:CreateRole",
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:PutRolePolicy",
+      "iam:TagRole",
+      "iam:UntagRole"
+    ],
+    "delete": [
+      "iam:DeleteRole",
+      "iam:DeleteRolePolicy",
+      "iam:DetachRolePolicy",
+      "iam:GetRole",
+      "iam:ListAttachedRolePolicies",
+      "iam:ListRolePolicies",
+      "iam:TagRole",
+      "iam:UntagRole"
+    ],
+    "list": [
+      "iam:ListRoles"
+    ],
+    "read": [
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListAttachedRolePolicies",
+      "iam:ListRolePolicies"
+    ],
+    "update": [
+      "iam:AttachRolePolicy",
+      "iam:DeleteRolePermissionsBoundary",
+      "iam:DeleteRolePolicy",
+      "iam:DetachRolePolicy",
+      "iam:PutRolePermissionsBoundary",
+      "iam:PutRolePolicy",
+      "iam:TagRole",
+      "iam:UntagRole",
+      "iam:UpdateAssumeRolePolicy",
+      "iam:UpdateRole",
+      "iam:UpdateRoleDescription"
+    ]
+  },
+  "AWS::Lambda::EventSourceMapping": {
+    "create": [
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:GenerateDataKey",
+      "lambda:CreateEventSourceMapping",
+      "lambda:GetEventSourceMapping",
+      "lambda:TagResource"
+    ],
+    "delete": [
+      "kms:Decrypt",
+      "lambda:DeleteEventSourceMapping",
+      "lambda:GetEventSourceMapping"
+    ],
+    "list": [
+      "lambda:ListEventSourceMappings"
+    ],
+    "read": [
+      "kms:Decrypt",
+      "lambda:GetEventSourceMapping",
+      "lambda:ListTags"
+    ],
+    "update": [
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:GenerateDataKey",
+      "lambda:GetEventSourceMapping",
+      "lambda:TagResource",
+      "lambda:UntagResource",
+      "lambda:UpdateEventSourceMapping"
+    ]
+  },
+  "AWS::Lambda::Function": {
+    "create": [
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeVpcs",
+      "elasticfilesystem:DescribeMountTargets",
+      "iam:PassRole",
+      "kms:CreateGrant",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKey",
+      "lambda:AssociateRuntimeAlias",
+      "lambda:CreateFunction",
+      "lambda:GetCodeSigningConfig",
+      "lambda:GetFunction",
+      "lambda:GetFunctionCodeSigningConfig",
+      "lambda:GetFunctionRecursionConfig",
+      "lambda:GetLayerVersion",
+      "lambda:GetRuntimeManagementConfig",
+      "lambda:PassCapacityProvider",
+      "lambda:PutFunctionConcurrency",
+      "lambda:PutFunctionRecursionConfig",
+      "lambda:PutFunctionScalingConfig",
+      "lambda:PutRuntimeManagementConfig",
+      "lambda:TagResource",
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "s3files:ListMountTargets"
+    ],
+    "delete": [
+      "ec2:DescribeNetworkInterfaces",
+      "lambda:DeleteFunction",
+      "lambda:GetFunction"
+    ],
+    "list": [
+      "lambda:ListFunctions"
+    ],
+    "read": [
+      "kms:Decrypt",
+      "lambda:GetFunction",
+      "lambda:GetFunctionCodeSigningConfig",
+      "lambda:GetFunctionRecursionConfig",
+      "lambda:GetFunctionScalingConfig",
+      "lambda:GetRuntimeManagementConfig"
+    ],
+    "update": [
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeVpcs",
+      "elasticfilesystem:DescribeMountTargets",
+      "iam:PassRole",
+      "kms:CreateGrant",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:GenerateDataKey",
+      "lambda:AssociateRuntimeAlias",
+      "lambda:DeleteFunctionCodeSigningConfig",
+      "lambda:DeleteFunctionConcurrency",
+      "lambda:GetCodeSigningConfig",
+      "lambda:GetFunction",
+      "lambda:GetFunctionCodeSigningConfig",
+      "lambda:GetFunctionRecursionConfig",
+      "lambda:GetRuntimeManagementConfig",
+      "lambda:PassCapacityProvider",
+      "lambda:PublishVersion",
+      "lambda:PutFunctionCodeSigningConfig",
+      "lambda:PutFunctionConcurrency",
+      "lambda:PutFunctionRecursionConfig",
+      "lambda:PutFunctionScalingConfig",
+      "lambda:PutRuntimeManagementConfig",
+      "lambda:TagResource",
+      "lambda:UntagResource",
+      "lambda:UpdateFunctionCode",
+      "lambda:UpdateFunctionConfiguration",
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "s3files:ListMountTargets"
+    ]
+  },
+  "AWS::Lambda::Permission": {
+    "create": [
+      "lambda:AddPermission"
+    ],
+    "delete": [
+      "lambda:RemovePermission"
+    ],
+    "list": [
+      "lambda:GetPolicy"
+    ],
+    "read": [
+      "lambda:GetPolicy"
+    ],
+    "update": []
+  },
+  "AWS::Logs::Delivery": {
+    "create": [
+      "logs:CreateDelivery",
+      "logs:DescribeDeliveries",
+      "logs:GetDelivery",
+      "logs:GetDeliveryDestination",
+      "logs:GetDeliverySource",
+      "logs:ListTagsForResource",
+      "logs:TagResource"
+    ],
+    "delete": [
+      "logs:DeleteDelivery",
+      "logs:ListTagsForResource",
+      "logs:UntagResource"
+    ],
+    "list": [
+      "logs:DescribeDeliveries",
+      "logs:ListTagsForResource"
+    ],
+    "read": [
+      "logs:GetDelivery",
+      "logs:ListTagsForResource"
+    ],
+    "update": [
+      "logs:GetDelivery",
+      "logs:ListTagsForResource",
+      "logs:TagResource",
+      "logs:UntagResource",
+      "logs:UpdateDeliveryConfiguration"
+    ]
+  },
+  "AWS::Logs::DeliveryDestination": {
+    "create": [
+      "logs:GetDeliveryDestination",
+      "logs:GetDeliveryDestinationPolicy",
+      "logs:ListTagsForResource",
+      "logs:PutDeliveryDestination",
+      "logs:PutDeliveryDestinationPolicy",
+      "logs:TagResource",
+      "logs:UntagResource"
+    ],
+    "delete": [
+      "logs:DeleteDeliveryDestination",
+      "logs:DeleteDeliveryDestinationPolicy"
+    ],
+    "list": [
+      "logs:DescribeDeliveryDestinations",
+      "logs:GetDeliveryDestinationPolicy"
+    ],
+    "read": [
+      "logs:GetDeliveryDestination",
+      "logs:GetDeliveryDestinationPolicy",
+      "logs:ListTagsForResource"
+    ],
+    "update": [
+      "logs:DeleteDeliveryDestinationPolicy",
+      "logs:GetDeliveryDestination",
+      "logs:GetDeliveryDestinationPolicy",
+      "logs:ListTagsForResource",
+      "logs:PutDeliveryDestination",
+      "logs:PutDeliveryDestinationPolicy",
+      "logs:TagResource",
+      "logs:UntagResource"
+    ]
+  },
+  "AWS::Logs::DeliverySource": {
+    "create": [
+      "autoloop:AllowVendedLogDeliveryForResource",
+      "codewhisperer:AllowVendedLogDeliveryForResource",
+      "logs:AllowVendedLogDeliveryForResource",
+      "logs:GetDeliverySource",
+      "logs:ListTagsForResource",
+      "logs:PutDeliverySource",
+      "logs:TagResource",
+      "workmail:AllowVendedLogDeliveryForResource"
+    ],
+    "delete": [
+      "logs:DeleteDeliverySource"
+    ],
+    "list": [
+      "logs:DescribeDeliverySources"
+    ],
+    "read": [
+      "logs:GetDeliverySource",
+      "logs:ListTagsForResource"
+    ],
+    "update": [
+      "logs:GetDeliverySource",
+      "logs:ListTagsForResource",
+      "logs:PutDeliverySource",
+      "logs:TagResource",
+      "logs:UntagResource"
+    ]
+  },
+  "AWS::Logs::LogGroup": {
+    "create": [
+      "firehose:TagDeliveryStream",
+      "logs:CreateLogDelivery",
+      "logs:CreateLogGroup",
+      "logs:DescribeIndexPolicies",
+      "logs:DescribeLogGroups",
+      "logs:DescribeResourcePolicies",
+      "logs:GetDataProtectionPolicy",
+      "logs:PutBearerTokenAuthentication",
+      "logs:PutDataProtectionPolicy",
+      "logs:PutIndexPolicy",
+      "logs:PutResourcePolicy",
+      "logs:PutRetentionPolicy",
+      "logs:TagResource",
+      "s3:REST.PUT.OBJECT"
+    ],
+    "delete": [
+      "logs:DeleteDataProtectionPolicy",
+      "logs:DeleteLogGroup",
+      "logs:DescribeLogGroups"
+    ],
+    "list": [
+      "logs:DescribeLogGroups",
+      "logs:ListTagsForResource"
+    ],
+    "read": [
+      "logs:DescribeIndexPolicies",
+      "logs:DescribeLogGroups",
+      "logs:DescribeResourcePolicies",
+      "logs:GetDataProtectionPolicy",
+      "logs:ListTagsForResource"
+    ],
+    "update": [
+      "firehose:TagDeliveryStream",
+      "logs:AssociateKmsKey",
+      "logs:CreateLogDelivery",
+      "logs:DeleteIndexPolicy",
+      "logs:DeleteResourcePolicy",
+      "logs:DeleteRetentionPolicy",
+      "logs:DescribeLogGroups",
+      "logs:DescribeResourcePolicies",
+      "logs:DisassociateKmsKey",
+      "logs:GetDataProtectionPolicy",
+      "logs:ListTagsForResource",
+      "logs:PutBearerTokenAuthentication",
+      "logs:PutDataProtectionPolicy",
+      "logs:PutIndexPolicy",
+      "logs:PutLogGroupDeletionProtection",
+      "logs:PutResourcePolicy",
+      "logs:PutRetentionPolicy",
+      "logs:TagResource",
+      "logs:UntagResource",
+      "s3:REST.PUT.OBJECT"
+    ]
+  },
+  "AWS::Logs::MetricFilter": {
+    "create": [
+      "logs:DescribeMetricFilters",
+      "logs:PutMetricFilter"
+    ],
+    "delete": [
+      "logs:DeleteMetricFilter"
+    ],
+    "list": [
+      "logs:DescribeMetricFilters"
+    ],
+    "read": [
+      "logs:DescribeMetricFilters"
+    ],
+    "update": [
+      "logs:DescribeMetricFilters",
+      "logs:PutMetricFilter"
+    ]
+  },
+  "AWS::S3::Bucket": {
+    "create": [
+      "iam:PassRole",
+      "s3:CreateBucket",
+      "s3:CreateBucketMetadataTableConfiguration",
+      "s3:DeleteObject",
+      "s3:GetBucketAcl",
+      "s3:GetBucketMetadataTableConfiguration",
+      "s3:ListBucket",
+      "s3:PutAccelerateConfiguration",
+      "s3:PutAnalyticsConfiguration",
+      "s3:PutBucketAbac",
+      "s3:PutBucketCORS",
+      "s3:PutBucketDefaultStorageClass",
+      "s3:PutBucketLogging",
+      "s3:PutBucketNotification",
+      "s3:PutBucketObjectLockConfiguration",
+      "s3:PutBucketOwnershipControls",
+      "s3:PutBucketPublicAccessBlock",
+      "s3:PutBucketReplication",
+      "s3:PutBucketTagging",
+      "s3:PutBucketVersioning",
+      "s3:PutBucketWebsite",
+      "s3:PutEncryptionConfiguration",
+      "s3:PutIntelligentTieringConfiguration",
+      "s3:PutInventoryConfiguration",
+      "s3:PutLifecycleConfiguration",
+      "s3:PutMetricsConfiguration",
+      "s3:PutObjectAcl",
+      "s3:PutObjectLockConfiguration",
+      "s3:PutReplicationConfiguration",
+      "s3:TagResource",
+      "s3tables:CreateNamespace",
+      "s3tables:CreateTable",
+      "s3tables:CreateTableBucket",
+      "s3tables:GetTable",
+      "s3tables:GetTableMetadataLocation",
+      "s3tables:PutTableBucketPolicy",
+      "s3tables:PutTableEncryption",
+      "s3tables:PutTablePolicy",
+      "s3tables:UpdateTableMetadataLocation"
+    ],
+    "delete": [
+      "s3:DeleteBucket",
+      "s3:ListBucket"
+    ],
+    "list": [
+      "s3:ListAllMyBuckets"
+    ],
+    "read": [
+      "s3:GetAccelerateConfiguration",
+      "s3:GetAnalyticsConfiguration",
+      "s3:GetBucketAbac",
+      "s3:GetBucketCORS",
+      "s3:GetBucketDefaultStorageClass",
+      "s3:GetBucketLogging",
+      "s3:GetBucketMetadataTableConfiguration",
+      "s3:GetBucketNotification",
+      "s3:GetBucketObjectLockConfiguration",
+      "s3:GetBucketOwnershipControls",
+      "s3:GetBucketPublicAccessBlock",
+      "s3:GetBucketTagging",
+      "s3:GetBucketVersioning",
+      "s3:GetBucketWebsite",
+      "s3:GetEncryptionConfiguration",
+      "s3:GetIntelligentTieringConfiguration",
+      "s3:GetInventoryConfiguration",
+      "s3:GetLifecycleConfiguration",
+      "s3:GetMetricsConfiguration",
+      "s3:GetReplicationConfiguration",
+      "s3:ListBucket",
+      "s3:ListTagsForResource"
+    ],
+    "update": [
+      "iam:PassRole",
+      "s3:CreateBucketMetadataTableConfiguration",
+      "s3:DeleteBucketAnalyticsConfiguration",
+      "s3:DeleteBucketCors",
+      "s3:DeleteBucketEncryption",
+      "s3:DeleteBucketLifecycle",
+      "s3:DeleteBucketMetadataTableConfiguration",
+      "s3:DeleteBucketMetricsConfiguration",
+      "s3:DeleteBucketReplication",
+      "s3:DeleteBucketWebsite",
+      "s3:GetBucketMetadataTableConfiguration",
+      "s3:ListBucket",
+      "s3:PutAccelerateConfiguration",
+      "s3:PutAnalyticsConfiguration",
+      "s3:PutBucketAbac",
+      "s3:PutBucketAcl",
+      "s3:PutBucketCORS",
+      "s3:PutBucketDefaultStorageClass",
+      "s3:PutBucketLogging",
+      "s3:PutBucketNotification",
+      "s3:PutBucketObjectLockConfiguration",
+      "s3:PutBucketOwnershipControls",
+      "s3:PutBucketPublicAccessBlock",
+      "s3:PutBucketReplication",
+      "s3:PutBucketTagging",
+      "s3:PutBucketVersioning",
+      "s3:PutBucketWebsite",
+      "s3:PutEncryptionConfiguration",
+      "s3:PutIntelligentTieringConfiguration",
+      "s3:PutInventoryConfiguration",
+      "s3:PutLifecycleConfiguration",
+      "s3:PutMetricsConfiguration",
+      "s3:PutObjectLockConfiguration",
+      "s3:PutReplicationConfiguration",
+      "s3:TagResource",
+      "s3:UntagResource",
+      "s3:UpdateBucketMetadataAnnotationTableConfiguration",
+      "s3:UpdateBucketMetadataInventoryTableConfiguration",
+      "s3:UpdateBucketMetadataJournalTableConfiguration",
+      "s3tables:CreateNamespace",
+      "s3tables:CreateTable",
+      "s3tables:CreateTableBucket",
+      "s3tables:GetTable",
+      "s3tables:GetTableMetadataLocation",
+      "s3tables:PutTableBucketPolicy",
+      "s3tables:PutTableEncryption",
+      "s3tables:PutTablePolicy",
+      "s3tables:UpdateTableMetadataLocation"
+    ]
+  },
+  "AWS::S3::BucketPolicy": {
+    "create": [
+      "s3:GetBucketPolicy",
+      "s3:PutBucketPolicy"
+    ],
+    "delete": [
+      "s3:DeleteBucketPolicy",
+      "s3:GetBucketPolicy"
+    ],
+    "list": [
+      "s3:GetBucketPolicy",
+      "s3:ListAllMyBuckets"
+    ],
+    "read": [
+      "s3:GetBucketPolicy"
+    ],
+    "update": [
+      "s3:GetBucketPolicy",
+      "s3:PutBucketPolicy"
+    ]
+  },
+  "AWS::SNS::Subscription": {
+    "create": [
+      "iam:GetRole",
+      "iam:PassRole",
+      "sns:Subscribe"
+    ],
+    "delete": [
+      "sns:GetSubscriptionAttributes",
+      "sns:Unsubscribe"
+    ],
+    "list": [
+      "sns:ListSubscriptions"
+    ],
+    "read": [
+      "sns:GetSubscriptionAttributes"
+    ],
+    "update": [
+      "iam:GetRole",
+      "iam:PassRole",
+      "sns:SetSubscriptionAttributes"
+    ]
+  },
+  "AWS::SNS::Topic": {
+    "create": [
+      "iam:GetRole",
+      "iam:PassRole",
+      "sns:CreateTopic",
+      "sns:GetTopicAttributes",
+      "sns:PutDataProtectionPolicy",
+      "sns:Subscribe",
+      "sns:TagResource"
+    ],
+    "delete": [
+      "sns:DeleteTopic",
+      "sns:GetTopicAttributes"
+    ],
+    "list": [
+      "sns:ListTopics"
+    ],
+    "read": [
+      "sns:GetDataProtectionPolicy",
+      "sns:GetTopicAttributes",
+      "sns:ListSubscriptionsByTopic",
+      "sns:ListTagsForResource"
+    ],
+    "update": [
+      "iam:GetRole",
+      "iam:PassRole",
+      "sns:GetDataProtectionPolicy",
+      "sns:GetTopicAttributes",
+      "sns:ListSubscriptionsByTopic",
+      "sns:ListTagsForResource",
+      "sns:PutDataProtectionPolicy",
+      "sns:SetTopicAttributes",
+      "sns:Subscribe",
+      "sns:TagResource",
+      "sns:Unsubscribe",
+      "sns:UntagResource"
+    ]
+  },
+  "AWS::SNS::TopicPolicy": {
+    "create": [
+      "sns:SetTopicAttributes"
+    ],
+    "delete": [
+      "sns:SetTopicAttributes"
+    ],
+    "list": [],
+    "read": [],
+    "update": [
+      "sns:SetTopicAttributes"
+    ]
+  },
+  "AWS::SQS::Queue": {
+    "create": [
+      "sqs:CreateQueue",
+      "sqs:GetQueueAttributes",
+      "sqs:GetQueueUrl",
+      "sqs:ListQueueTags",
+      "sqs:TagQueue"
+    ],
+    "delete": [
+      "sqs:DeleteQueue",
+      "sqs:GetQueueAttributes"
+    ],
+    "list": [
+      "sqs:ListQueues"
+    ],
+    "read": [
+      "sqs:GetQueueAttributes",
+      "sqs:ListQueueTags"
+    ],
+    "update": [
+      "sqs:GetQueueAttributes",
+      "sqs:ListQueueTags",
+      "sqs:SetQueueAttributes",
+      "sqs:TagQueue",
+      "sqs:UntagQueue"
+    ]
+  },
+  "AWS::SQS::QueuePolicy": {
+    "create": [
+      "sqs:SetQueueAttributes"
+    ],
+    "delete": [
+      "sqs:SetQueueAttributes"
+    ],
+    "list": [],
+    "read": [],
+    "update": [
+      "sqs:SetQueueAttributes"
+    ]
+  },
+  "AWS::SSM::Parameter": {
+    "create": [
+      "ssm:AddTagsToResource",
+      "ssm:GetParameters",
+      "ssm:PutParameter"
+    ],
+    "delete": [
+      "ssm:DeleteParameter"
+    ],
+    "list": [
+      "ssm:DescribeParameters"
+    ],
+    "read": [
+      "ssm:GetParameters",
+      "ssm:ListTagsForResource"
+    ],
+    "update": [
+      "ssm:AddTagsToResource",
+      "ssm:GetParameters",
+      "ssm:PutParameter",
+      "ssm:RemoveTagsFromResource"
+    ]
+  },
+  "AWS::StepFunctions::StateMachine": {
+    "create": [
+      "iam:PassRole",
+      "kms:DescribeKey",
+      "kms:GenerateDataKey",
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "states:CreateStateMachine",
+      "states:DescribeStateMachine",
+      "states:TagResource"
+    ],
+    "delete": [
+      "states:DeleteStateMachine",
+      "states:DescribeStateMachine"
+    ],
+    "list": [
+      "states:ListStateMachines"
+    ],
+    "read": [
+      "kms:Decrypt",
+      "states:DescribeStateMachine",
+      "states:ListTagsForResource"
+    ],
+    "update": [
+      "iam:PassRole",
+      "kms:DescribeKey",
+      "kms:GenerateDataKey",
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "states:ListTagsForResource",
+      "states:TagResource",
+      "states:UntagResource",
+      "states:UpdateStateMachine"
+    ]
+  }
+}

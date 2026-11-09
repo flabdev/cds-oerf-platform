@@ -114,7 +114,8 @@ def _runtime_advisory(tenant_id: str, incident_id: str) -> dict[str, Any] | None
         "inputs": {},
         "trace_id": incident_id,
     }
-    session = f"oerf-interpret-{incident_id}".ljust(33, "0")
+    prefix = os.environ.get("AGENT_SESSION_PREFIX", "oerf-interpret").strip() or "oerf-interpret"
+    session = f"{prefix}-{incident_id}".ljust(33, "0")
     response = boto3.client("bedrock-agentcore").invoke_agent_runtime(
         agentRuntimeArn=arn,
         runtimeSessionId=session[:100],

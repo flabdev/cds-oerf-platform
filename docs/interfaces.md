@@ -1,10 +1,11 @@
 # OERF interface contract
 
-**FROZEN v1.40** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.41** — authored 2026-10-18 by OERF-304 (Ananda).
 
 Change log:
 
-- v1.40 (2026-11-04) Wave 2/3 contract reconciliation. `custom:tenant_id` is added with `AddCustomAttributes` (the pool schema is unchanged) and copied onto tokens by `oerf-pre-token`. Incident GSI1 (`TENANT#{tid}#STATUS#{state}`) is on the incident table and is how `GET /incidents` lists. The report generator publishes versioned HTML only, has no SES grant, and does not set `SES_SOURCE_EMAIL`. Lifecycle detail in §4.2 stays a reserved EventBridge body; the only consumer is `oerf-stream-broadcaster` on the incident stream. Owner sign-off of this file is still pending.
+- v1.41 (2026-11-05) Context `whatsapp:sharedInboundTopicArn` is empty by default and is rejected for `stage=main`. For `stage=dev` it must be an SNS topic ARN in the stack account and region. When set, the dev inbound queue subscribes to that topic (no raw delivery, no filter, no subscription redrive) and does not subscribe to the dev topic. Main's topic and policy are unchanged. An inbound event this stage does not own writes nothing and logs `inbound.ignored reason=not_owned kind=status|button|text|opt_out|media`. A status or reply with exactly one waiting engagement stays owned. `STOP` or `UNSUBSCRIBE` is recorded only when the sender is in this stage's phone registry.
+- v1.40 (2026-11-04) Wave 2/3 contract reconciliation. `custom:tenant_id` is added with `AddCustomAttributes` (the pool schema is unchanged) and copied onto tokens by `oerf-pre-token`. Incident GSI1 (`TENANT#{tid}#STATUS#{state}`) is on the incident table and is how `GET /incidents` lists. The report generator publishes versioned HTML only, has no SES grant, and does not set `SES_SOURCE_EMAIL`. Lifecycle detail in §4.2 stays a reserved EventBridge body; the only consumer is `oerf-stream-broadcaster` on the incident stream. Vivek (OERF-206) signed off v1.40 on 2026-11-04; other owners' sign-offs remain pending.
 - v1.39 (2026-11-03) OERF-203/206/207 implementation update: the engagement lifecycle adapter now handles configured callbacks, ladder reset, final-question preparation, and advisory exhaustion output. `SendFinalQuestion` routes through `oerf-channel-router` with a deadline-bounded wait. The evidence bucket publishes to EventBridge; `EvidenceObjectCreatedRule` invokes the analyzer only for tenant/inbound JPG, PNG, and WEBP objects. Inbound keys are `tenants/{tenant_id}/inbound/{incident_id}/{sha256(provider_msg_id)}/{uuid}{ext}`; PDF remains stored but is not auto-analyzed. A credential-free `scripts.eval_driver_replies` baseline reports 0/42 deterministic `map_reply` intent accuracy; this is not a model score. Implementation is not owner sign-off or deployment acceptance.
 - v1.38 (2026-11-03) OERF-116/311: `channels:live` requires `whatsapp:phoneNumberId` so WhatsApp IAM is the phone-number-id ARN, never `*`. SMS stays on `sns:Publish`. The engagement send path does not write `ACTIVE_TASK_TOKEN` or `MSG_CORRELATION#`; resume is `ENG#` / `OUTMSG#`. Legacy `MSG#` audit rows have no `task_token`. After `demo:seedDevices=true` and `scripts.seed_runtime --yes`, `python -m scripts.verify_seed` confirms the `DEVICE#` and opted-in `CONTACT#` rows.
 - v1.37 (2026-10-28) `Assess` runs after `EngageDriverDiagnosis`. The child input is `$.context` from Diagnose (shipment, trigger, facilities) plus `$.workflow.diagnosis`; it does not read `$.decision`. `Assess` reads `$.workflow.diagnosis.engagement_result.intent`. `unit_stopped` marks continue infeasible and ranks again. A pinned `assessment.stopped_rise_rate_c_per_min`, when present, is the facility rise rate for that ranking. `unit_running` and a result with no intent keep the ranking from `rise_rate_c_per_min`. `Act` still follows the recommendation, so a facility option sets `action.kind` to `facility` and `NotifyDivert` sends `oerf_driver_reroute`. A driver template parameter named `temperature_c` is one decimal place, half up.
@@ -256,6 +257,8 @@ A custom resource calls `PutWhatsAppBusinessAccountEventDestinations` with `id` 
 
 The inbound topic is created without a customer-managed KMS key. There is no key policy grant. An AWS owned key has no policy to edit.
 
+Context `whatsapp:sharedInboundTopicArn` is empty by default. `stage=main` fails synthesis when it is set. `stage=dev` accepts only an SNS topic ARN in this stack's account and region. When it is set, the dev inbound queue subscribes to that imported topic and not to the dev topic. The subscription uses the same defaults as main's queue subscription: protocol `sqs`, raw message delivery off, no filter policy, and no subscription redrive. The queue's own redrive stays `maxReceiveCount` 3. The dev topic remains, with its SSL-only publish deny and with no queue grant. Main's topic policy is not part of the dev template. The dev queue policy allows `sqs:SendMessage` from `sns.amazonaws.com` when `aws:SourceArn` is the shared topic and `aws:SourceAccount` is this account, and it still denies non-SSL.
+
 ### 4.3 SQS inbound envelope
 
 Owner: inbound handler (name pending, OERF-201–207). The queue message, after the normalizer and after correlation for provider traffic, and immediately for dashboard actions:
@@ -305,7 +308,7 @@ Order for a provider message:
 
 Dashboard messages skip steps 2–4 and correlate on `engagement_id`.
 
-The handler resumes only when the resolved sender's `tenant_id` and `contact_id` both match the correlated engagement: a quoted message id cannot cross a tenant boundary, and a shared number stays bound to the party that was contacted. Every duplicate, unknown, late, invalid, or mismatched record is acknowledged and logged without a callback.
+The handler resumes only when the resolved sender's `tenant_id` and `contact_id` both match the correlated engagement: a quoted message id cannot cross a tenant boundary, and a shared number stays bound to the party that was contacted. Every duplicate, unknown, late, invalid, or mismatched record is acknowledged and logged without a callback. An event this stage does not own writes nothing, including no `INMSG#` row, and logs `inbound.ignored reason=not_owned` with `kind` `status`, `button`, `text`, `opt_out`, or `media`. A status whose recipient has one waiting engagement, and a reply with exactly one waiting engagement for that sender, stay owned. `STOP` and `UNSUBSCRIBE` are recorded only for a sender already in this stage's phone registry. A WhatsApp image, audio, document, video, or sticker id is copied onto the normalized message so an unmatched photo is acknowledged instead of retried.
 
 `oerf.platform.inbound.handler` covers steps 1 and 2, both halves of step 4, media storage in step 5, and the resume. `JOIN` in step 3 is not in that module yet and remains open.
 
@@ -678,8 +681,7 @@ Mudita's other ticket numbers in this table are ownership for coordination. They
 
 Post this:
 
-> Interface contract v1.40 is in `docs/interfaces.md`. Please sign the row for your ticket.
+> Interface contract v1.41 is in `docs/interfaces.md`. Please sign the row for your ticket.
 >
 > Already decided: env vars use `*_TABLE_NAME` / `*_BUCKET_NAME` (301 acked). Role is `cognito:groups`. Tenant is `custom:tenant_id` on the pool (AddCustomAttributes) and on the access token (pre-token trigger). Dashboard actions are `POST /incidents/{id}/actions` with `confirm_transfer`, `pick_option`, or `cancel` and a client `action_id`, queued to SQS. Incident key is `TENANT#{tid}#INC#{iid}`. `GET /incidents` uses GSI1 `TENANT#{tid}#STATUS#{state}`. `SendTaskSuccess` is inbound only. WebSocket subscriptions are incident (sanitized full event) or tenant list (summary: incident_id, state, stage, version); no ALL. Simulator readings keep tenant_id and shipment_id; ingest trusts `DEVICE#{id}` and drops a mismatch. Lifecycle delivery is the incident stream (`oerf-stream-broadcaster`); there is no EventBridge `IncidentStateChanged` consumer. Reports are versioned HTML; the report role does not send SES.
->
-> OERF-201–207 names are still blank. Reply on your row if this matches what you will build. Owner sign-off of this file is still pending.
+> OERF-201–207 names are still blank. Reply on your row if this matches what you will build. Vivek (OERF-206) has signed off; remaining owner sign-offs are pending.

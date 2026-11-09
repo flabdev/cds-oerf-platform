@@ -26,13 +26,13 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from infra.naming import Stage
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _IMAGE = _REPO_ROOT / "oerf" / "platform" / "agent" / "agentcore"
 _DOCKERFILE = _IMAGE / "Dockerfile"
 IDLE_TIMEOUT = Duration.seconds(60)
 MAX_LIFETIME = Duration.minutes(5)
-_LOG_GROUP = "/aws/vendedlogs/bedrock-agentcore/oerf_agent"
-_RUNTIME_NAME = "oerf_agent"
 
 
 class AgentCoreRuntime(Construct):
@@ -43,6 +43,7 @@ class AgentCoreRuntime(Construct):
         scope: Construct,
         construct_id: str,
         *,
+        stage: Stage,
         incident_table: dynamodb.ITable,
         tenant_table: dynamodb.ITable,
         guardrail_resources: list[str],
@@ -68,7 +69,7 @@ class AgentCoreRuntime(Construct):
         self.execution_role = iam.Role(
             self,
             "AgentRuntimeExecutionRole",
-            role_name="oerf-agent-runtime",
+            role_name=stage.res("agent-runtime"),
             assumed_by=iam.ServicePrincipal(
                 "bedrock-agentcore.amazonaws.com",
                 conditions={
@@ -89,7 +90,7 @@ class AgentCoreRuntime(Construct):
         log_group = logs.LogGroup(
             self,
             "LogGroup",
-            log_group_name=_LOG_GROUP,
+            log_group_name=stage.agent_log_group(),
             retention=logs.RetentionDays.ONE_MONTH,
             removal_policy=RemovalPolicy.DESTROY,
         )
@@ -103,7 +104,7 @@ class AgentCoreRuntime(Construct):
         self.runtime = agentcore.Runtime(
             self,
             "Runtime",
-            runtime_name=_RUNTIME_NAME,
+            runtime_name=stage.agent_runtime_name(),
             description="advisory decision support; writes nothing",
             agent_runtime_artifact=agentcore.AgentRuntimeArtifact.from_image_uri(
                 image_asset.image_uri
@@ -134,7 +135,7 @@ class AgentCoreRuntime(Construct):
         self.caller_role = iam.Role(
             self,
             "AgentCallerRole",
-            role_name="oerf-agent-caller",
+            role_name=stage.res("agent-caller"),
             assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
         )
         self.caller_role.add_to_policy(

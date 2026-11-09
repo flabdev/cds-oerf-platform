@@ -1,4 +1,4 @@
-/** Cognito sign-in and dashboard API calls. A missing config keeps the sample desk. */
+/** Cognito sign-in and dashboard API calls. Incomplete settings keep the sample desk. */
 
 import { readTransitions } from "./states.js";
 
@@ -11,18 +11,18 @@ export const VERIFIER_KEY = "oerf.codeVerifier";
 
 const STORED_KEYS = [ID_TOKEN_KEY, ACCESS_TOKEN_KEY, VERIFIER_KEY];
 
-export function liveConfig(env) {
-  const apiUrl = trimSlash(env?.VITE_API_URL);
-  const domain = trimSlash(env?.VITE_COGNITO_DOMAIN).replace(/^https:\/\//, "");
+export function liveConfig(settings) {
+  const apiUrl = trimSlash(settings?.apiUrl);
+  const domain = trimSlash(settings?.cognitoDomain).replace(/^https:\/\//, "");
   // Dashboard hosted-UI client (OerfApiStack UserPoolClientId), not the HTTP API client.
-  const clientId = String(env?.VITE_USER_POOL_CLIENT_ID || "").trim();
+  const clientId = String(settings?.userPoolClientId || "").trim();
   // OerfComputeStack output WebSocketApiUrl. One WebSocket for the dashboard.
-  const wsUrl = trimSlash(env?.VITE_WS_URL);
+  const wsUrl = trimSlash(settings?.wsUrl);
   if (!apiUrl || !domain || !clientId) {
     return { mode: "demo" };
   }
   // Vite proxies /api to RestApiUrl so localhost does not need API CORS.
-  const liveApiUrl = env?.DEV ? "/api" : apiUrl;
+  const liveApiUrl = settings?.dev ? "/api" : apiUrl;
   return { mode: "live", apiUrl: liveApiUrl, domain, clientId, wsUrl };
 }
 

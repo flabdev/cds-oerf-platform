@@ -49,6 +49,7 @@ def _png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
     raw = b"".join(b"\x00" + bytes(rgb) * width for _ in range(height))
     header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
     payload = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+    payload += chunk(b"tEXt", b"fixture_kind\x00generated-placeholder")
     payload += chunk(b"IDAT", zlib.compress(raw))
     return payload + chunk(b"IEND", b"")
 
