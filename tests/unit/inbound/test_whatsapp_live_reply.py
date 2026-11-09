@@ -45,6 +45,7 @@ class _Callbacks:
 def _ports() -> tuple[DynamoPhoneRegistry, DynamoEngagementStore, InboundDependencies, _Callbacks]:
     client = FakeDynamoClient()
     seed_runtime(client, TENANT, "t1", apply=True, routing_table=ROUTING)
+    seed_runtime(client, TENANT, "t2", apply=True, routing_table=ROUTING)
     registry = DynamoPhoneRegistry(client, ROUTING, TENANT)
     store = DynamoEngagementStore(client, INCIDENT, ROUTING, clock=lambda: NOW)
     callbacks = _Callbacks()
@@ -63,19 +64,24 @@ def _send(
     engagement_id: str,
     token: str,
     provider: FakeProvider | None = None,
+    *,
+    tenant_id: str = "t1",
+    incident_id: str = "INC-000003",
+    contact_id: str = "C-T1-DRV",
+    shipment_id: str = "PH-2841",
 ) -> Engagement:
     recipient = resolve_party_address(
-        "t1", "driver", "C-T1-DRV", registry=registry, parameters=None, live=False
+        tenant_id, "driver", contact_id, registry=registry, parameters=None, live=False
     )
     send_rung(
         OutboundRequest(
-            tenant_id="t1",
-            incident_id="INC-000003",
+            tenant_id=tenant_id,
+            incident_id=incident_id,
             engagement_id=engagement_id,
             role="driver",
             template_id="driver_checkin",
-            facts={"shipment_id": "PH-2841", "temperature_c": "8.6"},
-            contact_id="C-T1-DRV",
+            facts={"shipment_id": shipment_id, "temperature_c": "8.6"},
+            contact_id=contact_id,
             recipient=recipient,
             channels=("whatsapp",),
         ),
@@ -89,7 +95,7 @@ def _send(
         providers={"whatsapp": provider or FakeProvider("whatsapp", simulated=True)},
         messages=MESSAGES,
     )
-    opened = store.get("t1", "INC-000003", engagement_id)
+    opened = store.get(tenant_id, incident_id, engagement_id)
     assert opened is not None
     return opened
 
@@ -141,10 +147,15 @@ def _entry(message: dict, *, wrapped: bool = False) -> dict:
     return {"id": "503131219501234", "changes": [change]}
 
 
-def _text(sender: str = DRIVER, *, context: str | None = None) -> dict:
+def _text(
+    sender: str = DRIVER,
+    *,
+    context: str | None = None,
+    message_id: str = "wamid.inbound-text",
+) -> dict:
     message: dict = {
         "from": sender,
-        "id": "wamid.inbound-text",
+        "id": message_id,
         "timestamp": 1761645643,
         "type": "text",
         "text": {"body": "Running"},
@@ -210,6 +221,61 @@ def test_quoted_button_with_an_unknown_context_uses_the_sender(kind: str) -> Non
     assert _reply_text(callbacks) == expected
 
 
+def test_unquoted_replies_isolate_three_concurrent_drivers_and_incidents() -> None:
+    registry, store, dependencies, callbacks = _ports()
+    drivers = (
+        ("C-T1-DRV", DRIVER, "INC-000003", ENGAGEMENT, TOKEN, "PH-2841"),
+        ("C-T1-DRV-2", "+15550100012", "INC-000004", "ENG-INC-000004", "token-2", "PH-2842"),
+        ("C-T1-DRV-3", "+15550100013", "INC-000005", "ENG-INC-000005", "token-3", "PH-2843"),
+    )
+    opened: dict[str, Engagement] = {}
+    provider = FakeProvider("whatsapp", simulated=True)
+    for contact_id, phone, incident_id, engagement_id, token, shipment_id in drivers:
+        if contact_id != "C-T1-DRV":
+            registry.register_contact("t1", contact_id, "driver", phone)
+        opened[engagement_id] = _send(
+            store,
+            registry,
+            engagement_id,
+            token,
+            provider,
+            tenant_id="t1",
+            incident_id=incident_id,
+            contact_id=contact_id,
+            shipment_id=shipment_id,
+        )
+
+    for index, (contact_id, phone, incident_id, engagement_id, token, _shipment_id) in enumerate(
+        drivers, start=1
+    ):
+        body = _notification(
+            _entry(_text(phone.lstrip("+"), message_id=f"wamid.free-text-{index}")),
+            message_id=f"sns-free-text-{index}",
+        )
+
+        assert process_message(body, dependencies) == "resumed"
+        assert callbacks.calls[-1]["taskToken"] == token
+        answered = store.get("t1", incident_id, engagement_id)
+        assert answered is not None and answered.status == "ANSWERED"
+        for other in drivers[index:]:
+            (
+                _other_contact,
+                _other_phone,
+                other_incident,
+                other_engagement,
+                _token,
+                _shipment,
+            ) = other
+            waiting = store.get("t1", other_incident, other_engagement)
+            assert waiting is not None and waiting.status == "WAITING"
+
+    assert [call["taskToken"] for call in callbacks.calls] == [TOKEN, "token-2", "token-3"]
+    assert all(
+        store.get(item.tenant_id, item.incident_id, item.engagement_id).status == "ANSWERED"
+        for item in opened.values()
+    )
+
+
 def test_quoted_reply_with_the_stored_id_resumes_directly() -> None:
     registry, store, dependencies, callbacks = _ports()
     provider = FakeProvider("whatsapp", simulated=True)
@@ -261,8 +327,20 @@ def test_a_reply_from_another_tenants_number_is_ignored(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     registry, store, dependencies, callbacks = _ports()
-    opened = _send(store, registry, ENGAGEMENT, TOKEN)
+    provider = FakeProvider("whatsapp", simulated=True)
+    opened = _send(store, registry, ENGAGEMENT, TOKEN, provider=provider)
     registry.register_contact("t2", "C-T2-DRV", "driver", OTHER_NUMBER)
+    other_tenant = _send(
+        store,
+        registry,
+        "ENG-T2-INC-000001-driver-diagnose",
+        "task-token-t2-driver",
+        provider,
+        tenant_id="t2",
+        incident_id="INC-T2-000001",
+        contact_id="C-T2-DRV",
+        shipment_id="VX-3101",
+    )
     stored = store.for_address("whatsapp", "+15550100001")
     assert stored
     store.register_outbound(WAMID, stored[0])
@@ -272,6 +350,7 @@ def test_a_reply_from_another_tenants_number_is_ignored(
 
     assert callbacks.calls == []
     assert store.get("t1", "INC-000003", ENGAGEMENT) == opened
+    assert store.get("t2", "INC-T2-000001", other_tenant.engagement_id) == other_tenant
     text = capsys.readouterr().out
     assert OTHER_NUMBER not in text
     assert "does not own" in text
