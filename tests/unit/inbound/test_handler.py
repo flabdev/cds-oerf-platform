@@ -332,6 +332,123 @@ def test_a_driver_cannot_resume_another_drivers_quoted_engagement(setup_inbound)
     assert engagements.get("trusted-tenant", "incident-1", "engagement-1").status == "WAITING"
 
 
+def test_three_drivers_each_resume_only_their_own_engagement(setup_inbound) -> None:
+    """B5: three simultaneous shipments, one address per driver (ADR-016).
+
+    Each driver's unquoted free text must resume only that driver's incident,
+    and each driver must be reachable through its own registered address.
+    """
+
+    deps, engagements, registry, callbacks, first = setup_inbound
+    engagements.register_address("whatsapp", "+15550000001", first)
+    numbers = {1: "+15550000001"}
+    tokens = {1: "secret-task-token"}
+    for index in (2, 3):
+        number = f"+1555000000{index}"
+        numbers[index] = number
+        tokens[index] = f"task-token-{index}"
+        registry.register_contact("trusted-tenant", f"contact-{index}", "driver", number)
+        opened = engagements.open_engagement(
+            "trusted-tenant",
+            f"incident-{index}",
+            f"engagement-{index}",
+            "driver",
+            "confirm",
+            "policy-1",
+            tokens[index],
+            {"shipment_id": f"ship-{index}"},
+            contact_id=f"contact-{index}",
+            rung=1,
+            deadline=DEADLINE,
+        )
+        engagements.register_outbound(f"outbound-{index}", opened)
+        engagements.register_address("whatsapp", number, opened)
+
+    for index in (1, 2, 3):
+        body = {**_provider(f"three-{index}", text=f"dock {index}"), "from": numbers[index]}
+        body.pop("context_msg_id")
+        assert process_message(body, deps) == "resumed"
+        assert callbacks.calls[-1]["taskToken"] == tokens[index]
+
+    assert len(callbacks.calls) == 3
+    states = [
+        engagements.get("trusted-tenant", f"incident-{index}", f"engagement-{index}").status
+        for index in (1, 2, 3)
+    ]
+    assert states == ["ANSWERED", "ANSWERED", "ANSWERED"]
+
+
+def test_free_text_naming_another_shipment_stays_with_its_own_driver(setup_inbound) -> None:
+    """Text is never used for routing: naming another shipment changes nothing."""
+
+    deps, engagements, registry, callbacks, first = setup_inbound
+    engagements.register_address("whatsapp", "+15550000001", first)
+    registry.register_contact("trusted-tenant", "contact-2", "driver", "+15550000002")
+    second = engagements.open_engagement(
+        "trusted-tenant",
+        "incident-2",
+        "engagement-2",
+        "driver",
+        "confirm",
+        "policy-1",
+        "second-task-token",
+        {"shipment_id": "ship-2"},
+        contact_id="contact-2",
+        rung=1,
+        deadline=DEADLINE,
+    )
+    engagements.register_address("whatsapp", "+15550000002", second)
+
+    # Driver 2 writes driver 1's shipment id into free text with no quote.
+    body = {
+        **_provider("free-text-1", text="ship-1 looks fine but I am at dock 9"),
+        "from": "+15550000002",
+    }
+    body.pop("context_msg_id")
+
+    assert process_message(body, deps) == "resumed"
+    assert len(callbacks.calls) == 1
+    assert callbacks.calls[0]["taskToken"] == "second-task-token"
+    assert engagements.get("trusted-tenant", "incident-1", "engagement-1").status == "WAITING"
+    assert engagements.get("trusted-tenant", "incident-2", "engagement-2").status == "ANSWERED"
+
+
+def test_a_second_tenants_driver_cannot_reach_another_tenants_engagement(setup_inbound) -> None:
+    """T2 isolation is unchanged: a t2 number only ever resumes t2's engagement."""
+
+    deps, engagements, registry, callbacks, first = setup_inbound
+    engagements.register_address("whatsapp", "+15550000001", first)
+    registry.register_contact("other-tenant", "contact-t2", "driver", "+15550000009")
+    t2 = engagements.open_engagement(
+        "other-tenant",
+        "incident-t2",
+        "engagement-t2",
+        "driver",
+        "confirm",
+        "policy-1",
+        "t2-task-token",
+        {"shipment_id": "ship-t2"},
+        contact_id="contact-t2",
+        rung=1,
+        deadline=DEADLINE,
+    )
+    engagements.register_outbound("outbound-t2", t2)
+    engagements.register_address("whatsapp", "+15550000009", t2)
+
+    # A t2 free-text reply resumes t2 and leaves t1 waiting.
+    t2_reply = {**_provider("t2-1", text="yes"), "from": "+15550000009"}
+    t2_reply.pop("context_msg_id")
+    assert process_message(t2_reply, deps) == "resumed"
+    assert callbacks.calls[-1]["taskToken"] == "t2-task-token"
+    assert engagements.get("trusted-tenant", "incident-1", "engagement-1").status == "WAITING"
+
+    # A t2 quote of t1's outbound message is still refused by the ownership check.
+    cross_tenant = {**_provider("t2-2", text="yes"), "from": "+15550000009"}
+    assert process_message(cross_tenant, deps) == "ignored"
+    assert engagements.get("trusted-tenant", "incident-1", "engagement-1").status == "WAITING"
+    assert callbacks.calls[-1]["taskToken"] == "t2-task-token"
+
+
 def test_media_evidence_is_stored_and_key_is_forwarded(setup_inbound) -> None:
     deps, _engagements, _registry, callbacks, opened = setup_inbound
     stored: list[tuple[str, str, str, str, str | None]] = []

@@ -1020,6 +1020,117 @@ def test_ph2841_engagement_happy_path_reaches_answered() -> None:
     assert data["shipment_id"] == "PH-2841"
 
 
+def _walk_engagement(
+    definition: dict, data: dict, reply_text: str, limit: int = 30, stop_at=frozenset()
+):
+    """Walk the engagement graph with deterministic replies and the real handlers.
+
+    Returns ``(visited, data)``. The walk stops when it reaches a ``Pass`` end
+    state, or right after it runs a state named in ``stop_at`` - the loop-back
+    edges (``ResetLadder``, ``HandleCallback``) otherwise never terminate.
+    """
+
+    from oerf.platform.cadence.engage import handler as cadence_handler
+    from oerf.platform.cadence.engagement_lifecycle import handler as lifecycle_handler
+    from oerf.platform.cadence.interpret import handler as interpret_handler
+
+    states = definition["States"]
+    current = definition["StartAt"]
+    visited: list[str] = []
+    for _ in range(limit):
+        visited.append(current)
+        state = states[current]
+        if state["Type"] == "Choice":
+            current = evaluate_choice(state, data)
+        elif state["Type"] == "Wait":
+            current = state["Next"]
+        elif state["Type"] == "Pass":
+            return visited, data
+        elif state["Type"] == "Task":
+            if state["Resource"].endswith(".waitForTaskToken"):
+                data = dict(data)
+                data["reply"] = {"text": reply_text}
+                current = state["Next"]
+            else:
+                step_name = state["Parameters"]["Payload"]["step_name"]
+                payload = {"step_name": step_name, "workflow": data}
+                if step_name in {"EngagementComputeNextRung", "EngagementAdvanceRung"}:
+                    data = cadence_handler(payload, None)
+                elif step_name == "EngagementInterpret":
+                    data = interpret_handler(payload, None)
+                elif step_name in {
+                    "EngagementHandleCallback",
+                    "EngagementResetLadder",
+                    "EngagementFinalQuestion",
+                    "EngagementApplyExhaustAction",
+                }:
+                    data = lifecycle_handler(payload, None)
+                elif step_name == "EngagementSendOneWay":
+                    _assign(data, state.get("ResultPath") or "$.one_way", {"status": "simulated"})
+                else:
+                    raise AssertionError(step_name)
+                current = state["Next"]
+        else:
+            raise AssertionError(state["Type"])
+        if visited[-1] in stop_at:
+            return visited, data
+    raise AssertionError("engagement simulation did not terminate")
+
+
+def test_engagement_call_me_pauses_for_the_configured_callback_role() -> None:
+    """C9 (ADR-024/030): CALL ME pauses for the mapped role without extending exhaustion."""
+
+    definition = json.loads((ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8"))
+    states = definition["States"]
+    data = {
+        "tenant_id": "t1",
+        "incident_id": "INC-000001",
+        "shipment_id": "PH-2841",
+        "engagement_id": "ENG-INC-000001-driver-diagnose",
+        "role": "driver",
+        "ask": "diagnose",
+        "policy_id": "critical_field",
+        "facts": {"shipment_id": "PH-2841"},
+    }
+
+    visited, final = _walk_engagement(
+        definition, dict(data), "call me", stop_at=frozenset({"HandleCallback"})
+    )
+
+    assert "HandleCallback" in visited
+    assert states["HandleCallback"]["Next"] == "CallbackPause"
+    # The callback role is the tenant's mapping, and it becomes the engaged role.
+    assert final["role"] == "fleet_supervisor"
+    assert final["callback_requested_by"] == "driver"
+    assert final["deadline"] == final["callback"]["deadline"]
+
+
+def test_engagement_free_text_takes_clarify_and_resets_the_ladder() -> None:
+    """C9: an unrecognised reply clarifies; the ladder resets and re-plans."""
+
+    definition = json.loads((ASL_PATH.parent / "engage_party.asl.json").read_text(encoding="utf-8"))
+    states = definition["States"]
+    data = {
+        "tenant_id": "t1",
+        "incident_id": "INC-000001",
+        "shipment_id": "PH-2841",
+        "engagement_id": "ENG-INC-000001-driver-diagnose",
+        "role": "driver",
+        "ask": "diagnose",
+        "policy_id": "critical_field",
+        "facts": {"shipment_id": "PH-2841"},
+    }
+
+    visited, final = _walk_engagement(
+        definition, dict(data), "just some words", stop_at=frozenset({"ResetLadder"})
+    )
+
+    assert "ResetLadder" in visited
+    # A reset clears the stale reply and loops back to ComputeNextRung.
+    assert states["ResetLadder"]["Next"] == "ComputeNextRung"
+    assert "response" not in final and "reply" not in final
+
+
 def test_cancelled_input_terminates_without_running_business_steps() -> None:
     event = dict(INITIAL_EVENT, cancel_requested=True)
 
