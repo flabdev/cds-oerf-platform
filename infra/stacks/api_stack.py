@@ -153,6 +153,10 @@ class OerfApiStack(Stack):
         )
         # SEC-12: CSP is not on the managed SecurityHeadersPolicy. The desk
         # talks to Cognito and API Gateway, so connect-src names those hosts.
+        # execute-api hosts follow this stack's region (infra/app.py CDK env).
+        # style-src stays 'self': meters, ticks, and the allowance slider use
+        # SVG presentation attributes instead of style="".
+        execute_api = f"*.execute-api.{self.region}.amazonaws.com"
         self.dashboard_headers = cloudfront.ResponseHeadersPolicy(
             self,
             "DashboardSecurityHeaders",
@@ -163,9 +167,8 @@ class OerfApiStack(Stack):
                         "default-src 'none'; base-uri 'self'; object-src 'none'; "
                         "frame-ancestors 'none'; form-action 'self'; "
                         "img-src 'self' data:; style-src 'self'; script-src 'self'; "
-                        "font-src 'self'; connect-src 'self' https://*.amazoncognito.com "
-                        "https://*.execute-api.us-east-1.amazonaws.com "
-                        "wss://*.execute-api.us-east-1.amazonaws.com"
+                        f"font-src 'self'; connect-src 'self' https://*.amazoncognito.com "
+                        f"https://{execute_api} wss://{execute_api}"
                     ),
                     override=True,
                 ),

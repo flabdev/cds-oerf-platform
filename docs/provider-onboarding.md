@@ -150,3 +150,6 @@ for row in channel_readiness():
 
 A row is never `production_ready`. `external_approval` means this repository
 cannot see the account owner's approval, so the channel is not live.
+
+Related: [bedrock-access.md](bedrock-access.md), [agentcore.md](agentcore.md),
+[runbook-deploy.md](runbook-deploy.md) (dev stage).
