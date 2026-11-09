@@ -174,16 +174,62 @@ function Icon({ name }) {
   );
 }
 
+const RATIO_BAR_MAX = 1000;
+const ALLOWANCE_SLIDER_MIN = 10;
+const ALLOWANCE_SLIDER_SPAN = 80;
+
+function clampRatio(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, n));
+}
+
+function RatioBar({ value, fillClass }) {
+  return (
+    <svg
+      className="ratio-bar"
+      viewBox={`0 0 ${RATIO_BAR_MAX} 10`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect className={fillClass} x="0" y="0" width={clampRatio(value) * RATIO_BAR_MAX} height="10" />
+    </svg>
+  );
+}
+
 function Meter({ allowance, size = "thin" }) {
   const unknown = allowance.ratio == null;
   return (
     <span
       className={`meter ${size} ${unknown ? "unknown" : allowance.level}`}
-      style={unknown ? undefined : { "--share": allowance.ratio }}
       aria-hidden="true"
     >
-      <i />
+      {unknown ? null : <RatioBar value={allowance.ratio} fillClass="meter-fill" />}
     </span>
+  );
+}
+
+function MeterTicks({ total }) {
+  const ticks = Math.max(Math.round(Number(total) / 5), 1);
+  if (!Number.isFinite(ticks) || ticks < 2) {
+    return null;
+  }
+  return (
+    <svg
+      className="hero-meter-ticks"
+      viewBox={`0 0 ${RATIO_BAR_MAX} 10`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {Array.from({ length: ticks - 1 }, (_, index) => {
+        const x = ((index + 1) / ticks) * RATIO_BAR_MAX;
+        return <line key={index} x1={x} x2={x} y1="0" y2="10" />;
+      })}
+    </svg>
   );
 }
 
@@ -676,16 +722,35 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
                   </p>
                   <div className="allowance-edit">
                     <label className="sr-only" htmlFor="allowance-range">Allowance in minutes</label>
-                    <input
-                      id="allowance-range"
-                      type="range"
-                      min="10"
-                      max="90"
-                      step="5"
-                      value={allowance}
-                      style={{ "--fill": (Number(allowance) - 10) / 80 }}
-                      onChange={(event) => setAllowance(event.target.value)}
-                    />
+                    <div className="allowance-slider">
+                      <svg
+                        className="allowance-slider-track"
+                        viewBox={`0 0 ${ALLOWANCE_SLIDER_SPAN} 6`}
+                        preserveAspectRatio="none"
+                        aria-hidden="true"
+                        focusable="false"
+                      >
+                        <rect className="allowance-slider-rest" width={ALLOWANCE_SLIDER_SPAN} height="6" rx="3" />
+                        <rect
+                          className="allowance-slider-fill"
+                          width={Math.max(
+                            0,
+                            Math.min(ALLOWANCE_SLIDER_SPAN, Number(allowance) - ALLOWANCE_SLIDER_MIN),
+                          )}
+                          height="6"
+                          rx="3"
+                        />
+                      </svg>
+                      <input
+                        id="allowance-range"
+                        type="range"
+                        min="10"
+                        max="90"
+                        step="5"
+                        value={allowance}
+                        onChange={(event) => setAllowance(event.target.value)}
+                      />
+                    </div>
                     <label className="minutes">
                       <input
                         type="number"
@@ -770,9 +835,9 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
                     aria-valuenow={kpiAllowance.remaining ?? undefined}
                     className="hero-meter"
                     key={current.incident_id}
-                    style={kpiAllowance.total ? { "--ticks": Math.max(Math.round(kpiAllowance.total / 5), 1) } : undefined}
                   >
                     <Meter allowance={kpiAllowance} size="big" />
+                    {kpiAllowance.total ? <MeterTicks total={kpiAllowance.total} /> : null}
                   </div>
                   <p className="hero-note">{heroNote(view)}</p>
                 </section>
@@ -842,7 +907,7 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
                           </span>
                           <span className="option-figure">{option.etaLabel || option.projectedLabel}</span>
                           <span className="option-bar" aria-hidden="true">
-                            {option.bar != null ? <i style={{ "--use": option.bar }} /> : null}
+                            {option.bar != null ? <RatioBar value={option.bar} fillClass="option-bar-fill" /> : null}
                           </span>
                           <span className="option-fit">
                             {option.feasible ? "Feasible" : "Infeasible"}

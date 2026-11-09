@@ -129,7 +129,7 @@ The cold-chain label follows the deployed state machine. Assess runs after the d
 
 ## Stacks
 
-CDK (Python) deploys four stacks in us-east-1. There is no VPC. GitHub Actions assumes an OIDC deploy role. The data stack does not depend on the compute stack: state machines refer to Lambda functions by name.
+CDK (Python) deploys four application stacks in us-east-1. There is no VPC. The same app can synth **main** or **dev** (`-c stage=main` or `-c stage=dev`). Dev CloudFormation names are `*-dev` and physical names are `oerf-dev-*`. GitHub Actions assumes an OIDC deploy role (`OerfGitHubDeployRole` on main, `OerfGitHubDeployRole-dev` from `develop`). The data stack does not depend on the compute stack: state machines refer to Lambda functions by name.
 
 | Stack | What it holds |
 | --- | --- |
@@ -137,8 +137,9 @@ CDK (Python) deploys four stacks in us-east-1. There is no VPC. GitHub Actions a
 | `OerfComputeStack` | Ingest, the step and engagement functions, the channel router, inbound, evidence analyzer, report generator, the HTTP API (GET), and the WebSocket API and broadcaster. |
 | `OerfApiStack` | The desk: CloudFront, the React app, and the REST API for query and action. Synth includes it when `dashboard:enabled` is true. |
 | `OerfObservabilityStack` | Alarms and the operations dashboard. |
+| `OerfCiStack-dev` | Dev only: GitHub deploy role for the `dev` environment. Laptop, not GitHub, deploys this stack. |
 
-Decisions are indexed in [docs/adr/README.md](adr/README.md). The wire contract is [docs/interfaces.md](interfaces.md).
+Decisions are indexed in [docs/adr/README.md](adr/README.md). The wire contract is [docs/interfaces.md](interfaces.md). Operator pages: [deploy](runbook-deploy.md), [dev bootstrap](../infra/bootstrap/README.md), [Bedrock](bedrock-access.md), [AgentCore](agentcore.md), [provider onboarding](provider-onboarding.md).
 
 ## What is live, mocked, and planned
 
@@ -154,7 +155,7 @@ Decisions are indexed in [docs/adr/README.md](adr/README.md). The wire contract 
 | Email | The router can send with SESv2 when email is not mocked and a source address is set. A custom sending domain is not configured. |
 | Voice | The cadence can name a voice rung. The router does not place a call. The text tells the person to reply on WhatsApp. |
 | Evidence | Inbound stores media with `GetWhatsAppMessageMedia`. The analyzer calls Nova Lite and a guardrail when Bedrock is not mocked (`channels:live`). Otherwise it is mocked. |
-| AgentCore | Off unless `agentcore:enabled` is true. The runtime is ARM64. It advises. Interpret keeps the rule result. |
+| AgentCore | Off unless `agentcore:enabled` is true (dev laptop and GitHub deploys pass true). The runtime is ARM64. It advises. Interpret keeps the rule result. |
 | Desk | The React desk, Cognito hosted UI, REST query and action, and the WebSocket updates. The API stack is behind `dashboard:enabled`. |
 | Reports | `oerf-report-generator` is deployed and writes HTML, or PDF when WeasyPrint is selected. The GenerateReport state still calls the stub, so the machine does not invoke that function yet. |
 | Encryption | AWS managed keys. Table encryption with the managed KMS key is behind `dynamodb:kmsManaged` and defaults off ([ADR-033](adr/ADR-033-encryption-at-rest.md)). |

@@ -314,6 +314,12 @@ class OerfDataStack(Stack):
                     id="expire-evidence",
                     expiration=Duration.days(90),
                     noncurrent_version_expiration=Duration.days(30),
+                    transitions=[
+                        s3.Transition(
+                            storage_class=s3.StorageClass.INFREQUENT_ACCESS,
+                            transition_after=Duration.days(30),
+                        )
+                    ],
                 )
             ],
             removal_policy=RemovalPolicy.RETAIN,

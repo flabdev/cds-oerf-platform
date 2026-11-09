@@ -151,6 +151,51 @@ class OerfApiStack(Stack):
             encryption=s3.BucketEncryption.S3_MANAGED,
             enforce_ssl=True,
         )
+        # SEC-12: CSP is not on the managed SecurityHeadersPolicy. The desk
+        # talks to Cognito and API Gateway, so connect-src names those hosts.
+        # execute-api hosts follow this stack's region (infra/app.py CDK env).
+        # style-src stays 'self': meters, ticks, and the allowance slider use
+        # SVG presentation attributes instead of style="".
+        execute_api = f"*.execute-api.{self.region}.amazonaws.com"
+        self.dashboard_headers = cloudfront.ResponseHeadersPolicy(
+            self,
+            "DashboardSecurityHeaders",
+            comment="OERF desk CSP and security headers",
+            security_headers_behavior=cloudfront.ResponseSecurityHeadersBehavior(
+                content_security_policy=cloudfront.ResponseHeadersContentSecurityPolicy(
+                    content_security_policy=(
+                        "default-src 'none'; base-uri 'self'; object-src 'none'; "
+                        "frame-ancestors 'none'; form-action 'self'; "
+                        "img-src 'self' data:; style-src 'self'; script-src 'self'; "
+                        f"font-src 'self'; connect-src 'self' https://*.amazoncognito.com "
+                        f"https://{execute_api} wss://{execute_api}"
+                    ),
+                    override=True,
+                ),
+                content_type_options=cloudfront.ResponseHeadersContentTypeOptions(
+                    override=True
+                ),
+                frame_options=cloudfront.ResponseHeadersFrameOptions(
+                    frame_option=cloudfront.HeadersFrameOption.DENY,
+                    override=True,
+                ),
+                referrer_policy=cloudfront.ResponseHeadersReferrerPolicy(
+                    referrer_policy=cloudfront.HeadersReferrerPolicy.NO_REFERRER,
+                    override=True,
+                ),
+                strict_transport_security=cloudfront.ResponseHeadersStrictTransportSecurity(
+                    access_control_max_age=Duration.seconds(31536000),
+                    include_subdomains=True,
+                    preload=True,
+                    override=True,
+                ),
+                xss_protection=cloudfront.ResponseHeadersXSSProtection(
+                    protection=True,
+                    mode_block=True,
+                    override=True,
+                ),
+            ),
+        )
         self.distribution = cloudfront.Distribution(
             self,
             "DashboardDistribution",
@@ -158,7 +203,7 @@ class OerfApiStack(Stack):
             default_behavior=cloudfront.BehaviorOptions(
                 origin=origins.S3BucketOrigin.with_origin_access_control(self.dashboard_bucket),
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-                response_headers_policy=cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
+                response_headers_policy=self.dashboard_headers,
             ),
         )
         dashboard_origin = f"https://{self.distribution.distribution_domain_name}"
