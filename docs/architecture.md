@@ -147,7 +147,7 @@ Decisions are indexed in [docs/adr/README.md](adr/README.md). The wire contract 
 | --- | --- |
 | Sensor to incident | Live path: EventBridge, ingest, the shipment lock, `StartExecution`. The sensor is the simulator. |
 | Cold-chain steps | All eighteen states have their own function. OPEN, GatherContext, Diagnose, Assess, Approval, SecureFacility, Act, Verify, RecordContainment, BeginDisposition, HandleReopen, GenerateReport, QA, Close, NoResponse, RecordFailure, Escalate, and Cancel. The shared stub is no longer invoked by the machine. |
-| Engagement | Cadence, interpret, and router sends are live, including the task-token wait. Callback handling, ladder reset, the final question, and the exhaustion action still call the stub. |
+| Engagement | Cadence, interpret, lifecycle, and router sends are live, including the task-token wait. Callback handling, ladder reset, the final question, and the exhaustion action are wired to `oerf-engage-lifecycle`; the engagement definition no longer references the stub. |
 | WhatsApp | End User Messaging Social, sent only by the channel router. Mocked unless `channels:live` is true. The event destination is created when a WhatsApp Business account id is set. |
 | Acknowledgement and decision notice | The router sends them as one-way WhatsApp messages after a valid reply and after Act. |
 | Inbound resume and cancel | Live. Resume is `SendTaskSuccess`. Cancel is `StopExecution` on the cold-chain execution, then `CANCELLED` and the lock is released. |

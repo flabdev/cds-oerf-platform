@@ -87,7 +87,7 @@ def task_states() -> dict:
 
 
 def test_real_and_stub_tasks_are_listed() -> None:
-    """Wired tasks name their functions. The remaining tasks stay on the stub."""
+    """Real cold-chain tasks name their functions; stub tasks are explicit."""
 
     cold = task_states()
     engagement = {

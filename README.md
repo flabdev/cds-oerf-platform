@@ -164,7 +164,7 @@ Package markers with no behavior: `oerf/__init__.py`, `oerf/platform/__init__.py
 | `domains/cold_chain_excursion/messages.json` | Message catalog. Only `driver_checkin` has SMS text. |
 | `domains/cold_chain_excursion/statemachine.asl.json` | The `cold_chain_excursion_v1` state machine definition. Every task is `arn:aws:states:::lambda:invoke` pointed at that phase's own function placeholder (`__STEP_*_ARN__`), which the data stack replaces with the function's real ARN at synth time. The shared `__STUB_ARN__` is no longer in the definition. Retries, timeouts, failure routing, and the approval and QA choice gates live here. |
 | `domains/cold_chain_excursion/steps/*.py` | One entry point per phase (`open`, `context`, `diagnose`, `approval`, `secure_facility`, …). Each calls `runtime.run_step` with its phase name, so a task carrying another phase's step is rejected instead of running under the wrong role. `workflow_stub.py` remains the offline simulator's deterministic response and is no longer invoked by the deployed machine. |
-| `domains/cold_chain_excursion/steps/workflow_stub.py` | Temporary deterministic handler shared by every step. It stamps `step_name` into the workflow and returns the shape the following choice state reads. Real handlers replace it step by step. |
+| `domains/cold_chain_excursion/steps/workflow_stub.py` | Deterministic handler kept for the offline simulator and unit fixtures. It stamps `step_name` into the workflow and returns the shape the following choice state reads. No deployed cold-chain task invokes it after C0 wired the last phases. |
 | `domains/__init__.py` | Makes `domains` an importable package so the JSON ships with the install. |
 | `sim/seed/load.py` | Loads a tenant seed directory. Repeatable, no AWS. |
 | `sim/seed/t1/tenant.json` | Tenant `t1`, timezone `Asia/Kolkata`, demo clock multiplier 20. |
@@ -203,7 +203,7 @@ A normal read loads `ACTIVE`, takes the number in `version`, and then loads that
 | File | Role |
 | --- | --- |
 | `infra/app.py` | CDK app entry. Requires a resolved AWS account and registers the data stack. |
-| `infra/stacks/data_stack.py` | Platform, tenant, incident, and routing tables; evidence and report buckets; event bus `oerf-events`; the `cold_chain_excursion_v1` state machine with its execution role and the stub Lambda every task invokes; Cognito groups `platform_admin`, `tenant_admin`, and `ops_user`. |
+| `infra/stacks/data_stack.py` | Platform, tenant, incident, and routing tables; evidence and report buckets; event bus `oerf-events`; the `cold_chain_excursion_v1` state machine with its execution role and phase-specific Lambda handlers (plus the offline workflow stub); Cognito groups `platform_admin`, `tenant_admin`, and `ops_user`. |
 | `cdk.json` | CDK toolkit config. |
 | `infra/__init__.py`, `infra/stacks/__init__.py` | Package markers. |
 
@@ -234,8 +234,8 @@ The incident logic does not call these AWS resources yet. The DynamoDB adapters 
 | `tests/unit/agent/test_idempotency.py` | First write wins for a repeated step, another step and another tenant are separate keys, and the stored record cannot be mutated. |
 | `tests/unit/support/fake_dynamo.py` | Fake low-level DynamoDB client used by the adapter tests. |
 | `tests/unit/test_app.py` | CDK app fails clearly when no account is resolved. |
-| `tests/unit/test_data_stack.py` | Data-stack resources and outputs, plus the state machine's execution role, the stub Lambda, the placeholder-to-ARN substitution, and the retry and catch blocks on every task. |
-| `tests/unit/test_statemachine_definition.py` | The ASL document itself: every transition resolves, terminal states have no `Next`, the failure path records then escalates, an execution timeout guards against orphans, and the stub contract walks the happy path, a rejected approval, a declined facility, and a reopened containment to a terminal state. |
+| `tests/unit/test_data_stack.py` | Data-stack resources and outputs, plus the state machine's execution role, the offline workflow-stub Lambda, the phase-placeholder-to-ARN substitution, and the retry and catch blocks on every task. |
+| `tests/unit/test_statemachine_definition.py` | The ASL document itself: every transition resolves, phase-specific tasks map to their function placeholders, terminal states have no `Next`, retry/catch and failure routing are checked, and the offline workflow-stub contract walks representative paths. |
 | `tests/unit/test_workflow_stub.py` | Stub handler output shapes for the happy path, `Close`, the failure handlers, and that the incoming workflow is never mutated. |
 
 ## Project config
