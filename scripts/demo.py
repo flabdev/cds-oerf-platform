@@ -595,12 +595,12 @@ def machine_active(stepfunctions: Any, arn: str, expected_name: str) -> bool:
 
 
 def driver_parameter_exists(ssm: Any, tenant_id: str) -> bool:
-    """True when every seeded driver contact has a parameter; values are discarded."""
+    """True when every live-enabled seeded driver has a parameter; values are discarded."""
 
     drivers = [
         str(contact["contact_id"])
         for contact in load_seed(tenant_id)["contacts"]
-        if contact.get("party_role") == "driver"
+        if contact.get("party_role") == "driver" and contact.get("live_contacts") is not False
     ]
     if not drivers:
         return False
