@@ -54,7 +54,10 @@ _DEFAULT_MODEL_ID = "amazon.nova-lite-v1:0"
 #: ``generate_report`` reads and writes the report bucket, ``no_response``
 #: records the timeout on the same row it created, and ``open`` pins the
 #: snapshot the ingest rule already wrote.
-_NO_UPDATE_PHASES = frozenset({"qa", "diagnose", "open", "generate_report", "no_response"})
+_NO_UPDATE_PHASES = frozenset(
+    {"qa", "diagnose", "open", "generate_report", "no_response", "verify"}
+)
+
 
 def _with_dev_name(
     stage: Stage,
@@ -934,6 +937,7 @@ class OerfComputeStack(Stack):
                     update=phase not in _NO_UPDATE_PHASES,
                     delete=phase == "close",
                     query_tenant=phase == "diagnose",
+                    query_incident=phase == "verify",
                 )
             if phase == "generate_report":
                 self._grant_report_step(function, data_stack)
@@ -948,6 +952,7 @@ class OerfComputeStack(Stack):
         delete: bool,
         tenant: bool = True,
         query_tenant: bool = False,
+        query_incident: bool = False,
     ) -> None:
         """The actions ``run_step`` actually calls. No table-wide grant helper."""
 
@@ -974,6 +979,13 @@ class OerfComputeStack(Stack):
                 iam.PolicyStatement(
                     actions=["dynamodb:Query"],
                     resources=[data_stack.tenant_table.table_arn],
+                )
+            )
+        if query_incident:
+            function.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=["dynamodb:Query"],
+                    resources=[incident],
                 )
             )
 

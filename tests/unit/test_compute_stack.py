@@ -351,7 +351,7 @@ _STEP_DYNAMO = {
     "oerf-step-diagnose": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"},
     "oerf-step-assess": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
     "oerf-step-act": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
-    "oerf-step-verify": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
+    "oerf-step-verify": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"},
     "oerf-step-qa": {"dynamodb:GetItem", "dynamodb:PutItem"},
     "oerf-step-close": {
         "dynamodb:GetItem",
@@ -368,8 +368,8 @@ _STEP_DYNAMO = {
         "dynamodb:DeleteItem",
     },
     # C0: the last eight states. OPEN pins config and reads a gate; the
-    # containment and disposition steps walk one edge each; GenerateReport
-    # queries EVT#/READ# and NoResponse records a timeout without moving.
+    # containment and disposition steps walk one edge each. Verify and
+    # GenerateReport query the incident timeline/readings.
     "oerf-step-open": {"dynamodb:GetItem", "dynamodb:PutItem"},
     "oerf-step-approval": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
     "oerf-step-secure-facility": {
