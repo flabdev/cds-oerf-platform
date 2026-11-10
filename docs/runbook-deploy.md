@@ -126,7 +126,7 @@ Use profile `Fission-OERF`, Python 3.11 with `aws_cdk` importable, and the oerfd
 
 After deploy, `OerfApiStack-dev` output `DashboardUrl` is the desk. Open `<DashboardUrl>/config.json` and confirm `apiUrl` and `userPoolClientId` are set. Do not paste that file into a ticket. Dev does not use a hand-built `VITE_*` upload.
 
-Post-deploy checks (stack `*_COMPLETE`, `oerf-dev-cold-chain` and `oerf-dev-engage-party` exist, runtime seed dry-run) still need A6 to finish. `make demo-*` names on main (`oerf-cold-chain`) are not the dev names until A7.
+Post-deploy checks, now that the first dev deploy has run: stack status `*_COMPLETE`, `oerf-dev-cold-chain` and `oerf-dev-engage-party` exist, and `python -m scripts.seed_runtime` dry-run against the dev tables. `make demo-sensor` takes `SHIPMENT` and `DEVICE` (defaults `PH-2841` and `RF-7781`). `make demo-*` targets follow `STAGE` once the stage-aware script change is on this branch.
 
 ## First deploy from main
 

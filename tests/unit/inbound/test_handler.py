@@ -16,6 +16,7 @@ from oerf.platform.inbound.handler import (
     handler,
     process_message,
 )
+from oerf.platform.sandbox.audience import MemoryAudienceStore, list_drivers
 from oerf.platform.sandbox.join import MemorySandboxStore
 
 NOW = datetime(2026, 10, 20, 10, 20, tzinfo=UTC)
@@ -729,4 +730,87 @@ def test_join_opens_a_sandbox_session_and_does_not_resume() -> None:
     assert rejected == "sandbox_rejected"
     assert sandbox.join_count("2026-10-20") == 1
     assert sandbox.sessions()[0].tenant_id == "sbx"
+
+
+def test_join_is_ignored_when_the_stage_disables_sandbox() -> None:
+    sandbox = MemorySandboxStore()
+    deps = InboundDependencies(
+        InboundDedupe(clock=lambda: NOW),
+        MemoryEngagementStore(clock=lambda: NOW),
+        CallbackClient(),
+        MemoryPhoneRegistry(),
+        sandbox=sandbox,
+        sandbox_join_enabled=False,
+        clock=lambda: NOW,
+    )
+
+    result = process_message(
+        {
+            "provider": "whatsapp",
+            "message_id": "join-off",
+            "from": "+155500019001",
+            "timestamp": "2026-10-20T10:20:00Z",
+            "text": "JOIN",
+        },
+        deps,
+    )
+
+    assert result == "ignored"
+    assert sandbox.sessions() == []
+
+
+def test_join_driver_registers_one_shipment_and_hides_the_number(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    registry = MemoryPhoneRegistry()
+    audience = MemoryAudienceStore(pool=("PH-2841", "PH-2842"))
+    deps = InboundDependencies(
+        InboundDedupe(clock=lambda: NOW),
+        MemoryEngagementStore(clock=lambda: NOW),
+        CallbackClient(),
+        registry,
+        audience=audience,
+        sandbox_join_enabled=True,
+        clock=lambda: NOW,
+    )
+    created = process_message(
+        {
+            "provider": "whatsapp",
+            "message_id": "aud-1",
+            "from": "+155500019001",
+            "timestamp": "2026-10-20T10:20:00Z",
+            "text": "JOIN DRIVER",
+        },
+        deps,
+    )
+    second = process_message(
+        {
+            "provider": "whatsapp",
+            "message_id": "aud-2",
+            "from": "+155500019002",
+            "timestamp": "2026-10-20T10:21:00Z",
+            "text": "join driver",
+        },
+        deps,
+    )
+    full = process_message(
+        {
+            "provider": "whatsapp",
+            "message_id": "aud-3",
+            "from": "+155500019003",
+            "timestamp": "2026-10-20T10:22:00Z",
+            "text": "JOIN DRIVER",
+        },
+        deps,
+    )
+
+    assert created == "audience_created"
+    assert second == "audience_created"
+    assert full == "audience_full"
+    listed = list_drivers(audience, NOW)
+    assert [row["shipment_id"] for row in listed] == ["PH-2841", "PH-2842"]
+    assert all(row["number"].startswith("•••") for row in listed)
+    logged = capsys.readouterr().out
+    assert "155500019001" not in logged
+    assert "155500019002" not in logged
 

@@ -111,6 +111,8 @@ def main(
         if args.command == "prep":
             _prepare_session(session, tenant_id)
         elif args.command == "sensor":
+            if not args.shipment or not args.device:
+                raise DemoError("sensor requires --shipment and --device")
             publish_excursion(
                 _resources(session),
                 _client(session, "events"),

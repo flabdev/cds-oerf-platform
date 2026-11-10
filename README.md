@@ -253,7 +253,9 @@ ruff check .
 
 ## Deploy
 
-Deployment is a manual run of `.github/workflows/deploy.yml` (`workflow_dispatch`). The job runs only when `github.ref` is `refs/heads/main`. Concurrent runs share the group `cdk-deploy-us-east-1` and wait their turn.
+`.github/workflows/deploy.yml` deploys **dev** from `develop` and does not deploy main. Main keeps the older role and the stack names without `-dev`. The desk procedure is [docs/runbook-deploy.md](docs/runbook-deploy.md). The laptop and CI-role steps are [infra/bootstrap/README.md](infra/bootstrap/README.md).
+
+A push to `develop` deploys dev after CI, with the dashboard and AgentCore on and `channels:live` from the GitHub environment variable `CHANNELS_LIVE`. Concurrent runs share one group per stage.
 
 The account and the deploy role come from repository Actions variables:
 

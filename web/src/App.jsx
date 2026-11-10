@@ -46,6 +46,7 @@ const SAMPLE = [
   {
     incident_id: "INC-000001",
     state: "ASSESSING",
+    driver_label: "Mudita",
     stage: "ASSESSING",
     shipment_id: "PH-2841",
     product_profile_id: "PP-2-8-45",
@@ -797,6 +798,7 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
                   <StatePill state={current.state} />
                 </div>
                 <p className="head-meta">
+                  {view.driverName ? <span>Driver {view.driverName}</span> : null}
                   {view.profileName ? <span>{view.profileName}</span> : null}
                   {view.rangeLabel ? <span>Safe range {view.rangeLabel}</span> : null}
                   {view.opened ? (
