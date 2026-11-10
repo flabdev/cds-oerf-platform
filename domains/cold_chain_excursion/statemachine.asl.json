@@ -516,7 +516,7 @@
           "dedupe_key.$": "States.Format('{}:decision', $.incident_id)"
         }
       },
-      "ResultPath": "$.driver_notice",
+      "ResultPath": null,
       "TimeoutSeconds": 30,
       "Retry": [
         {
@@ -536,7 +536,7 @@
           "ErrorEquals": [
             "States.ALL"
           ],
-          "ResultPath": "$.driver_notice_error",
+          "ResultPath": null,
           "Next": "CancelAfterNotifyContinue?"
         }
       ],
@@ -563,7 +563,7 @@
           "dedupe_key.$": "States.Format('{}:decision', $.incident_id)"
         }
       },
-      "ResultPath": "$.driver_notice",
+      "ResultPath": null,
       "TimeoutSeconds": 30,
       "Retry": [
         {
@@ -583,7 +583,7 @@
           "ErrorEquals": [
             "States.ALL"
           ],
-          "ResultPath": "$.driver_notice_error",
+          "ResultPath": null,
           "Next": "CancelAfterNotifyDivert?"
         }
       ],
