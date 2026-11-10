@@ -32,6 +32,13 @@ from scripts.demo_reply import ROUTER_FUNCTION
 from scripts.seed_runtime import seed_runtime
 from tests.unit.support.fake_dynamo import FakeDynamoClient
 
+
+@pytest.fixture(autouse=True)
+def _main_stage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STAGE", "main")
+    monkeypatch.setenv("ALLOW_MAIN", "1")
+
+
 NOW = datetime(2026, 10, 28, 15, 13, 5, tzinfo=UTC)
 TENANT_TABLE = "tenant"
 ROUTING_TABLE = "routing"
@@ -206,13 +213,13 @@ def test_preflight_live_checks_the_driver_parameter_without_printing_it(
         "get_parameter",
         {
             "Parameter": {
-                "Name": "/oerf/dev/demo-numbers/t1/driver/C-T1-DRV",
+                "Name": "/oerf/demo-numbers/t1/driver/C-T1-DRV",
                 "Value": PHONE,
                 "Type": "SecureString",
             }
         },
         {
-            "Name": "/oerf/dev/demo-numbers/t1/driver/C-T1-DRV",
+            "Name": "/oerf/demo-numbers/t1/driver/C-T1-DRV",
             "WithDecryption": True,
         },
     )

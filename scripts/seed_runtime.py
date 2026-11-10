@@ -15,12 +15,14 @@ rows, the ``PHONE#`` index on the routing table, and publishes the cold-chain
 config when no config is stored or ``PP-2-8-45`` is not already 45 minutes.
 Contact phones come from ``SYNTHETIC_E164`` (the fictional 555-01xx range).
 It does not read SSM, write a real number, write fault codes or incidents, or
-publish readings unless ``--live-contacts`` is set. That flag reads
-``/oerf/demo-numbers/{tenant}/{role}`` for non-drivers and
-``/oerf/dev/demo-numbers/{tenant}/driver/{contact_id}`` for drivers, writing
-one ``PHONE#`` ownership row per seeded contact. It prints role and count only.
-A missing parameter is skipped. An empty or invalid value stops the command.
-``--roles`` limits the read to those seeded roles.
+publish readings unless ``--live-contacts`` is set. That flag reads one stage
+prefix for every role: ``{prefix}/{tenant}/driver/{contact_id}`` for drivers
+and ``{prefix}/{tenant}/{role}`` for everyone else. The prefix is the stage
+(``/oerf/demo-numbers`` or ``/oerf/dev/demo-numbers``). ``DEMO_NUMBERS_PREFIX``
+is an explicit override and is logged. The command writes one ``PHONE#``
+ownership row per seeded contact and prints role and count only. A missing
+parameter is skipped. An empty or invalid value stops the command. ``--roles``
+limits the read to those seeded roles. ``--stage`` or ``STAGE`` is required.
 """
 
 from __future__ import annotations
@@ -35,11 +37,13 @@ from typing import Any
 from oerf.platform.agent.context import DOMAIN
 from oerf.platform.channels.address import (
     demo_number_name,
+    demo_numbers_prefix,
     driver_demo_number_name,
 )
 from oerf.platform.storage.dynamo import canonical_e164, contact_sk, key, phone_pk, s, text
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 from oerf.platform.tenancy.publisher import ConfigPublisher
+from scripts._stage import add_stage_argument, remember_stage, require_stack, resolve_stage
 from sim.seed.load import load_seed
 
 REGION = "us-east-1"
@@ -47,9 +51,7 @@ STACK = "OerfDataStack"
 DEMO_TENANTS = ("t1", "t2", "sbx")
 PROFILE_ID = "PP-2-8-45"
 #: Fictional NANP numbers. 555-0100 through 555-0199 are reserved for fiction.
-#: SSM ``/oerf/demo-numbers/{tenant}/{role}`` for non-drivers and
-#: ``/oerf/dev/demo-numbers/{tenant}/driver/{contact_id}`` for drivers. The
-#: values are never logged.
+#: Live numbers stay in SSM under the stage prefix. The values are never logged.
 SYNTHETIC_E164 = {
     "driver": "+15550100001",
     "ops": "+15550100002",
@@ -145,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     """
 
     args = _parser().parse_args(argv)
+    target = remember_stage(resolve_stage(args.stage))
     tenant_id = tenants_for(args.tenant)[0]
     chosen = _role_filter(args.roles)
     if chosen is not None and not args.live_contacts:
@@ -152,7 +155,9 @@ def main(argv: list[str] | None = None) -> int:
     import boto3
 
     session = boto3.Session(profile_name=args.profile, region_name=REGION)
-    table_name, routing_table = table_names(session, args.stack)
+    stack = require_stack(args.stack, target.data_stack)
+    table_name, routing_table = table_names(session, stack)
+    target.announce(tables={"tenant": table_name, "routing": routing_table})
     client = session.client("dynamodb", region_name=REGION)
     counts = seed_runtime(
         client, table_name, tenant_id, apply=args.yes, routing_table=routing_table
@@ -168,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
             session.client("ssm", region_name=REGION),
             apply=args.yes,
             roles=chosen,
+            numbers_prefix=target.demo_numbers_prefix(),
         )
         for role, count in roles.items():
             print(f"{verb} {tenant_id} live-contacts {role} {count}")
@@ -285,21 +291,24 @@ def seed_live_contacts(
     *,
     apply: bool,
     roles: Collection[str] | None = None,
+    numbers_prefix: str | None = None,
 ) -> dict[str, int]:
     """Write one ``PHONE#`` row per seeded contact from that contact's SSM number.
 
     The return value is ``role -> row count`` for parameters that exist. It
     does not contain the number. A missing parameter is printed and omitted.
     Non-driver roles share one SecureString per role. Each driver has its own
-    ``/oerf/dev/demo-numbers/{tenant}/driver/{contact_id}`` parameter, and the
-    ``PHONE#`` row keeps that contact id, which is what inbound ownership
-    compares.
+    ``{prefix}/{tenant}/driver/{contact_id}`` parameter, and the ``PHONE#``
+    row keeps that contact id, which is what inbound ownership compares.
+    ``numbers_prefix`` is that one prefix. Omitted, both roles use
+    :func:`demo_numbers_prefix`.
     """
 
     if tenant_id not in DEMO_TENANTS:
         raise ValueError(f"unknown tenant {tenant_id!r}")
     if not routing_table:
         raise SystemExit("live contacts need the routing table")
+    prefix = numbers_prefix if numbers_prefix is not None else demo_numbers_prefix()
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in load_seed(tenant_id)["contacts"]:
         grouped.setdefault(str(row["party_role"]), []).append(row)
@@ -317,7 +326,10 @@ def seed_live_contacts(
         for row in live_rows:
             contact_id = str(row["contact_id"])
             name = _demo_number_name(
-                tenant_id, role, contact_id if role == "driver" else None
+                tenant_id,
+                role,
+                contact_id if role == "driver" else None,
+                prefix=prefix,
             )
             if name not in cache:
                 cache[name] = _demo_number(ssm, name)
@@ -346,12 +358,18 @@ def seed_live_contacts(
     return counts
 
 
-def _demo_number_name(tenant_id: str, role: str, contact_id: str | None) -> str:
+def _demo_number_name(
+    tenant_id: str,
+    role: str,
+    contact_id: str | None,
+    *,
+    prefix: str,
+) -> str:
     """The SSM name for one seeded contact. Drivers are contact-scoped."""
 
     if role == "driver" and contact_id is not None:
-        return driver_demo_number_name(tenant_id, contact_id)
-    return demo_number_name(tenant_id, role)
+        return driver_demo_number_name(tenant_id, contact_id, prefix=prefix)
+    return demo_number_name(tenant_id, role, prefix=prefix)
 
 
 def _demo_number(ssm: Any, name: str) -> str | None:
@@ -528,7 +546,8 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="Comma-separated roles for --live-contacts, for example driver,qa.",
     )
-    parser.add_argument("--stack", default=STACK)
+    parser.add_argument("--stack", default=None, help="Must be this stage's data stack")
+    add_stage_argument(parser)
     return parser
 
 

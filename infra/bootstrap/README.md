@@ -97,6 +97,26 @@ aws cloudformation list-stack-resources \
 
 Set that value as the GitHub environment variable `SHARED_INBOUND_TOPIC_ARN` on the `dev` environment. The deploy workflow passes `-c whatsapp:sharedInboundTopicArn=...` when the variable is non-empty. A laptop deploy passes the same flag. Leave the flag off only when the ARN is not known yet; dev then keeps a queue subscription to its own topic, and nothing publishes there.
 
+### Operator targets
+
+Day-to-day dev work uses the `dev-*` Make targets. They set `STAGE=dev` and resolve every name from that stage. The `demo-*` and `reset-*` targets require `STAGE`. `STAGE=main` also needs `ALLOW_MAIN=1`. There is no silent main default.
+
+```text
+make dev-preflight PROFILE=<aws-profile>
+make dev-seed      PROFILE=<aws-profile> TENANT=t1
+make dev-users     PROFILE=<aws-profile> TENANT=t1 ROLE=ops_user EMAIL=ops@example.com
+make dev-sensor    PROFILE=<aws-profile> ACCOUNT=<account-id> TENANT=t1 SHIPMENT=<shipment> DEVICE=<device> SCENARIO=excursion
+make dev-reply     PROFILE=<aws-profile> ACCOUNT=<account-id> TENANT=t1
+make dev-reset     PROFILE=<aws-profile> TENANT=t1
+make dev-check     PROFILE=<aws-profile> TENANT=t1
+make dev-diff      PROFILE=<aws-profile> ACCOUNT=<account-id>
+make dev-deploy    PROFILE=<aws-profile> ACCOUNT=<account-id>
+```
+
+`dev-diff` and `dev-deploy` are the laptop form of the develop workflow. They resolve `WA_PHONE_NUMBER_ID`, `ALARM_EMAIL`, `SHARED_INBOUND_TOPIC_ARN`, and `CHANNELS_LIVE` in the workflow order: an environment variable, then `gh variable get <NAME> --env dev`, then the repository variable. The phone id then falls back to `/oerf/dev/whatsapp/phone-number-id`. A context key is omitted only when that value is empty. The phone id is required only when `channels:live` is true. A deployed router phone id, alarm email subscription, or dev subscription to main's inbound topic refuses an empty resolution unless `DEV_DEPLOY_ALLOW_OMIT=1`. They build `web/` and pass `stage=dev`, `account`, `agentcore:enabled=true`, `dashboard:enabled=true`, `desk:publish=true`, `auth:managedLogin=true`, and `channels:live`, plus `whatsapp:phoneNumberId`, `whatsapp:sharedInboundTopicArn`, and `alarms:email` when those values resolve. They do not pass `whatsapp:wabaId`. Normal dev deploys happen by merging to `develop`. These two targets are for a laptop.
+
+A live rehearsal also needs: a demo-number parameter for each driver contact with `live_contacts` true (`make dev-preflight` prints the names, not the values), the dev desk user from `make dev-users` (the password is typed, not passed), `CHANNELS_LIVE=true` on the dev environment when channels should be live, and Bedrock model access for the dev runtime. See [run-the-demo.md](../../docs/run-the-demo.md).
+
 ### 1. Bootstrap `CDKToolkit-dev`
 
 ```bash

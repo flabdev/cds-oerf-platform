@@ -8,9 +8,9 @@ The body is a provider message: ``channel`` is ``whatsapp``, and there is no
         --shipment PH-2841 --role driver --button running
 
 The address comes from :func:`resolve_party_address`. Mocked channels use the
-contact registry. Live drivers use ``/oerf/dev/demo-numbers/{tenant}/driver/{contact_id}``;
-other roles use ``/oerf/demo-numbers/{tenant}/{role}``.
+contact registry. Live channels use one stage prefix for every role.
 The command prints the shipment and the message id. It does not print the number.
+``--stage`` or ``STAGE`` is required. ``main`` also needs ``ALLOW_MAIN=1``.
 """
 
 from __future__ import annotations
@@ -24,10 +24,15 @@ from pathlib import Path
 from typing import Any
 
 from oerf.platform.channels.address import AddressError, channels_are_live, resolve_party_address
+from scripts._stage import (
+    REGION,
+    add_stage_argument,
+    remember_stage,
+    resolve_stage,
+    stack_outputs,
+)
 
-REGION = "us-east-1"
-DATA_STACK = "OerfDataStack"
-COMPUTE_STACK = "OerfComputeStack"
+#: Main-stage router name. Callers that have a stage use ``OperatorStage.router_function``.
 ROUTER_FUNCTION = "oerf-channel-router"
 TEMPLATE_NAME = "oerf_driver_checkin"
 _TEMPLATES = Path(__file__).resolve().parent / "whatsapp" / "templates.json"
@@ -62,14 +67,19 @@ def button_labels() -> dict[str, str]:
     return labels
 
 
-def channels_live_from_configuration(variables: Mapping[str, str] | None) -> bool:
+def channels_live_from_configuration(
+    variables: Mapping[str, str] | None,
+    *,
+    function_name: str = ROUTER_FUNCTION,
+) -> bool:
     """True when the deployed router has WhatsApp mock mode off.
 
     A missing flag is a failure. The laptop environment is not the source.
+    ``function_name`` is the stage's router, used only in the error text.
     """
 
     if not isinstance(variables, Mapping) or "USE_MOCK_WHATSAPP" not in variables:
-        raise SystemExit(f"cannot read USE_MOCK_WHATSAPP on {ROUTER_FUNCTION}")
+        raise SystemExit(f"cannot read USE_MOCK_WHATSAPP on {function_name}")
     return channels_are_live(str(variables["USE_MOCK_WHATSAPP"]))
 
 
@@ -130,15 +140,6 @@ def _reply_text(button: str | None, text: str | None) -> str:
     return found
 
 
-def _outputs(cloudformation: Any, stack_name: str) -> dict[str, str]:
-    response = cloudformation.describe_stacks(StackName=stack_name)
-    return {
-        item["OutputKey"]: item["OutputValue"]
-        for item in response["Stacks"][0].get("Outputs") or []
-        if item.get("OutputKey") and item.get("OutputValue")
-    }
-
-
 def _contact_id(item: Mapping[str, Any], role: str) -> str:
     attribute = item.get(role)
     value = attribute.get("S") if isinstance(attribute, dict) else None
@@ -166,6 +167,7 @@ def _address(
     live: bool,
     registry: Any,
     parameters: Any,
+    numbers_prefix: str | None = None,
 ) -> str:
     try:
         return resolve_party_address(
@@ -175,6 +177,7 @@ def _address(
             registry=registry,
             parameters=parameters,
             live=live,
+            prefix=numbers_prefix,
         )
     except AddressError as exc:
         raise SystemExit(str(exc)) from exc
@@ -190,7 +193,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--role", required=True)
     parser.add_argument("--button")
     parser.add_argument("--text")
+    add_stage_argument(parser)
     args = parser.parse_args(argv)
+    target = remember_stage(resolve_stage(args.stage))
     text = _reply_text(args.button, args.text)
 
     import boto3
@@ -198,15 +203,21 @@ def main(argv: list[str] | None = None) -> None:
     session = boto3.Session(profile_name=args.profile, region_name=REGION)
     lambdas = session.client("lambda")
     try:
-        configuration = lambdas.get_function_configuration(FunctionName=ROUTER_FUNCTION)
+        configuration = lambdas.get_function_configuration(FunctionName=target.router_function)
     except Exception:
-        raise SystemExit(f"cannot read USE_MOCK_WHATSAPP on {ROUTER_FUNCTION}") from None
+        raise SystemExit(f"cannot read USE_MOCK_WHATSAPP on {target.router_function}") from None
     variables = configuration.get("Environment", {}).get("Variables")
-    live = channels_live_from_configuration(variables)
+    live = channels_live_from_configuration(variables, function_name=target.router_function)
 
     cloudformation = session.client("cloudformation")
-    data = _outputs(cloudformation, DATA_STACK)
-    compute = _outputs(cloudformation, COMPUTE_STACK)
+    data = stack_outputs(cloudformation, target.data_stack)
+    compute = stack_outputs(cloudformation, target.compute_stack)
+    target.announce(
+        tables={
+            "tenant": data.get("TenantTableName", ""),
+            "routing": data.get("RoutingTableName", ""),
+        }
+    )
     tenant_table = data.get("TenantTableName")
     routing_table = data.get("RoutingTableName")
     queue_url = compute.get("InboundQueueUrl")
@@ -240,6 +251,7 @@ def main(argv: list[str] | None = None) -> None:
         live=live,
         registry=registry,
         parameters=parameters,
+        numbers_prefix=target.demo_numbers_prefix(),
     )
     received_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     message = provider_message(sender=sender, text=text, received_at=received_at)

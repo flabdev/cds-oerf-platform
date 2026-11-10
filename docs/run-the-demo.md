@@ -2,16 +2,46 @@
 
 Operator commands for one cold-chain rehearsal. They run on a laptop, in `us-east-1`. They are not Lambdas and they are not part of CI.
 
-`PROFILE` is the AWS shared-config profile. `ACCOUNT` is the 12-digit account id that profile must be using. `TENANT` is `t1`, `t2`, or `sbx`. The commands refuse a caller in any other account before they read or write anything else. They do not print phone numbers, task tokens, ARNs, account ids, or raw payloads.
+`PROFILE` is the AWS shared-config profile. `ACCOUNT` is the 12-digit account id that profile must be using. `TENANT` is `t1`, `t2`, or `sbx`. `STAGE` is `main` or `dev`. There is no default. `main` also needs `ALLOW_MAIN=1`; without it the command stops before it calls AWS. The commands refuse a caller in any other account before they read or write anything else. They do not print phone numbers, task tokens, ARNs, account ids, or raw payloads.
 
 ```text
-make demo-preflight TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
-make demo-prep      TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
-make demo-sensor    TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
-make demo-cleanup   TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id>
+make demo-preflight TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1
+make demo-prep      TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1
+make demo-sensor    TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1
+make demo-cleanup   TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1
 ```
 
-`PROFILE`, `TENANT`, and `ACCOUNT` are required. A missing one stops Make before Python starts.
+`PROFILE`, `TENANT`, `ACCOUNT`, and `STAGE` are required. A missing one stops Make before Python starts. `STAGE=main` without `ALLOW_MAIN=1` stops the same way.
+
+## Dev stage
+
+Dev targets set `STAGE=dev`. They publish and read the dev names (`oerf-dev-events`, `OerfDataStack-dev`, `/oerf/dev/...`). They do not take `ALLOW_MAIN`.
+
+```text
+make dev-preflight PROFILE=<aws-profile>
+make dev-seed      PROFILE=<aws-profile> TENANT=t1
+make dev-users     PROFILE=<aws-profile> TENANT=t1 ROLE=ops_user EMAIL=ops@example.com
+make dev-sensor    PROFILE=<aws-profile> ACCOUNT=<account-id> TENANT=t1 SHIPMENT=PH-2841 DEVICE=RF-7781 SCENARIO=excursion
+make dev-reply     PROFILE=<aws-profile> ACCOUNT=<account-id> TENANT=t1
+make dev-reset     PROFILE=<aws-profile> TENANT=t1
+make dev-check     PROFILE=<aws-profile> TENANT=t1
+make dev-diff      PROFILE=<aws-profile> ACCOUNT=<account-id>
+make dev-deploy    PROFILE=<aws-profile> ACCOUNT=<account-id>
+```
+
+`dev-seed` runs `seed_runtime --yes` and then `verify_seed`. `TENANT` is `t1`, `t2`, or `sbx`. `dev-users` reads the password from the terminal; it is not an argument and it is not a file. `dev-sensor` publishes the scenario on `oerf-dev-events`. `dev-reset` applies a reseeded reset. `dev-check` is `verify_seed`. `dev-diff` and `dev-deploy` build `web/` and run CDK on the four `*-dev` stacks with the same context the dev workflow uses. Normal dev deploys happen by merging to `develop`. The laptop targets are for a rehearsal from this machine.
+
+`dev-deploy` resolves `WA_PHONE_NUMBER_ID`, `ALARM_EMAIL`, `SHARED_INBOUND_TOPIC_ARN`, and `CHANNELS_LIVE` the way the dev workflow does: an environment variable wins, then `gh variable get <NAME> --env dev`, then the repository variable. The phone id then falls back to `/oerf/dev/whatsapp/phone-number-id`. A context key is omitted only when that value is empty. The phone id is required only when channels are live. If the deployed dev router already has a phone id, the dev alarm topic already has an email subscription, or the dev compute stack already subscribes to main's inbound topic, an empty resolution stops before CDK. `DEV_DEPLOY_ALLOW_OMIT=1` allows that omission. The command prints the source of each value and whether it is set or omitted. It does not print the values.
+
+### Live rehearsal
+
+Before a live dev run:
+
+- Put one SSM parameter per driver contact that should be live: `/oerf/dev/demo-numbers/{tenant}/driver/{contact_id}`. Other roles use `/oerf/dev/demo-numbers/{tenant}/{role}`. `make dev-preflight` prints the names and whether each one exists. It does not print the values.
+- Set `live_contacts` true on those contacts in the seed. Contacts left false are skipped.
+- Create the dev desk user with `make dev-users` (an `example.com` address, password typed at the prompt).
+- Set `CHANNELS_LIVE=true` on the GitHub dev environment before the next develop deploy, or pass `CHANNELS_LIVE=true` to `make dev-deploy`.
+- Confirm the account can call the Bedrock model the dev runtime uses. A missing model access fails the first live interpret, not the deploy.
 
 For tenant `t1` the shipment and device default to `PH-2841` and `RF-7781`. Pass nothing else unless the rehearsal is for another seed row.
 
@@ -21,8 +51,8 @@ Deploy is a separate step. See [runbook-deploy.md](runbook-deploy.md).
 
 Checks the account and stops on the first wrong caller. A matching account then prints one `PASS` or `FAIL` line for each of these:
 
-- Stacks `OerfDataStack`, `OerfComputeStack`, `OerfApiStack`, and `OerfObservabilityStack` are in a `*_COMPLETE` status.
-- State machines `oerf-cold-chain` and `oerf-engage-party` exist.
+- The stage's four stacks are in a `*_COMPLETE` status. On main those are `OerfDataStack`, `OerfComputeStack`, `OerfApiStack`, and `OerfObservabilityStack`. On dev each name ends in `-dev`.
+- State machines `oerf-cold-chain` and `oerf-engage-party` exist on main. Dev uses `oerf-dev-cold-chain` and `oerf-dev-engage-party`.
 - A runtime-seed dry run would change nothing.
 
 Exit `0` only when every line is `PASS`.
@@ -35,7 +65,7 @@ The reset stops that tenant's `RUNNING` executions of `oerf-engage-party` and th
 
 ## demo-sensor
 
-Publishes two `TemperatureReading` events on the bus `oerf-events`, source `sim.reefer`: 8.1 °C, then 8.6 °C. Event time is thirty seconds apart. Wall time is four seconds apart. Two readings above 8 °C open the incident. One reading opens nothing.
+Publishes two `TemperatureReading` events on the stage bus (`oerf-events` on main, `oerf-dev-events` on dev), source `sim.reefer`: 8.1 °C, then 8.6 °C. Event time is thirty seconds apart. Wall time is four seconds apart. Two readings above 8 °C open the incident. One reading opens nothing.
 
 The command then waits up to 30 seconds for a new `{tenant}-INC-*` execution on `oerf-cold-chain`. Each run uses a new EventBridge id. Replaying the same id is ignored for 7 days, and prep does not clear those `INGEST#` rows.
 

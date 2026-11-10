@@ -1,9 +1,12 @@
 """Party address for one engagement send.
 
-Mocked channels read the contact registry. Live channels read
-``{DEMO_NUMBERS_PREFIX}/{tenant}/{role}`` from SSM. The value is never logged.
-The prefix defaults to ``/oerf/demo-numbers`` and can be set with
-``DEMO_NUMBERS_PREFIX``.
+Mocked channels read the contact registry. Live channels read one SSM prefix
+for every role. Drivers are ``{prefix}/{tenant}/driver/{contact_id}``. Other
+roles are ``{prefix}/{tenant}/{role}``. The value is never logged.
+
+The runtime prefix is ``DEMO_NUMBERS_PREFIX`` when that variable is set, and
+``/oerf/demo-numbers`` when it is not. Operator scripts pass the stage prefix
+instead, and treat ``DEMO_NUMBERS_PREFIX`` as an explicit override.
 """
 
 from __future__ import annotations
@@ -14,7 +17,6 @@ from typing import Protocol
 from oerf.platform.channels.registry import PhoneRegistry
 
 DEMO_NUMBERS_PREFIX = "/oerf/demo-numbers"
-DRIVER_DEMO_NUMBERS_PREFIX = "/oerf/dev/demo-numbers"
 
 
 def demo_numbers_prefix() -> str:
@@ -22,6 +24,14 @@ def demo_numbers_prefix() -> str:
 
     raw = os.environ.get("DEMO_NUMBERS_PREFIX", DEMO_NUMBERS_PREFIX).strip()
     return raw or DEMO_NUMBERS_PREFIX
+
+
+def _numbers_root(prefix: str | None) -> str:
+    raw = demo_numbers_prefix() if prefix is None else prefix
+    root = raw.strip().rstrip("/")
+    if not root.startswith("/"):
+        raise AddressError("a demo-number prefix must be an absolute SSM path")
+    return root
 
 
 class AddressError(ValueError):
@@ -40,33 +50,37 @@ def channels_are_live(mock_whatsapp: str | None = None) -> bool:
     return flag.strip().lower() == "false"
 
 
-def demo_number_name(tenant_id: str, role: str) -> str:
-    """The SSM name for one tenant role. The value is not part of the name."""
+def demo_number_name(tenant_id: str, role: str, *, prefix: str | None = None) -> str:
+    """The SSM name for one tenant role. The value is not part of the name.
+
+    ``prefix`` omitted uses :func:`demo_numbers_prefix`. Drivers use
+    :func:`driver_demo_number_name` so the contact id stays in the path.
+    """
 
     tenant = tenant_id.strip()
     party = role.strip()
     if not tenant or not party:
         raise AddressError("a demo-number parameter needs a tenant and a role")
-    return f"{demo_numbers_prefix()}/{tenant}/{party}"
+    return f"{_numbers_root(prefix)}/{tenant}/{party}"
 
 
 def driver_demo_number_name(
     tenant_id: str,
     contact_id: str,
     *,
-    prefix: str = DRIVER_DEMO_NUMBERS_PREFIX,
+    prefix: str | None = None,
 ) -> str:
-    """The SSM name for one driver's number; never the number itself.
+    """The SSM name for one driver's number. The number itself is not included.
 
-    Operator tooling defaults to the dev prefix. The runtime passes its
-    stage-specific demo-number prefix so the main stage never reads dev SSM.
+    ``prefix`` omitted uses :func:`demo_numbers_prefix`, the same root as
+    every other role. Callers that know the stage pass that stage's prefix.
     """
 
     tenant = tenant_id.strip()
     contact = contact_id.strip()
     if not tenant or not contact:
         raise AddressError("a driver demo-number parameter needs a tenant and contact")
-    return f"{prefix.rstrip('/')}/{tenant}/driver/{contact}"
+    return f"{_numbers_root(prefix)}/{tenant}/driver/{contact}"
 
 
 def resolve_party_address(
@@ -77,16 +91,21 @@ def resolve_party_address(
     registry: PhoneRegistry | None,
     parameters: ParameterReader | None,
     live: bool,
+    prefix: str | None = None,
 ) -> str:
-    """The address to send to. Live reads SSM. Mocked reads the registry."""
+    """The address to send to. Live reads SSM. Mocked reads the registry.
+
+    ``prefix`` omitted uses :func:`demo_numbers_prefix` for every role.
+    """
 
     if live:
         if parameters is None:
             raise AddressError("live channels need the demo-numbers parameter")
+        root = prefix if prefix is not None else demo_numbers_prefix()
         parameter_name = (
-            driver_demo_number_name(tenant_id, contact_id, prefix=demo_numbers_prefix())
+            driver_demo_number_name(tenant_id, contact_id, prefix=root)
             if role.strip() == "driver"
-            else demo_number_name(tenant_id, role)
+            else demo_number_name(tenant_id, role, prefix=root)
         )
         value = parameters.get(parameter_name).strip()
         if not value:

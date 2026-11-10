@@ -8,6 +8,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from scripts._stage import add_stage_argument, remember_stage, resolve_stage
 from sim.temperature import temperature_event
 
 SCENARIO_START = datetime.fromisoformat("2026-10-20T10:06:00+00:00")
@@ -115,8 +116,12 @@ def scenario_events(
     scenario: str,
     device_id: str = "RF-7781",
     start: datetime | None = None,
+    event_bus: str | None = None,
 ) -> list[dict[str, object]]:
-    """Return PutEvents readings for one named scenario."""
+    """Return PutEvents readings for one named scenario.
+
+    ``event_bus`` is the stage bus. Omitted, the reading resolver uses ``STAGE``.
+    """
 
     if scenario in EXCLUDED:
         raise ValueError(EXCLUDED[scenario])
@@ -133,6 +138,7 @@ def scenario_events(
                 seq=index,
                 lat=min(17.47, round(17.44 + (index - 1) * 0.0002, 6)),
                 lon=min(78.42, round(78.38 + (index - 1) * 0.001, 6)),
+                event_bus=event_bus,
             )
         )
     if scenario == "concurrent_duplicate":
@@ -151,13 +157,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--emit", choices=("eventbridge",), default="eventbridge")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--start", default=SCENARIO_START.isoformat())
+    add_stage_argument(parser)
     args = parser.parse_args(argv)
+    target = remember_stage(resolve_stage(args.stage))
+    print(target.summary(), file=sys.stderr)
     events = scenario_events(
         tenant_id=args.tenant,
         shipment_id=args.shipment,
         scenario=args.scenario,
         device_id=args.device,
         start=datetime.fromisoformat(args.start),
+        event_bus=target.event_bus,
     )
     payload = json.dumps(events, indent=2) + "\n"
     if args.out is None:

@@ -21,6 +21,7 @@ comes from ``--user-pool-id`` or the ``CognitoUserPoolId`` output of
 from __future__ import annotations
 
 import argparse
+import getpass
 import os
 import re
 import secrets
@@ -32,8 +33,15 @@ import boto3
 from botocore.exceptions import ClientError
 
 from oerf.platform.api.claims import TENANT_CLAIM
+from scripts._stage import (
+    REGION as STAGE_REGION,
+    add_stage_argument,
+    remember_stage,
+    require_stack,
+    resolve_stage,
+)
 
-REGION = "us-east-1"
+REGION = STAGE_REGION
 POOL_OUTPUT = "CognitoUserPoolId"
 ROLES = ("platform_admin", "tenant_admin", "ops_user")
 MIN_PASSWORD = 12
@@ -190,18 +198,20 @@ def main(
     """Parse arguments, then dry-run or apply. Injected clients skip the profile session."""
 
     args = _parser().parse_args(argv)
+    target = remember_stage(resolve_stage(args.stage))
+    target.announce()
     email = args.email.strip().lower()
     tenant = args.tenant.strip()
     problem = _input_problem(email, tenant)
     if problem:
         print(problem, file=sys.stderr)
         return 2
-    password, reveal, problem = _password_from_env(args.password_env)
+    password, reveal, problem = _password_from_env(args.password_env, prompt=args.prompt_password)
     if problem:
         print(problem, file=sys.stderr)
         return 2
     try:
-        pool, client = _clients(args, cognito, cloudformation)
+        pool, client = _clients(args, cognito, cloudformation, stack=target.data_stack)
         result = seed_user(
             client,
             SeedRequest(
@@ -226,15 +236,21 @@ def _parser() -> argparse.ArgumentParser:
         description="Create one demo Cognito user. Dry run unless --yes.",
     )
     parser.add_argument("--profile", required=True)
-    target = parser.add_mutually_exclusive_group(required=True)
+    target = parser.add_mutually_exclusive_group()
     target.add_argument("--user-pool-id")
     target.add_argument("--stack", help="Stack whose CognitoUserPoolId output is the pool")
     parser.add_argument("--tenant", required=True)
     parser.add_argument("--role", required=True, choices=ROLES)
     parser.add_argument("--email", required=True)
     parser.add_argument("--password-env", help="Environment variable holding the password")
+    parser.add_argument(
+        "--prompt-password",
+        action="store_true",
+        help="Read the password from the terminal. It is not an argument and it is not stored.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Report only (the default)")
     parser.add_argument("--yes", action="store_true", help="Create or update the user")
+    add_stage_argument(parser)
     return parser
 
 
@@ -242,6 +258,8 @@ def _clients(
     args: argparse.Namespace,
     cognito: object | None,
     cloudformation: object | None,
+    *,
+    stack: str,
 ) -> tuple[str, object]:
     if args.yes and args.dry_run:
         raise ValueError("pass either --yes or --dry-run")
@@ -254,10 +272,22 @@ def _clients(
         formed = cloudformation or session.client("cloudformation")
     if args.user_pool_id:
         return args.user_pool_id, client
-    return user_pool_id(formed, args.stack), client
+    return user_pool_id(formed, require_stack(args.stack, stack)), client
 
 
-def _password_from_env(name: str | None) -> tuple[str | None, bool, str | None]:
+def _password_from_env(
+    name: str | None, *, prompt: bool = False
+) -> tuple[str | None, bool, str | None]:
+    if prompt and name:
+        return None, False, "pass --prompt-password or --password-env, not both"
+    if prompt:
+        first = getpass.getpass("Password: ")
+        second = getpass.getpass("Password again: ")
+        if first != second:
+            return None, False, "passwords do not match"
+        if not password_meets_policy(first):
+            return None, False, "password does not meet the pool policy"
+        return first, False, None
     if not name:
         return None, True, None
     value = os.environ.get(name)

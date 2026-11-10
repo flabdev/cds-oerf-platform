@@ -15,7 +15,8 @@ from typing import Any
 import boto3
 
 from oerf.platform.channels.devices import verify_demo_devices
-from scripts.seed_runtime import REGION, STACK, table_names, tenants_for, verify_opt_in_contacts
+from scripts._stage import add_stage_argument, remember_stage, require_stack, resolve_stage
+from scripts.seed_runtime import REGION, table_names, tenants_for, verify_opt_in_contacts
 
 
 def verify_seed(client: Any, tenant_table: str, routing_table: str, tenant_id: str) -> list[str]:
@@ -33,11 +34,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Confirm demo device and contact seed rows.")
     parser.add_argument("--profile", required=True)
     parser.add_argument("--tenant", required=True)
-    parser.add_argument("--stack", default=STACK)
+    parser.add_argument("--stack", default=None, help="Must be this stage's data stack")
+    add_stage_argument(parser)
     args = parser.parse_args(argv)
+    target = remember_stage(resolve_stage(args.stage))
     tenant_id = tenants_for(args.tenant)[0]
     session = boto3.Session(profile_name=args.profile, region_name=REGION)
-    tenant_table, routing_table = table_names(session, args.stack)
+    tenant_table, routing_table = table_names(session, require_stack(args.stack, target.data_stack))
+    target.announce(tables={"tenant": tenant_table, "routing": routing_table})
     client = session.client("dynamodb")
     gaps = verify_seed(client, tenant_table, routing_table, tenant_id)
     if gaps:
