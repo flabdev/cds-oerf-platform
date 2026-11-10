@@ -233,6 +233,7 @@ class StepDependencies:
     config: ConfigReader | None = None
     facilities: FacilityCatalog | None = None
     reports: ReportPublisher | None = None
+    qa_reviews: Any | None = None
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
 
     def now(self) -> datetime:

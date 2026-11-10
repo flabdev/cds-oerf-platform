@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from botocore.exceptions import ClientError
 
+from oerf.platform.agent.qa_review import MemoryQAReviewStore
 from oerf.platform.channels.engagement import MemoryEngagementStore
 from oerf.platform.channels.registry import MemoryPhoneRegistry
 from oerf.platform.inbound.dedupe import InboundDedupe
@@ -46,7 +47,20 @@ def setup_inbound():
         def store(self, tenant_id, incident_id, message_id, media_id, mime_type):
             return None
 
-    deps = InboundDependencies(dedupe, engagements, callbacks, registry, _NoopEvidence())
+    qa_reviews = MemoryQAReviewStore()
+    qa_reviews.put(
+        tenant_id="trusted-tenant",
+        incident_id="incident-1",
+        task_token="qa-secret-token",
+    )
+    deps = InboundDependencies(
+        dedupe,
+        engagements,
+        callbacks,
+        registry,
+        _NoopEvidence(),
+        qa_reviews=qa_reviews,
+    )
     engagement = engagements.open_engagement(
         "trusted-tenant",
         "incident-1",
@@ -555,6 +569,56 @@ def test_invalid_dashboard_action_is_not_resumed(setup_inbound) -> None:
     deps, _engagements, _registry, callbacks, _opened = setup_inbound
 
     assert process_message(_dashboard(action="pick_option", option_id=None), deps) == "invalid"
+    assert callbacks.calls == []
+
+
+def test_qa_review_resumes_the_private_token_with_the_verdict(setup_inbound) -> None:
+    deps, _engagements, _registry, callbacks, _opened = setup_inbound
+    body = _dashboard(
+        action="review_qa",
+        approved=True,
+        disposition="release",
+        role="tenant_admin",
+    )
+
+    assert process_message(body, deps) == "resumed"
+
+    assert len(callbacks.calls) == 1
+    assert callbacks.calls[0]["taskToken"] == "qa-secret-token"
+    assert json.loads(callbacks.calls[0]["output"]) == {
+        "approved": True,
+        "disposition": "release",
+        "reviewer_role": "tenant_admin",
+        "reviewed_at": "2026-10-20T10:20:00Z",
+        "review_action_id": "act-1",
+    }
+
+
+@pytest.mark.security
+def test_qa_review_rejects_a_role_without_the_privilege(setup_inbound) -> None:
+    deps, _engagements, _registry, callbacks, _opened = setup_inbound
+    body = _dashboard(
+        action="review_qa",
+        approved=True,
+        disposition="release",
+        role="ops_user",
+    )
+
+    assert process_message(body, deps) == "invalid"
+    assert callbacks.calls == []
+
+
+def test_qa_review_without_a_pending_token_is_ignored(setup_inbound) -> None:
+    deps, _engagements, _registry, callbacks, _opened = setup_inbound
+    body = _dashboard(
+        action="review_qa",
+        approved=True,
+        disposition="release",
+        role="tenant_admin",
+        incident_id="incident-2",
+    )
+
+    assert process_message(body, deps) == "ignored"
     assert callbacks.calls == []
 
 

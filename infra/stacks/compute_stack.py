@@ -53,9 +53,10 @@ _DEFAULT_MODEL_ID = "amazon.nova-lite-v1:0"
 #: Step phases that only ever put a new item; they never update the META row.
 #: ``generate_report`` reads and writes the report bucket, ``no_response``
 #: records the timeout on the same row it created, and ``open`` pins the
-#: snapshot the ingest rule already wrote.
+#: snapshot the ingest rule already wrote. Verify transitions the incident META
+#: row, so it needs UpdateItem as well as its reading/timeline Query permission.
 _NO_UPDATE_PHASES = frozenset(
-    {"qa", "diagnose", "open", "generate_report", "no_response", "verify"}
+    {"qa", "diagnose", "open", "generate_report", "no_response"}
 )
 
 

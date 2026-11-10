@@ -352,7 +352,12 @@ _STEP_DYNAMO = {
     "oerf-step-diagnose": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"},
     "oerf-step-assess": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
     "oerf-step-act": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
-    "oerf-step-verify": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"},
+    "oerf-step-verify": {
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:Query",
+    },
     "oerf-step-qa": {"dynamodb:GetItem", "dynamodb:PutItem"},
     "oerf-step-close": {
         "dynamodb:GetItem",

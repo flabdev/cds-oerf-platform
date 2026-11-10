@@ -157,6 +157,22 @@ def test_assess_escalates_when_no_option_is_feasible() -> None:
     assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "ESCALATED"
 
 
+def test_qa_reads_the_reviewer_callback_result() -> None:
+    dependencies = _dependencies("AWAITING_DISPOSITION")
+    envelope = _envelope("QA", qa_review={
+        "approved": True,
+        "disposition": "release",
+        "reviewer_role": "tenant_admin",
+        "reviewed_at": "2026-10-20T10:20:00Z",
+    })
+
+    result = HANDLERS["QA"](envelope, dependencies)
+
+    assert result.qa is not None
+    assert result.qa["disposition"] == "approved"
+    assert result.qa["reviewer_role"] == "tenant_admin"
+
+
 def test_qa_records_gate_without_state_change_and_replays() -> None:
     dependencies = _dependencies("AWAITING_DISPOSITION")
     envelope = _envelope(

@@ -164,6 +164,61 @@ def test_cadence_editor_rejects_an_incomplete_policy() -> None:
     assert saved == (200, {"saved": "cadence"})
 
 
+@pytest.mark.security
+def test_review_qa_is_queued_for_admin_with_verdict_fields() -> None:
+    services = _services()
+    admin = Principal("t1", "tenant_admin", "admin-1", True)
+    body = {
+        "action": "review_qa",
+        "action_id": "qa-review-1",
+        "approved": True,
+        "disposition": "release",
+    }
+
+    response = dispatch(
+        "POST", "/incidents/INC-1/actions", admin, body, services, idempotency_key="qa-review-1"
+    )
+
+    assert response == (202, {"action_id": "qa-review-1", "status": "queued"})
+    message = services.queue.messages[-1]
+    assert message["action"] == "review_qa"
+    assert message["approved"] is True
+    assert message["disposition"] == "release"
+    assert message["role"] == "tenant_admin"
+    assert "task_token" not in message
+
+
+@pytest.mark.security
+def test_review_qa_forbids_ops_and_rejects_invalid_verdict() -> None:
+    services = _services()
+    ops = Principal("t1", "ops_user", "ops-1", True)
+    admin = Principal("t1", "tenant_admin", "admin-1", True)
+
+    forbidden = dispatch(
+        "POST",
+        "/incidents/INC-1/actions",
+        ops,
+        {
+            "action": "review_qa",
+            "action_id": "qa-review-2",
+            "approved": True,
+            "disposition": "release",
+        },
+        services,
+    )
+    invalid = dispatch(
+        "POST",
+        "/incidents/INC-1/actions",
+        admin,
+        {"action": "review_qa", "action_id": "qa-review-3", "approved": "true", "disposition": ""},
+        services,
+    )
+
+    assert forbidden[0] == 403
+    assert invalid[0] == 400
+    assert services.queue.messages == []
+
+
 def _services() -> DashboardServices:
     repository = DynamoConfigRepository(FakeDynamoClient(), "tenant")
     repository.register_tenant("t2", ["cold_chain_excursion"])
