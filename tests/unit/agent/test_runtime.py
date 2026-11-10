@@ -6,14 +6,22 @@ import pytest
 
 from domains.cold_chain_excursion.steps import (
     act,
+    approval,
     assess,
+    begin_disposition,
     cancel,
     close,
     context,
     diagnose,
     escalate,
+    generate_report,
+    handle_reopen,
+    no_response,
+    open as open_step,
     qa,
+    record_containment,
     record_failure,
+    secure_facility,
     verify,
 )
 from oerf.platform.agent import runtime
@@ -27,13 +35,21 @@ TENANT = "t1"
 SHIPMENT = "PH-2841"
 NOW = datetime(2026, 10, 20, 10, 16, tzinfo=UTC)
 STEP_MODULES = (
+    open_step,
     context,
     diagnose,
     assess,
+    approval,
+    secure_facility,
     act,
     verify,
+    record_containment,
+    begin_disposition,
+    handle_reopen,
+    generate_report,
     qa,
     close,
+    no_response,
     record_failure,
     escalate,
     cancel,
@@ -42,27 +58,40 @@ STEP_MODULES = (
 
 def test_phase_map_covers_the_frozen_modules() -> None:
     assert runtime.PHASES == {
+        "open": "OPEN",
         "context": "GatherContext",
         "diagnose": "Diagnose",
         "assess": "Assess",
+        "approval": "Approval",
+        "secure_facility": "SecureFacility",
+        "secure_facility_fallback": "SecureFacilityFallback",
         "act": "Act",
         "verify": "Verify",
+        "record_containment": "RecordContainment",
+        "begin_disposition": "BeginDisposition",
+        "handle_reopen": "HandleReopen",
+        "generate_report": "GenerateReport",
         "qa": "QA",
         "close": "Close",
+        "no_response": "NoResponse",
         "record_failure": "RecordFailure",
         "escalate": "Escalate",
         "cancel": "Cancel",
     }
-    assert set(runtime.MODULES.values()) == {module.__name__ for module in STEP_MODULES}
+    assert runtime.MODULES["secure_facility_fallback"] == runtime.MODULES["secure_facility"]
     assert set(runtime.PHASES.values()) <= set(HANDLERS)
 
 
 def test_phase_lookup_names_the_module_that_owns_a_step() -> None:
     assert runtime.phase_for("QA") == "qa"
     assert runtime.module_for("QA") == "domains.cold_chain_excursion.steps.qa"
-    # Steps OERF-203, OERF-206 and OERF-207 add have no entry point yet.
-    assert runtime.phase_for("GenerateReport") is None
-    assert runtime.module_for("GenerateReport") is None
+    # C0 wired the last eight steps, so every step in the definition has an
+    # entry point.
+    assert runtime.phase_for("GenerateReport") == "generate_report"
+    assert runtime.module_for("GenerateReport") == (
+        "domains.cold_chain_excursion.steps.generate_report"
+    )
+    assert runtime.phase_for("NoResponse") == "no_response"
 
 
 def test_settings_are_read_from_the_lambda_environment(
@@ -111,6 +140,18 @@ def test_config_port_is_optional_without_a_tenant_table() -> None:
 
     assert dependencies.config is None
     assert dependencies.facilities is None
+
+
+def test_container_wires_the_report_publisher_for_generate_report() -> None:
+    """GenerateReport publishes through the port even when no bucket is set."""
+    from oerf.platform.agent.reports import GeneratorReportPublisher
+
+    dependencies = runtime.build_dependencies(
+        client=FakeDynamoClient(),
+        settings=runtime.RuntimeSettings(incident_table="incident"),
+    )
+
+    assert isinstance(dependencies.reports, GeneratorReportPublisher)
 
 
 def test_an_unknown_phase_is_rejected_before_the_event_is_read() -> None:

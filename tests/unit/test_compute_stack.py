@@ -146,6 +146,43 @@ EXPECTED_FUNCTIONS = {
         "handler": "domains.cold_chain_excursion.steps.cancel.handler",
         "env": {"INCIDENT_TABLE_NAME", "LOG_LEVEL"},
     },
+    "oerf-step-open": {
+        "handler": "domains.cold_chain_excursion.steps.open.handler",
+        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
+    },
+    "oerf-step-approval": {
+        "handler": "domains.cold_chain_excursion.steps.approval.handler",
+        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
+    },
+    "oerf-step-secure-facility": {
+        "handler": "domains.cold_chain_excursion.steps.secure_facility.handler",
+        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
+    },
+    "oerf-step-record-containment": {
+        "handler": "domains.cold_chain_excursion.steps.record_containment.handler",
+        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
+    },
+    "oerf-step-begin-disposition": {
+        "handler": "domains.cold_chain_excursion.steps.begin_disposition.handler",
+        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
+    },
+    "oerf-step-handle-reopen": {
+        "handler": "domains.cold_chain_excursion.steps.handle_reopen.handler",
+        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
+    },
+    "oerf-step-generate-report": {
+        "handler": "domains.cold_chain_excursion.steps.generate_report.handler",
+        "env": {
+            "INCIDENT_TABLE_NAME",
+            "TENANT_TABLE_NAME",
+            "REPORT_BUCKET_NAME",
+            "LOG_LEVEL",
+        },
+    },
+    "oerf-step-no-response": {
+        "handler": "domains.cold_chain_excursion.steps.no_response.handler",
+        "env": {"INCIDENT_TABLE_NAME", "TENANT_TABLE_NAME", "LOG_LEVEL"},
+    },
     "oerf-engage-cadence": {
         "handler": "oerf.platform.cadence.engage.handler",
         "env": {"LOG_LEVEL"},
@@ -314,7 +351,7 @@ _STEP_DYNAMO = {
     "oerf-step-diagnose": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"},
     "oerf-step-assess": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
     "oerf-step-act": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
-    "oerf-step-verify": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
+    "oerf-step-verify": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"},
     "oerf-step-qa": {"dynamodb:GetItem", "dynamodb:PutItem"},
     "oerf-step-close": {
         "dynamodb:GetItem",
@@ -330,6 +367,37 @@ _STEP_DYNAMO = {
         "dynamodb:UpdateItem",
         "dynamodb:DeleteItem",
     },
+    # C0: the last eight states. OPEN pins config and reads a gate; the
+    # containment and disposition steps walk one edge each. Verify and
+    # GenerateReport query the incident timeline/readings.
+    "oerf-step-open": {"dynamodb:GetItem", "dynamodb:PutItem"},
+    "oerf-step-approval": {"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"},
+    "oerf-step-secure-facility": {
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+    },
+    "oerf-step-record-containment": {
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+    },
+    "oerf-step-begin-disposition": {
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+    },
+    "oerf-step-handle-reopen": {
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+    },
+    "oerf-step-generate-report": {
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:Query",
+    },
+    "oerf-step-no-response": {"dynamodb:GetItem", "dynamodb:PutItem"},
 }
 _INCIDENT_ONLY_STEPS = {
     "oerf-step-record-failure",

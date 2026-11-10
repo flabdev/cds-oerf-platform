@@ -36,29 +36,30 @@ ASL_PATH = (
 )
 STUB_PLACEHOLDER = "__STUB_ARN__"
 REAL_PLACEHOLDERS = {
+    "OPEN": "__STEP_OPEN_ARN__",
     "GatherContext": "__STEP_CONTEXT_ARN__",
     "Diagnose": "__STEP_DIAGNOSE_ARN__",
     "Assess": "__STEP_ASSESS_ARN__",
+    "Approval": "__STEP_APPROVAL_ARN__",
+    "SecureFacility": "__STEP_SECURE_FACILITY_ARN__",
+    "SecureFacilityFallback": "__STEP_SECURE_FACILITY_ARN__",
     "Act": "__STEP_ACT_ARN__",
     "VerifyLoop": "__STEP_VERIFY_ARN__",
+    "RecordContainment": "__STEP_RECORD_CONTAINMENT_ARN__",
+    "BeginDisposition": "__STEP_BEGIN_DISPOSITION_ARN__",
+    "HandleReopen": "__STEP_HANDLE_REOPEN_ARN__",
+    "GenerateReport": "__STEP_GENERATE_REPORT_ARN__",
     "QA": "__STEP_QA_ARN__",
     "Close": "__STEP_CLOSE_ARN__",
+    "NoResponse": "__STEP_NO_RESPONSE_ARN__",
     "RecordFailure": "__STEP_RECORD_FAILURE_ARN__",
     "Escalate": "__STEP_ESCALATE_ARN__",
     "Cancel": "__STEP_CANCEL_ARN__",
 }
-STUB_COLD_CHAIN_TASKS = frozenset(
-    {
-        "OPEN",
-        "Approval",
-        "SecureFacility",
-        "HandleReopen",
-        "GenerateReport",
-        "NoResponse",
-        "RecordContainment",
-        "BeginDisposition",
-    }
-)
+#: A cold-chain task that still points at the shared stub. C0 wired the last
+#: eight, so the set is empty and the stub is only read by the offline
+#: simulator, not by the deployed definition.
+STUB_COLD_CHAIN_TASKS = frozenset()
 STUB_ENGAGEMENT_TASKS = frozenset()
 NOTICE_TASKS = frozenset({"NotifyContinue", "NotifyDivert"})
 
@@ -87,7 +88,7 @@ def task_states() -> dict:
 
 
 def test_real_and_stub_tasks_are_listed() -> None:
-    """Wired tasks name their functions. The remaining tasks stay on the stub."""
+    """Real cold-chain tasks name their functions; stub tasks are explicit."""
 
     cold = task_states()
     engagement = {
@@ -115,7 +116,7 @@ def test_real_and_stub_tasks_are_listed() -> None:
         if state.get("Parameters", {}).get("FunctionName") in ASL_ENGAGE_PLACEHOLDERS
     }
 
-    assert real == frozenset(REAL_PLACEHOLDERS)
+    assert real == frozenset(set(REAL_PLACEHOLDERS) | {"SecureFacilityFallback"})
     assert stub == STUB_COLD_CHAIN_TASKS
     assert engagement_stub == STUB_ENGAGEMENT_TASKS
     assert {
@@ -169,10 +170,19 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
             assert state["Resource"] == "arn:aws:states:::lambda:invoke"
             assert state["Parameters"]["FunctionName"] == "__CHANNEL_ROUTER_ARN__"
             assert state["Parameters"]["Payload"]["step_name"] == "EngagementSendOneWay"
-            assert state["ResultPath"] == "$.driver_notice"
+            # Notices are best-effort side effects; discard their result so the
+            # strict workflow envelope stays unchanged for the next task.
+            assert state["ResultPath"] is None
+            assert state["Catch"][0]["ResultPath"] is None
             assert "OutputPath" not in state
             assert "task_token" not in json.dumps(state["Parameters"])
             assert state["Catch"][0]["Next"].startswith("CancelAfterNotify")
+            continue
+        if name == "SecureFacilityFallback":
+            assert state["Parameters"]["FunctionName"] == REAL_PLACEHOLDERS["SecureFacility"]
+            assert state["Parameters"]["Payload"]["step_name"] == "SecureFacilityFallback"
+            assert state["Retry"][0]["MaxAttempts"] == 3
+            assert state["Catch"][-1]["Next"] == "RecordFailure"
             continue
         expected_resource = (
             "arn:aws:states:::lambda:invoke.waitForTaskToken"
@@ -180,9 +190,7 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
             else "arn:aws:states:::lambda:invoke"
         )
         assert state["Resource"] == expected_resource, name
-        assert state["Parameters"]["FunctionName"] == REAL_PLACEHOLDERS.get(
-            name, STUB_PLACEHOLDER
-        ), name
+        assert state["Parameters"]["FunctionName"] == REAL_PLACEHOLDERS.get(name), name
         assert state["OutputPath"] == "$.Payload", name
         assert state["Retry"][0]["MaxAttempts"] == 3, name
         assert state["TimeoutSeconds"] == (1800 if name == "Approval" else 60), name
@@ -811,6 +819,8 @@ def _comparison_holds(rule: dict, data: dict) -> bool:
         return actual == rule["BooleanEquals"]
     if "StringEquals" in rule:
         return actual == rule["StringEquals"]
+    if "IsNull" in rule:
+        return actual is None if rule["IsNull"] else actual is not None
     raise AssertionError(f"unsupported choice comparison: {sorted(rule)}")
 
 
@@ -879,14 +889,17 @@ def simulate(event: dict, handler_fn=handler, max_steps: int = 48) -> tuple:
                 )
                 if catcher is None:
                     raise
-                data = dict(data)
-                data["simulated_error"] = error_name
+                if "ResultPath" not in catcher:
+                    data = {"Error": error_name}
+                elif catcher["ResultPath"] is not None:
+                    data = dict(data)
+                    _assign(data, catcher["ResultPath"], {"Error": error_name})
                 current = catcher["Next"]
                 continue
-            if state.get("ResultPath"):
-                _assign(data, state["ResultPath"], result)
-            else:
+            if "ResultPath" not in state:
                 data = result
+            elif state["ResultPath"] is not None:
+                _assign(data, state["ResultPath"], result)
             next_incident_state = data.get("incident_state")
             if (
                 previous_incident_state is not None
@@ -919,6 +932,22 @@ def test_missing_cancel_flag_still_reaches_closed() -> None:
 
     assert outcome == "WorkflowComplete"
     assert final["incident_state"] == "CLOSED"
+
+
+def test_notice_task_failure_preserves_the_envelope_and_workflow_closes() -> None:
+    """Best-effort notice failures must not poison the strict next-step envelope."""
+
+    def fail_notice(event: dict, context: object) -> dict:
+        if event["step_name"] == "EngagementSendOneWay":
+            raise RuntimeError("simulated router failure")
+        return handler(event, context)
+
+    outcome, final = simulate(dict(INITIAL_EVENT), handler_fn=fail_notice)
+
+    assert outcome == "WorkflowComplete"
+    assert final["incident_state"] == "CLOSED"
+    assert "driver_notice" not in final
+    assert "driver_notice_error" not in final
 
 
 def test_unguarded_choice_on_a_missing_path_raises() -> None:
@@ -1235,17 +1264,72 @@ def test_rejected_approval_escalates_and_keeps_identity() -> None:
     assert final["incident_id"] == "INC-001"
 
 
-def test_declined_facility_escalates() -> None:
+def test_facility_decline_loops_once_to_the_next_facility() -> None:
+    """C6: a decline with a ranked fallback goes through a distinct task identity."""
+    states = load_definition()["States"]
+    assert states["FacilityAccepted?"]["Choices"][1] == {
+        "And": [
+            {"Variable": "$.facility.accepted", "IsPresent": True},
+            {"Variable": "$.facility.accepted", "BooleanEquals": False},
+            {"Variable": "$.facility.next_option_id", "IsNull": False},
+        ],
+        "Next": "SecureFacilityFallback",
+    }
+    assert states["SecureFacilityFallback"]["Parameters"]["Payload"]["step_name"] == (
+        "SecureFacilityFallback"
+    )
+    assert states["CancelAfterSecureFacilityFallback?"]["Default"] == (
+        "FacilityFallbackAccepted?"
+    )
+    assert states["FacilityFallbackAccepted?"]["Default"] == "Escalate"
+    assert evaluate_choice(
+        states["FacilityAccepted?"],
+        {"facility": {"accepted": False, "next_option_id": "FAC-B"}},
+    ) == "SecureFacilityFallback"
+    assert evaluate_choice(
+        states["FacilityAccepted?"],
+        {"facility": {"accepted": False, "next_option_id": None}},
+    ) == "Escalate"
+    assert evaluate_choice(
+        states["FacilityAccepted?"], {"facility": {"accepted": True}}
+    ) == "Act"
+    assert evaluate_choice(
+        states["FacilityFallbackAccepted?"], {"facility": {"accepted": False}}
+    ) == "Escalate"
+
+
+def test_facility_decline_graph_walk_uses_fallback_then_continues_to_act() -> None:
+    visits: list[str] = []
+
     def declining_handler(event: dict, _context: object) -> dict:
-        result = handler(event, None)
-        if event["step_name"] == "SecureFacility":
-            result["facility"]["accepted"] = False
-        return result
+        step = event["step_name"]
+        visits.append(step)
+        if step == "SecureFacility":
+            result = handler(event, None)
+            result["facility"] = {
+                "accepted": False,
+                "facility_id": "FAC-A",
+                "next_option_id": "FAC-B",
+            }
+            return result
+        if step == "SecureFacilityFallback":
+            result = dict(event["workflow"])
+            result["facility"] = {
+                "accepted": True,
+                "facility_id": "FAC-B",
+                "next_option_id": None,
+            }
+            return result
+        return handler(event, _context)
 
     outcome, final = simulate(dict(INITIAL_EVENT), declining_handler)
 
-    assert outcome == "Escalate"
-    assert final["escalated"] is True
+    assert outcome == "WorkflowComplete"
+    assert visits.count("SecureFacility") == 1
+    assert visits.count("SecureFacilityFallback") == 1
+    assert "Act" in visits
+    assert final["facility"]["facility_id"] == "FAC-B"
+    assert final["action"]["status"] == "completed"
 
 
 def test_reopened_containment_loops_through_reopen_then_closes() -> None:

@@ -50,6 +50,15 @@ _VISIBILITY_MULTIPLE = 6
 _DEFAULT_INGEST_CONCURRENCY = 5
 _DEFAULT_MODEL_ID = "amazon.nova-lite-v1:0"
 
+#: Step phases that only ever put a new item; they never update the META row.
+#: ``generate_report`` reads and writes the report bucket, ``no_response``
+#: records the timeout on the same row it created, and ``open`` pins the
+#: snapshot the ingest rule already wrote.
+_NO_UPDATE_PHASES = frozenset(
+    {"qa", "diagnose", "open", "generate_report", "no_response", "verify"}
+)
+
+
 def _with_dev_name(
     stage: Stage,
     environment: dict[str, str],
@@ -876,6 +885,14 @@ class OerfComputeStack(Stack):
             "record_failure": "RecordFailureFunction",
             "escalate": "EscalateFunction",
             "cancel": "CancelFunction",
+            "open": "OpenFunction",
+            "approval": "ApprovalFunction",
+            "secure_facility": "SecureFacilityFunction",
+            "record_containment": "RecordContainmentFunction",
+            "begin_disposition": "BeginDispositionFunction",
+            "handle_reopen": "HandleReopenFunction",
+            "generate_report": "GenerateReportFunction",
+            "no_response": "NoResponseFunction",
         }
         failure_grants = {
             "record_failure": (False, False),
@@ -891,6 +908,10 @@ class OerfComputeStack(Stack):
             }
             if not failure:
                 environment["TENANT_TABLE_NAME"] = data_stack.tenant_table.table_name
+            if phase == "generate_report":
+                # The report generator reads REPORT_BUCKET_NAME at import time.
+                # Without it the publisher silently falls back to memory.
+                environment["REPORT_BUCKET_NAME"] = data_stack.report_bucket.bucket_name
             function = self._function(
                 construct_id,
                 function_name=function_name,
@@ -913,10 +934,13 @@ class OerfComputeStack(Stack):
                 self._grant_step_data(
                     function,
                     data_stack,
-                    update=phase not in {"qa", "diagnose"},
+                    update=phase not in _NO_UPDATE_PHASES,
                     delete=phase == "close",
                     query_tenant=phase == "diagnose",
+                    query_incident=phase == "verify",
                 )
+            if phase == "generate_report":
+                self._grant_report_step(function, data_stack)
         self._engage_functions(data_stack, code)
 
     def _grant_step_data(
@@ -928,6 +952,7 @@ class OerfComputeStack(Stack):
         delete: bool,
         tenant: bool = True,
         query_tenant: bool = False,
+        query_incident: bool = False,
     ) -> None:
         """The actions ``run_step`` actually calls. No table-wide grant helper."""
 
@@ -956,6 +981,42 @@ class OerfComputeStack(Stack):
                     resources=[data_stack.tenant_table.table_arn],
                 )
             )
+        if query_incident:
+            function.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=["dynamodb:Query"],
+                    resources=[incident],
+                )
+            )
+
+    def _grant_report_step(
+        self, function: lambda_.Function, data_stack: OerfDataStack
+    ) -> None:
+        """Report step reads incident rows and writes immutable report objects.
+
+        The report generator queries the incident table for the META row, its
+        ``EVT#`` timeline, and its ``READ#`` readings, then lists and writes the
+        report bucket. It has no SES grant.
+        """
+        function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["dynamodb:Query"],
+                resources=[data_stack.incident_table.table_arn],
+            )
+        )
+        report_arn = data_stack.report_bucket.bucket_arn
+        function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["s3:ListBucket"],
+                resources=[report_arn],
+            )
+        )
+        function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["s3:PutObject"],
+                resources=[f"{report_arn}/reports/*"],
+            )
+        )
 
     def _engage_functions(self, data_stack: OerfDataStack, code: lambda_.Code) -> None:
         """Cadence and interpret. Neither role can send or resume a token.

@@ -1,4 +1,4 @@
-"""Composition root for the six cold-chain step entry points.
+"""Composition root for the cold-chain step entry points.
 
 ``docs/interfaces.md`` section 8 (OERF-304) freezes one module and one
 ``handler`` function per phase of the cold-chain definition. This module pairs
@@ -8,13 +8,28 @@ needs:
 ===========================  =====================
 Phase / module suffix        State-machine step
 ===========================  =====================
+``open``                     ``OPEN``
 ``context``                  ``GatherContext``
+``diagnose``                 ``Diagnose``
 ``assess``                   ``Assess``
+``approval``                 ``Approval``
+``secure_facility``          ``SecureFacility``
 ``act``                      ``Act``
 ``verify``                   ``Verify``
+``record_containment``       ``RecordContainment``
+``begin_disposition``        ``BeginDisposition``
+``handle_reopen``            ``HandleReopen``
+``generate_report``          ``GenerateReport``
 ``qa``                       ``QA``
 ``close``                    ``Close``
+``no_response``              ``NoResponse``
+``record_failure``           ``RecordFailure``
+``escalate``                 ``Escalate``
+``cancel``                   ``Cancel``
 ===========================  =====================
+
+Every ``Task`` state in ``domains/cold_chain_excursion/statemachine.asl.json``
+names its own phase here, so no state shares a function with another.
 
 A module serves one phase and nothing else. It parses the accumulator envelope,
 builds only the ports that phase may use, calls the registered handler, and
@@ -42,6 +57,7 @@ from oerf.platform.agent.context import ConfigReader, StepDependencies
 from oerf.platform.agent.dynamo_step_results import DynamoStepResultStore
 from oerf.platform.agent.envelope import parse_envelope
 from oerf.platform.agent.handlers import HANDLERS
+from oerf.platform.agent.reports import GeneratorReportPublisher
 from oerf.platform.incidents.dynamo import DynamoIncidentStore
 from oerf.platform.observability.logging import get_logger, log
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
@@ -65,24 +81,33 @@ __all__ = [
     "run_step",
 ]
 
-#: Phase name to the state-machine ``step`` value that phase serves.
-#: The phase name is also the frozen module suffix under
-#: ``domains.cold_chain_excursion.steps``.
 PHASES: dict[str, str] = {
+    "open": "OPEN",
     "context": "GatherContext",
     "diagnose": "Diagnose",
     "assess": "Assess",
+    "approval": "Approval",
+    "secure_facility": "SecureFacility",
+    "secure_facility_fallback": "SecureFacilityFallback",
     "act": "Act",
     "verify": "Verify",
+    "record_containment": "RecordContainment",
+    "begin_disposition": "BeginDisposition",
+    "handle_reopen": "HandleReopen",
+    "generate_report": "GenerateReport",
     "qa": "QA",
     "close": "Close",
+    "no_response": "NoResponse",
     "record_failure": "RecordFailure",
     "escalate": "Escalate",
     "cancel": "Cancel",
 }
 
 #: Phase name to the module path ``docs/interfaces.md`` freezes for it.
-MODULES: dict[str, str] = {phase: f"domains.cold_chain_excursion.steps.{phase}" for phase in PHASES}
+MODULES: dict[str, str] = {
+    **{phase: f"domains.cold_chain_excursion.steps.{phase}" for phase in PHASES},
+    "secure_facility_fallback": "domains.cold_chain_excursion.steps.secure_facility",
+}
 
 
 class WiringError(Exception):
@@ -169,6 +194,7 @@ def build_dependencies(
         results=DynamoStepResultStore(dynamo, resolved.incident_table, clock=moment),
         config=config,
         facilities=facilities,
+        reports=GeneratorReportPublisher(),
         clock=moment,
     )
 

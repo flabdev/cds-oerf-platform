@@ -15,8 +15,32 @@ from oerf.platform.agent.context import (
 from oerf.platform.agent.envelope import StepEnvelope
 from oerf.platform.agent.handlers import HANDLERS
 from oerf.platform.agent.idempotency import MemoryStepResultStore
+from oerf.platform.agent.reports import ReportPublishError
 from oerf.platform.incidents.repository import IncidentRepository
 from oerf.platform.tenancy.config_resolver import get_config
+
+
+class _Reporter:
+    """A report port that records the calls the step made."""
+
+    def __init__(self, *, ok: bool = True) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self._ok = ok
+
+    def publish(self, *, tenant_id: str, incident_id: str) -> dict[str, Any]:
+        self.calls.append((tenant_id, incident_id))
+        if not self._ok:
+            raise ReportPublishError("bucket is unavailable")
+        return {
+            "success": True,
+            "report_key": f"reports/{tenant_id}/{incident_id}/v1.html",
+            "s3_uri": f"s3://reports/reports/{tenant_id}/{incident_id}/v1.html",
+            "report_version": 1,
+            "sha256": "0" * 64,
+            "locked": False,
+            "generated_at": "2026-10-20T10:16:00Z",
+            "sections": ["incident"],
+        }
 
 TENANT = "t1"
 SHIPMENT = "PH-2841"
@@ -74,6 +98,20 @@ def test_six_ticket_handlers_and_act_are_registered() -> None:
         "BeginDisposition",
         "QA",
         "Close",
+    } <= HANDLERS.keys()
+
+
+def test_c0_handlers_are_registered() -> None:
+    """C0 wired the last eight states; every one has a handler."""
+    assert {
+        "OPEN",
+        "Approval",
+        "SecureFacility",
+        "RecordContainment",
+        "BeginDisposition",
+        "HandleReopen",
+        "GenerateReport",
+        "NoResponse",
     } <= HANDLERS.keys()
 
 
@@ -608,7 +646,56 @@ def test_secure_facility_decline_moves_to_the_next_feasible_facility() -> None:
     assert result.incident_state == "SECURING_FACILITY"
 
 
-def test_secure_facility_decline_with_no_fallback_leaves_nothing_to_try() -> None:
+def test_secure_facility_fallback_uses_next_option_under_a_distinct_idempotency_key() -> None:
+    dependencies = _dependencies("SECURING_FACILITY")
+    initial = HANDLERS["SecureFacility"](
+        _envelope(
+            "SecureFacility",
+            workflow=_approval_workflow(
+                facility_response={"status": "declined"}, context=_facility_context()
+            ),
+        ),
+        dependencies,
+    )
+
+    fallback_workflow = {
+        **initial.workflow,
+        "facility_response": {"status": "accepted"},
+    }
+    result = HANDLERS["SecureFacilityFallback"](
+        _envelope("SecureFacilityFallback", workflow=fallback_workflow), dependencies
+    )
+    replay = HANDLERS["SecureFacilityFallback"](
+        _envelope("SecureFacilityFallback"), dependencies
+    )
+
+    assert result.facility is not None
+    assert result.facility["accepted"] is True
+    assert result.facility["facility_id"] == "FAC-B"
+    assert result.workflow["assessment"]["recommended_option"] == "FAC-B"
+    assert result.last_completed_step == "SecureFacilityFallback"
+    assert replay == result
+    assert dependencies.results.get(
+        tenant_id=TENANT, incident_id=INCIDENT_ID, step="SecureFacility"
+    ) is not None
+    assert dependencies.results.get(
+        tenant_id=TENANT, incident_id=INCIDENT_ID, step="SecureFacilityFallback"
+    ) is not None
+
+
+def test_secure_facility_fallback_requires_a_recorded_next_option() -> None:
+    dependencies = _dependencies("SECURING_FACILITY")
+    workflow = _approval_workflow(
+        facility={"accepted": False, "kind": "facility", "next_option_id": None},
+        context=_facility_context(),
+    )
+
+    with pytest.raises(MissingStepInput, match="next feasible facility"):
+        HANDLERS["SecureFacilityFallback"](
+            _envelope("SecureFacilityFallback", workflow=workflow), dependencies
+        )
+
+
     dependencies = _dependencies("SECURING_FACILITY")
     envelope = _envelope(
         "SecureFacility",
@@ -642,3 +729,118 @@ def test_secure_facility_accepts_a_pre_approved_facility() -> None:
     assert result.facility is not None
     assert result.facility["accepted"] is True
     assert result.facility["facility_id"] == "FAC-A"
+
+
+def test_open_pins_the_config_snapshot_and_replays() -> None:
+    """C0: OPEN was the last stub; the handler pins config and is idempotent."""
+    dependencies = _dependencies("OPEN")
+    envelope = _envelope("OPEN", workflow={"trigger": {"temperature_c": 9.2}})
+
+    result = HANDLERS["OPEN"](envelope, dependencies)
+    retry = HANDLERS["OPEN"](_envelope("OPEN"), dependencies)
+
+    incident = dependencies.incidents.get(TENANT, INCIDENT_ID)
+    assert result.incident_state == "OPEN"
+    assert result.current_stage == "OPEN"
+    assert result.workflow["config_version"] == incident.config_version
+    assert result.workflow["opened_at"] == incident.opened_at
+    assert result.decision is not None
+    assert result.decision["status"] == "open"
+    assert retry == result
+    assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "OPEN"
+
+
+def test_open_refuses_an_incident_that_already_moved() -> None:
+    dependencies = _dependencies("DIAGNOSING")
+
+    with pytest.raises(StepError, match="must run while it is OPEN"):
+        HANDLERS["OPEN"](_envelope("OPEN"), dependencies)
+
+
+def test_handle_reopen_marks_the_containment_reopened_and_replays() -> None:
+    dependencies = _dependencies("AWAITING_DISPOSITION")
+    containment = {"status": "reopened", "temperature_c": 9.1, "attempt": 3}
+    envelope = _envelope("HandleReopen", workflow={"containment": containment})
+
+    result = HANDLERS["HandleReopen"](envelope, dependencies)
+    retry = HANDLERS["HandleReopen"](_envelope("HandleReopen"), dependencies)
+
+    assert result.incident_state == "REOPENED"
+    assert result.containment is not None
+    assert result.containment["status"] == "reopened"
+    assert result.containment["reopened_at"] == "2026-10-20T10:16:00Z"
+    assert retry == result
+    assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "REOPENED"
+
+
+def test_handle_reopen_needs_a_reopened_verdict() -> None:
+    dependencies = _dependencies("AWAITING_DISPOSITION")
+
+    with pytest.raises(MissingStepInput, match="reopened containment verdict"):
+        HANDLERS["HandleReopen"](_envelope("HandleReopen"), dependencies)
+
+
+def test_no_response_records_the_timeout_without_moving_the_incident() -> None:
+    dependencies = _dependencies("AWAITING_DISPOSITION")
+    envelope = _envelope(
+        "NoResponse",
+        workflow={"approval": {"status": "pending", "approver_role": "ops_manager"}},
+    )
+
+    result = HANDLERS["NoResponse"](envelope, dependencies)
+    retry = HANDLERS["NoResponse"](_envelope("NoResponse"), dependencies)
+
+    assert result.approval is not None
+    assert result.approval["status"] == "no_response"
+    assert result.approval["timed_out"] is True
+    assert result.approval["timed_out_at"] == "2026-10-20T10:16:00Z"
+    assert result.approval["approver_role"] == "ops_manager"
+    # FailureRoute reads incident_state, so the timeout must not move it.
+    assert result.incident_state == "AWAITING_DISPOSITION"
+    assert result.current_stage == "AWAITING_APPROVAL"
+    assert retry == result
+    assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "AWAITING_DISPOSITION"
+
+
+def test_generate_report_publishes_once_and_records_the_receipt() -> None:
+    dependencies = _dependencies("AWAITING_DISPOSITION")
+    reporter = _Reporter()
+    dependencies = StepDependencies(
+        incidents=dependencies.incidents,
+        results=dependencies.results,
+        reports=reporter,
+        clock=lambda: NOW,
+    )
+
+    result = HANDLERS["GenerateReport"](_envelope("GenerateReport"), dependencies)
+    retry = HANDLERS["GenerateReport"](_envelope("GenerateReport"), dependencies)
+
+    assert reporter.calls == [(TENANT, INCIDENT_ID)]
+    assert result.workflow["report"]["report_version"] == 1
+    assert result.workflow["report"]["s3_uri"].endswith("v1.html")
+    assert result.current_stage == "AWAITING_DISPOSITION"
+    # The step does not move the incident; the CancelAfter gate is the only edge.
+    assert result.incident_state == "AWAITING_DISPOSITION"
+    assert retry == result
+    assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "AWAITING_DISPOSITION"
+
+
+def test_generate_report_fails_loudly_without_a_publisher() -> None:
+    dependencies = _dependencies("AWAITING_DISPOSITION")
+
+    with pytest.raises(StepError, match="no report publisher configured"):
+        HANDLERS["GenerateReport"](_envelope("GenerateReport"), dependencies)
+
+
+def test_generate_report_propagates_a_publish_failure() -> None:
+    """A failed publish must fail the step so Step Functions routes RecordFailure."""
+    dependencies = _dependencies("AWAITING_DISPOSITION")
+    dependencies = StepDependencies(
+        incidents=dependencies.incidents,
+        results=dependencies.results,
+        reports=_Reporter(ok=False),
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(ReportPublishError, match="bucket is unavailable"):
+        HANDLERS["GenerateReport"](_envelope("GenerateReport"), dependencies)

@@ -33,7 +33,7 @@ flowchart LR
       CC["oerf-cold-chain<br/>GatherContext → Diagnose → EngageDriver<br/>→ Assess → Act → Verify"]
       EP["oerf-engage-party<br/>cadence ladder · waitForTaskToken<br/>Interpret"]
     end
-    STEPS["Lambda step functions<br/>context · diagnose · assess · act · verify<br/>qa · close · record-failure · escalate · cancel"]
+    STEPS["Lambda step functions<br/>open · context · diagnose · assess · approval<br/>secure-facility · act · verify · record-containment<br/>begin-disposition · handle-reopen · generate-report<br/>qa · close · no-response · record-failure · escalate · cancel"]
     CAD["Lambda: engage-cadence<br/>Lambda: engage-interpret"]
     ROUTER["Lambda: channel-router<br/>only sender (ADR-008)"]
     SNSIN["Amazon SNS<br/>inbound topic"]
@@ -146,8 +146,8 @@ Decisions are indexed in [docs/adr/README.md](adr/README.md). The wire contract 
 | Piece | Today |
 | --- | --- |
 | Sensor to incident | Live path: EventBridge, ingest, the shipment lock, `StartExecution`. The sensor is the simulator. |
-| Cold-chain steps | GatherContext, Diagnose, Assess, Act, Verify, QA, Close, RecordFailure, Escalate, and Cancel have their own functions. OPEN, Approval, SecureFacility, HandleReopen, and GenerateReport still call the shared stub. |
-| Engagement | Cadence, interpret, and router sends are live, including the task-token wait. Callback handling, ladder reset, the final question, and the exhaustion action still call the stub. |
+| Cold-chain steps | All eighteen states have their own function. OPEN, GatherContext, Diagnose, Assess, Approval, SecureFacility, Act, Verify, RecordContainment, BeginDisposition, HandleReopen, GenerateReport, QA, Close, NoResponse, RecordFailure, Escalate, and Cancel. The shared stub is no longer invoked by the machine. |
+| Engagement | Cadence, interpret, lifecycle, and router sends are live, including the task-token wait. Callback handling, ladder reset, the final question, and the exhaustion action are wired to `oerf-engage-lifecycle`; the engagement definition no longer references the stub. |
 | WhatsApp | End User Messaging Social, sent only by the channel router. Mocked unless `channels:live` is true. The event destination is created when a WhatsApp Business account id is set. |
 | Acknowledgement and decision notice | The router sends them as one-way WhatsApp messages after a valid reply and after Act. |
 | Inbound resume and cancel | Live. Resume is `SendTaskSuccess`. Cancel is `StopExecution` on the cold-chain execution, then `CANCELLED` and the lock is released. |
@@ -157,7 +157,7 @@ Decisions are indexed in [docs/adr/README.md](adr/README.md). The wire contract 
 | Evidence | Inbound stores media with `GetWhatsAppMessageMedia`. The analyzer calls Nova Lite and a guardrail when Bedrock is not mocked (`channels:live`). Otherwise it is mocked. |
 | AgentCore | Off unless `agentcore:enabled` is true (dev laptop and GitHub deploys pass true). The runtime is ARM64. It advises. Interpret keeps the rule result. |
 | Desk | The React desk, Cognito hosted UI, REST query and action, and the WebSocket updates. The API stack is behind `dashboard:enabled`. |
-| Reports | `oerf-report-generator` is deployed and writes HTML, or PDF when WeasyPrint is selected. The GenerateReport state still calls the stub, so the machine does not invoke that function yet. |
+| Reports | `oerf-report-generator` publishes versioned HTML for one incident, or PDF when WeasyPrint is selected. The `GenerateReport` step invokes it through `oerf-step-generate-report`; the role reads the incident rows and writes the report bucket, and it does not send SES. |
 | Encryption | AWS managed keys. Table encryption with the managed KMS key is behind `dynamodb:kmsManaged` and defaults off ([ADR-033](adr/ADR-033-encryption-at-rest.md)). |
 
 Document extraction and audio transcription are not in this release. There is no second region.

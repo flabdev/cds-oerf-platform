@@ -13,13 +13,21 @@ from infra.naming import Stage
 
 #: Phase name to the deployed function name.
 STEP_FUNCTION_NAMES = {
+    "open": "oerf-step-open",
     "context": "oerf-step-context",
     "diagnose": "oerf-step-diagnose",
     "assess": "oerf-step-assess",
+    "approval": "oerf-step-approval",
+    "secure_facility": "oerf-step-secure-facility",
     "act": "oerf-step-act",
     "verify": "oerf-step-verify",
+    "record_containment": "oerf-step-record-containment",
+    "begin_disposition": "oerf-step-begin-disposition",
+    "handle_reopen": "oerf-step-handle-reopen",
+    "generate_report": "oerf-step-generate-report",
     "qa": "oerf-step-qa",
     "close": "oerf-step-close",
+    "no_response": "oerf-step-no-response",
     "record_failure": "oerf-step-record-failure",
     "escalate": "oerf-step-escalate",
     "cancel": "oerf-step-cancel",
@@ -58,7 +66,15 @@ def channel_router_name_for(stage: Stage) -> str:
 
 #: Phase name to the frozen handler path in ``docs/interfaces.md`` section 8.
 STEP_HANDLERS = {
+    "open": "domains.cold_chain_excursion.steps.open.handler",
     "context": "domains.cold_chain_excursion.steps.context.handler",
+    "approval": "domains.cold_chain_excursion.steps.approval.handler",
+    "secure_facility": "domains.cold_chain_excursion.steps.secure_facility.handler",
+    "record_containment": "domains.cold_chain_excursion.steps.record_containment.handler",
+    "begin_disposition": "domains.cold_chain_excursion.steps.begin_disposition.handler",
+    "handle_reopen": "domains.cold_chain_excursion.steps.handle_reopen.handler",
+    "generate_report": "domains.cold_chain_excursion.steps.generate_report.handler",
+    "no_response": "domains.cold_chain_excursion.steps.no_response.handler",
     "diagnose": "domains.cold_chain_excursion.steps.diagnose.handler",
     "assess": "domains.cold_chain_excursion.steps.assess.handler",
     "act": "domains.cold_chain_excursion.steps.act.handler",
@@ -72,13 +88,21 @@ STEP_HANDLERS = {
 
 #: ASL placeholder to the phase whose function replaces it.
 ASL_STEP_PLACEHOLDERS = {
+    "__STEP_OPEN_ARN__": "open",
     "__STEP_CONTEXT_ARN__": "context",
     "__STEP_DIAGNOSE_ARN__": "diagnose",
     "__STEP_ASSESS_ARN__": "assess",
+    "__STEP_APPROVAL_ARN__": "approval",
+    "__STEP_SECURE_FACILITY_ARN__": "secure_facility",
     "__STEP_ACT_ARN__": "act",
     "__STEP_VERIFY_ARN__": "verify",
+    "__STEP_RECORD_CONTAINMENT_ARN__": "record_containment",
+    "__STEP_BEGIN_DISPOSITION_ARN__": "begin_disposition",
+    "__STEP_HANDLE_REOPEN_ARN__": "handle_reopen",
+    "__STEP_GENERATE_REPORT_ARN__": "generate_report",
     "__STEP_QA_ARN__": "qa",
     "__STEP_CLOSE_ARN__": "close",
+    "__STEP_NO_RESPONSE_ARN__": "no_response",
     "__STEP_RECORD_FAILURE_ARN__": "record_failure",
     "__STEP_ESCALATE_ARN__": "escalate",
     "__STEP_CANCEL_ARN__": "cancel",
@@ -93,13 +117,22 @@ ASL_ENGAGE_PLACEHOLDERS = {
 #: Cold-chain state name to the phase that serves it. ``VerifyLoop`` calls the
 #: verify handler; its payload step name stays ``Verify``.
 WIRED_STATES = {
+    "OPEN": "open",
     "GatherContext": "context",
     "Diagnose": "diagnose",
     "Assess": "assess",
+    "Approval": "approval",
+    "SecureFacility": "secure_facility",
+    "SecureFacilityFallback": "secure_facility",
     "Act": "act",
     "VerifyLoop": "verify",
+    "RecordContainment": "record_containment",
+    "BeginDisposition": "begin_disposition",
+    "HandleReopen": "handle_reopen",
+    "GenerateReport": "generate_report",
     "QA": "qa",
     "Close": "close",
+    "NoResponse": "no_response",
     "RecordFailure": "record_failure",
     "Escalate": "escalate",
     "Cancel": "cancel",

@@ -833,7 +833,7 @@ def _option_facility_id(option: Mapping[str, Any] | None) -> str | None:
     return text(option, "facility_id") or text(option, "id")
 
 
-@handles("SecureFacility")
+@handles("SecureFacility", "SecureFacilityFallback")
 def secure_facility(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
     """Confirm the facility the recovery chose, or decline to the next one.
 
@@ -855,11 +855,26 @@ def secure_facility(envelope: StepEnvelope, dependencies: StepDependencies) -> S
         return replay
 
     workflow = dict(envelope.workflow)
+    if envelope.step == "SecureFacilityFallback":
+        declined = mapping(workflow, "facility") or {}
+        next_option_id = text(declined, "next_option_id")
+        if text(declined, "kind") != "facility" or next_option_id is None:
+            raise MissingStepInput(
+                "SecureFacilityFallback needs the next feasible facility from the decline"
+            )
+        assessment = mapping(workflow, "assessment") or {}
+        assessment["recommended_option"] = next_option_id
+        workflow["assessment"] = assessment
+        # The previous response belongs to the declined partner, not this facility.
+        workflow.pop("facility_response", None)
+
     context = _required_mapping(workflow, "context", envelope.step)
     assessment = _required_mapping(workflow, "assessment", envelope.step)
     incident = incident_for(envelope, dependencies)
     config = pinned_config(incident, dependencies)
     option = _chosen_option(workflow, assessment, envelope, envelope.step)
+    if envelope.step == "SecureFacilityFallback" and text(option, "id") != next_option_id:
+        raise StepError("SecureFacilityFallback did not select the next feasible facility")
     facility = _facility_for(context, option, envelope.step)
     if facility is None:
         # A continue option never needs a facility partner to accept.
@@ -1314,6 +1329,108 @@ def _review_disposition(
             f"{', '.join(closure.dispositions)}"
         )
     return approved, disposition
+
+
+@handles("GenerateReport")
+def generate_report(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
+    """Publish the incident report, then record its receipt on the workflow.
+
+    The document is assembled by ``oerf.platform.report.generator`` from the
+    stored incident row, its ``EVT#`` timeline, and its ``READ#`` readings, so
+    the report reflects what happened, not what the run intended. The incident
+    does not move: ``GenerateReport`` sits inside the disposition stage, and the
+    definition's ``CancelAfterGenerateReport?`` gate is the only edge out.
+    """
+    replay = _replay(envelope, dependencies)
+    if replay is not None:
+        return replay
+
+    if dependencies.reports is None:
+        raise StepError(f"step {envelope.step} has no report publisher configured")
+    published = dependencies.reports.publish(
+        tenant_id=envelope.tenant_id, incident_id=envelope.incident_id
+    )
+    workflow = dict(envelope.workflow)
+    workflow["report"] = {
+        key: published[key]
+        for key in (
+            "report_key",
+            "s3_uri",
+            "report_version",
+            "sha256",
+            "locked",
+            "generated_at",
+            "sections",
+        )
+        if key in published
+    }
+    return apply(
+        WorkflowStep(
+            step=envelope.step,
+            workflow=workflow,
+            result={"status": "generated", "report_key": published.get("report_key")},
+            current_stage="AWAITING_DISPOSITION",
+        ),
+        envelope,
+        dependencies,
+    )
+
+
+@handles("HandleReopen")
+def handle_reopen(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
+    """Move a rejected QA review back to REOPENED before verification resumes."""
+    replay = _replay(envelope, dependencies)
+    if replay is not None:
+        return replay
+
+    workflow = dict(envelope.workflow)
+    containment = _gate(envelope, workflow, "containment") or {}
+    if text(containment, "status") not in {"reopened", "contained"}:
+        raise MissingStepInput("HandleReopen needs a reopened containment verdict")
+    workflow["containment"] = {
+        **containment,
+        "status": "reopened",
+        "reopened_at": dependencies.stamp(),
+    }
+    return apply(
+        WorkflowStep(
+            step=envelope.step,
+            workflow=workflow,
+            result={"status": "reopened"},
+            incident_state="REOPENED",
+            current_stage="REOPENED",
+        ),
+        envelope,
+        dependencies,
+    )
+
+
+@handles("NoResponse")
+def no_response(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
+    """Record that the approval wait expired, without changing incident state."""
+    replay = _replay(envelope, dependencies)
+    if replay is not None:
+        return replay
+
+    workflow = dict(envelope.workflow)
+    approval = _gate(envelope, workflow, "approval") or {}
+    workflow["approval"] = {
+        **approval,
+        "status": "no_response",
+        "timed_out": True,
+        "timed_out_at": dependencies.stamp(),
+    }
+    output = apply(
+        WorkflowStep(
+            step=envelope.step,
+            workflow=workflow,
+            result={"status": "no_response"},
+            current_stage="AWAITING_APPROVAL",
+        ),
+        envelope,
+        dependencies,
+    )
+    return output
 
 
 @handles("QA")

@@ -7,7 +7,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_OPEN_ARN__",
         "Payload": {
           "step_name": "OPEN",
           "workflow.$": "$"
@@ -211,7 +211,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_APPROVAL_ARN__",
         "Payload": {
           "step_name": "Approval",
           "workflow.$": "$",
@@ -300,7 +300,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_SECURE_FACILITY_ARN__",
         "Payload": {
           "step_name": "SecureFacility",
           "workflow.$": "$"
@@ -345,6 +345,83 @@
               "Variable": "$.facility.accepted",
               "BooleanEquals": true
             }
+          ],
+          "Next": "Act"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.facility.accepted",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.facility.accepted",
+              "BooleanEquals": false
+            },
+            {
+              "Variable": "$.facility.next_option_id",
+              "IsNull": false
+            }
+          ],
+          "Next": "SecureFacilityFallback"
+        }
+      ],
+      "Default": "Escalate"
+    },
+    "SecureFacilityFallback": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STEP_SECURE_FACILITY_ARN__",
+        "Payload": {
+          "step_name": "SecureFacilityFallback",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterSecureFacilityFallback?"
+    },
+    "CancelAfterSecureFacilityFallback?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.cancel_requested", "IsPresent": true},
+            {"Variable": "$.cancel_requested", "BooleanEquals": true}
+          ],
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "FacilityFallbackAccepted?"
+    },
+    "FacilityFallbackAccepted?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.facility.accepted", "IsPresent": true},
+            {"Variable": "$.facility.accepted", "BooleanEquals": true}
           ],
           "Next": "Act"
         }
@@ -392,15 +469,27 @@
       "Choices": [
         {
           "And": [
-            {"Variable": "$.workflow.action.kind", "IsPresent": true},
-            {"Variable": "$.workflow.action.kind", "StringEquals": "continue"}
+            {
+              "Variable": "$.workflow.action.kind",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.workflow.action.kind",
+              "StringEquals": "continue"
+            }
           ],
           "Next": "NotifyContinue"
         },
         {
           "And": [
-            {"Variable": "$.workflow.action.kind", "IsPresent": true},
-            {"Variable": "$.workflow.action.kind", "StringEquals": "facility"}
+            {
+              "Variable": "$.workflow.action.kind",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.workflow.action.kind",
+              "StringEquals": "facility"
+            }
           ],
           "Next": "NotifyDivert"
         }
@@ -427,7 +516,7 @@
           "dedupe_key.$": "States.Format('{}:decision', $.incident_id)"
         }
       },
-      "ResultPath": "$.driver_notice",
+      "ResultPath": null,
       "TimeoutSeconds": 30,
       "Retry": [
         {
@@ -444,8 +533,10 @@
       ],
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
-          "ResultPath": "$.driver_notice_error",
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
           "Next": "CancelAfterNotifyContinue?"
         }
       ],
@@ -472,7 +563,7 @@
           "dedupe_key.$": "States.Format('{}:decision', $.incident_id)"
         }
       },
-      "ResultPath": "$.driver_notice",
+      "ResultPath": null,
       "TimeoutSeconds": 30,
       "Retry": [
         {
@@ -489,8 +580,10 @@
       ],
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
-          "ResultPath": "$.driver_notice_error",
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
           "Next": "CancelAfterNotifyDivert?"
         }
       ],
@@ -586,7 +679,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_HANDLE_REOPEN_ARN__",
         "Payload": {
           "step_name": "HandleReopen",
           "workflow.$": "$"
@@ -622,7 +715,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_GENERATE_REPORT_ARN__",
         "Payload": {
           "step_name": "GenerateReport",
           "workflow.$": "$"
@@ -828,7 +921,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_NO_RESPONSE_ARN__",
         "Payload": {
           "step_name": "NoResponse",
           "workflow.$": "$"
@@ -981,7 +1074,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_RECORD_CONTAINMENT_ARN__",
         "Payload": {
           "step_name": "RecordContainment",
           "workflow.$": "$"
@@ -1017,7 +1110,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "__STUB_ARN__",
+        "FunctionName": "__STEP_BEGIN_DISPOSITION_ARN__",
         "Payload": {
           "step_name": "BeginDisposition",
           "workflow.$": "$"
