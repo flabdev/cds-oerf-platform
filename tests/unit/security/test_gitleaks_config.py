@@ -3,12 +3,12 @@
 import hashlib
 from pathlib import Path
 
-# sha256 of .gitleaks.toml. Update this in the same change as the config.
-_CHECKSUM = "7c56b7f577547ea8ddc4003f48d912ae5aaf4f63a2af94c44d2ffc235d2796d0"
+# sha256 of .gitleaks.toml with newlines normalized to LF.
+_CHECKSUM = "ebcf1f3fda38ca1912f8ec7a6dcce979fa42741ce309a5a9776532091b8b7e37"
 
 
 def test_gitleaks_config_checksum_matches() -> None:
-    raw = Path(".gitleaks.toml").read_bytes()
+    raw = Path(".gitleaks.toml").read_bytes().replace(b"\r\n", b"\n")
     digest = hashlib.sha256(raw).hexdigest()
     assert digest == _CHECKSUM
     text = raw.decode("utf-8")
