@@ -42,6 +42,7 @@ REAL_PLACEHOLDERS = {
     "Assess": "__STEP_ASSESS_ARN__",
     "Approval": "__STEP_APPROVAL_ARN__",
     "SecureFacility": "__STEP_SECURE_FACILITY_ARN__",
+    "SecureFacilityFallback": "__STEP_SECURE_FACILITY_ARN__",
     "Act": "__STEP_ACT_ARN__",
     "VerifyLoop": "__STEP_VERIFY_ARN__",
     "RecordContainment": "__STEP_RECORD_CONTAINMENT_ARN__",
@@ -115,7 +116,7 @@ def test_real_and_stub_tasks_are_listed() -> None:
         if state.get("Parameters", {}).get("FunctionName") in ASL_ENGAGE_PLACEHOLDERS
     }
 
-    assert real == frozenset(REAL_PLACEHOLDERS)
+    assert real == frozenset(set(REAL_PLACEHOLDERS) | {"SecureFacilityFallback"})
     assert stub == STUB_COLD_CHAIN_TASKS
     assert engagement_stub == STUB_ENGAGEMENT_TASKS
     assert {
@@ -173,6 +174,12 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
             assert "OutputPath" not in state
             assert "task_token" not in json.dumps(state["Parameters"])
             assert state["Catch"][0]["Next"].startswith("CancelAfterNotify")
+            continue
+        if name == "SecureFacilityFallback":
+            assert state["Parameters"]["FunctionName"] == REAL_PLACEHOLDERS["SecureFacility"]
+            assert state["Parameters"]["Payload"]["step_name"] == "SecureFacilityFallback"
+            assert state["Retry"][0]["MaxAttempts"] == 3
+            assert state["Catch"][-1]["Next"] == "RecordFailure"
             continue
         expected_resource = (
             "arn:aws:states:::lambda:invoke.waitForTaskToken"
@@ -809,6 +816,8 @@ def _comparison_holds(rule: dict, data: dict) -> bool:
         return actual == rule["BooleanEquals"]
     if "StringEquals" in rule:
         return actual == rule["StringEquals"]
+    if "IsNull" in rule:
+        return actual is None if rule["IsNull"] else actual is not None
     raise AssertionError(f"unsupported choice comparison: {sorted(rule)}")
 
 
@@ -1233,17 +1242,72 @@ def test_rejected_approval_escalates_and_keeps_identity() -> None:
     assert final["incident_id"] == "INC-001"
 
 
-def test_declined_facility_escalates() -> None:
+def test_facility_decline_loops_once_to_the_next_facility() -> None:
+    """C6: a decline with a ranked fallback goes through a distinct task identity."""
+    states = load_definition()["States"]
+    assert states["FacilityAccepted?"]["Choices"][1] == {
+        "And": [
+            {"Variable": "$.facility.accepted", "IsPresent": True},
+            {"Variable": "$.facility.accepted", "BooleanEquals": False},
+            {"Variable": "$.facility.next_option_id", "IsNull": False},
+        ],
+        "Next": "SecureFacilityFallback",
+    }
+    assert states["SecureFacilityFallback"]["Parameters"]["Payload"]["step_name"] == (
+        "SecureFacilityFallback"
+    )
+    assert states["CancelAfterSecureFacilityFallback?"]["Default"] == (
+        "FacilityFallbackAccepted?"
+    )
+    assert states["FacilityFallbackAccepted?"]["Default"] == "Escalate"
+    assert evaluate_choice(
+        states["FacilityAccepted?"],
+        {"facility": {"accepted": False, "next_option_id": "FAC-B"}},
+    ) == "SecureFacilityFallback"
+    assert evaluate_choice(
+        states["FacilityAccepted?"],
+        {"facility": {"accepted": False, "next_option_id": None}},
+    ) == "Escalate"
+    assert evaluate_choice(
+        states["FacilityAccepted?"], {"facility": {"accepted": True}}
+    ) == "Act"
+    assert evaluate_choice(
+        states["FacilityFallbackAccepted?"], {"facility": {"accepted": False}}
+    ) == "Escalate"
+
+
+def test_facility_decline_graph_walk_uses_fallback_then_continues_to_act() -> None:
+    visits: list[str] = []
+
     def declining_handler(event: dict, _context: object) -> dict:
-        result = handler(event, None)
-        if event["step_name"] == "SecureFacility":
-            result["facility"]["accepted"] = False
-        return result
+        step = event["step_name"]
+        visits.append(step)
+        if step == "SecureFacility":
+            result = handler(event, None)
+            result["facility"] = {
+                "accepted": False,
+                "facility_id": "FAC-A",
+                "next_option_id": "FAC-B",
+            }
+            return result
+        if step == "SecureFacilityFallback":
+            result = dict(event["workflow"])
+            result["facility"] = {
+                "accepted": True,
+                "facility_id": "FAC-B",
+                "next_option_id": None,
+            }
+            return result
+        return handler(event, _context)
 
     outcome, final = simulate(dict(INITIAL_EVENT), declining_handler)
 
-    assert outcome == "Escalate"
-    assert final["escalated"] is True
+    assert outcome == "WorkflowComplete"
+    assert visits.count("SecureFacility") == 1
+    assert visits.count("SecureFacilityFallback") == 1
+    assert "Act" in visits
+    assert final["facility"]["facility_id"] == "FAC-B"
+    assert final["action"]["status"] == "completed"
 
 
 def test_reopened_containment_loops_through_reopen_then_closes() -> None:

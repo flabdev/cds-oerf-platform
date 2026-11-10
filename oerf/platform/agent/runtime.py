@@ -88,6 +88,7 @@ PHASES: dict[str, str] = {
     "assess": "Assess",
     "approval": "Approval",
     "secure_facility": "SecureFacility",
+    "secure_facility_fallback": "SecureFacilityFallback",
     "act": "Act",
     "verify": "Verify",
     "record_containment": "RecordContainment",
@@ -103,7 +104,10 @@ PHASES: dict[str, str] = {
 }
 
 #: Phase name to the module path ``docs/interfaces.md`` freezes for it.
-MODULES: dict[str, str] = {phase: f"domains.cold_chain_excursion.steps.{phase}" for phase in PHASES}
+MODULES: dict[str, str] = {
+    **{phase: f"domains.cold_chain_excursion.steps.{phase}" for phase in PHASES},
+    "secure_facility_fallback": "domains.cold_chain_excursion.steps.secure_facility",
+}
 
 
 class WiringError(Exception):

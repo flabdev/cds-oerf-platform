@@ -833,7 +833,7 @@ def _option_facility_id(option: Mapping[str, Any] | None) -> str | None:
     return text(option, "facility_id") or text(option, "id")
 
 
-@handles("SecureFacility")
+@handles("SecureFacility", "SecureFacilityFallback")
 def secure_facility(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
     """Confirm the facility the recovery chose, or decline to the next one.
 
@@ -855,11 +855,26 @@ def secure_facility(envelope: StepEnvelope, dependencies: StepDependencies) -> S
         return replay
 
     workflow = dict(envelope.workflow)
+    if envelope.step == "SecureFacilityFallback":
+        declined = mapping(workflow, "facility") or {}
+        next_option_id = text(declined, "next_option_id")
+        if text(declined, "kind") != "facility" or next_option_id is None:
+            raise MissingStepInput(
+                "SecureFacilityFallback needs the next feasible facility from the decline"
+            )
+        assessment = mapping(workflow, "assessment") or {}
+        assessment["recommended_option"] = next_option_id
+        workflow["assessment"] = assessment
+        # The previous response belongs to the declined partner, not this facility.
+        workflow.pop("facility_response", None)
+
     context = _required_mapping(workflow, "context", envelope.step)
     assessment = _required_mapping(workflow, "assessment", envelope.step)
     incident = incident_for(envelope, dependencies)
     config = pinned_config(incident, dependencies)
     option = _chosen_option(workflow, assessment, envelope, envelope.step)
+    if envelope.step == "SecureFacilityFallback" and text(option, "id") != next_option_id:
+        raise StepError("SecureFacilityFallback did not select the next feasible facility")
     facility = _facility_for(context, option, envelope.step)
     if facility is None:
         # A continue option never needs a facility partner to accept.

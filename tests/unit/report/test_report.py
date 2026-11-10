@@ -168,6 +168,49 @@ def test_handler_publishes_a_versioned_html_report(monkeypatch) -> None:
     assert "&lt;b&gt;" in html
 
 
+def test_handler_maps_persisted_step_outputs_into_report_content(monkeypatch) -> None:
+    store = MemoryReportStore()
+    incident = _stored_incident()
+    table = _StepOutputTable(incident)
+    monkeypatch.setattr("oerf.platform.report.generator._store", lambda: store)
+    monkeypatch.setattr("oerf.platform.report.generator.INCIDENT_TABLE_NAME", "incidents")
+    monkeypatch.setattr("oerf.platform.report.generator.get_dynamodb", lambda: table)
+
+    result = handler({"tenant_id": "t1", "incident_id": "INC-9"}, None)
+    html = store.objects[result["report_key"]].decode()
+
+    assert "driver diagnosis summary" in html
+    assert "FAC-A drive_min=9.0 projected_minutes=20.0" in html
+    assert "approved" in html
+    assert "FAC-A (declined)" in html
+    assert "FAC-B (accepted)" in html
+    assert "facility FAC-B completed" in html
+    assert "contained; 5.0 C; stable 5 min" in html
+    assert "used_minutes=3.0" in html
+    assert "temperature_c=8.1" in html
+    assert "+15550000001" not in html
+    assert "facility-secret@example.com" not in html
+
+
+def test_report_versioning_keeps_previous_content_after_new_step_snapshot(monkeypatch) -> None:
+    store = MemoryReportStore()
+    table = _StepOutputTable(_stored_incident())
+    monkeypatch.setattr("oerf.platform.report.generator._store", lambda: store)
+    monkeypatch.setattr("oerf.platform.report.generator.INCIDENT_TABLE_NAME", "incidents")
+    monkeypatch.setattr("oerf.platform.report.generator.get_dynamodb", lambda: table)
+
+    first = handler({"tenant_id": "t1", "incident_id": "INC-9"}, None)
+    original = store.objects[first["report_key"]]
+    table.snapshots["SecureFacilityFallback"]["facility"]["facility_id"] = "FAC-C"
+    second = handler({"tenant_id": "t1", "incident_id": "INC-9"}, None)
+
+    assert first["report_version"] == 1
+    assert second["report_version"] == 2
+    assert store.objects[first["report_key"]] == original
+    assert "FAC-A (declined)" in original.decode()
+    assert "FAC-C (accepted)" in store.objects[second["report_key"]].decode()
+
+
 def test_handler_does_not_publish_when_the_incident_is_missing(monkeypatch) -> None:
     store = MemoryReportStore()
     table = _Table(None)
@@ -333,6 +376,74 @@ class _Table:
         if prefix == "EVT#":
             return {"Items": self.item.get("timeline_rows", [])}
         return {"Items": []}
+
+
+class _StepOutputTable(_Table):
+    """Resource-table fake exposing durable workflow snapshots by incident key."""
+
+    def __init__(self, item: dict) -> None:
+        super().__init__(item)
+        self.snapshots = {
+            "Diagnose": {
+                "diagnosis": {"status": "driver diagnosis summary"},
+            },
+            "Assess": {
+                "context": {
+                    "range_c": [2, 8],
+                    "allowance_minutes": 45,
+                    "assessment": {
+                        "unload_min": 4,
+                        "rise_rate_c_per_min": 0.03,
+                        "cooldown_rate_c_per_min": 0.12,
+                        "min_spare_allowance_min": 5,
+                    },
+                    "trigger": {"temperature_c": 8.1},
+                },
+                "assessment": {
+                    "elapsed_minutes": 3,
+                    "recommended_option": "FAC-A",
+                    "options": [
+                        {
+                            "id": "FAC-A", "drive_min": 9, "projected_minutes": 20,
+                            "spare_minutes": 25, "feasible": True,
+                        },
+                    ],
+                },
+            },
+            "Approval": {"approval": {"status": "approved"}},
+            "SecureFacility": {
+                "facility": {"facility_id": "FAC-A", "accepted": False, "kind": "facility"},
+            },
+            "SecureFacilityFallback": {
+                "facility": {"facility_id": "FAC-B", "accepted": True, "kind": "facility"},
+            },
+            "Act": {
+                "action": {"kind": "facility", "facility_id": "FAC-B", "status": "completed"},
+            },
+            "RecordContainment": {
+                "containment": {
+                    "status": "contained", "temperature_c": 5.0, "stable_minutes": 5,
+                },
+            },
+        }
+
+    def query(self, **kwargs: object) -> dict:
+        values = kwargs.get("ExpressionAttributeValues")
+        prefix = values.get(":prefix") if isinstance(values, dict) else ""
+        if prefix == "STEP#":
+            return {
+                "Items": [
+                    {
+                        "sk": f"STEP#{step}",
+                        "step": step,
+                        "step_output": {"workflow": snapshot},
+                    }
+                    for step, snapshot in self.snapshots.items()
+                ]
+            }
+        return super().query(**kwargs)
+
+
 
 
 def _stored_incident() -> dict:

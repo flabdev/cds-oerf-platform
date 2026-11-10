@@ -133,6 +133,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         _rows(table, pk, "EVT#"),
         generated_at,
         readings=_rows(table, pk, "READ#"),
+        step_workflows=_step_workflows(table, pk),
     )
     receipt = publish_report(document, _store(), pdf_backend="none")
     s3_uri = f"s3://{REPORT_BUCKET_NAME}/{receipt.s3_key}" if REPORT_BUCKET_NAME else ""
@@ -165,13 +166,24 @@ def _document(
     generated_at: str,
     *,
     readings: list[dict[str, Any]] | None = None,
+    step_workflows: dict[str, dict[str, Any]] | None = None,
 ) -> ReportDocument:
-    """Map stored attributes onto the report. Absent sections stay empty.
-
-    ``READ#`` rows supply ``ts`` and ``temperature_c``. ``EVT#`` rows are state
-    transitions and stay in ``state_timeline``.
-    """
-
+    """Map canonical and persisted step data onto the report."""
+    workflows = step_workflows or {}
+    assess = workflows.get("Assess", {})
+    workflow = _latest_workflow(workflows)
+    context = _mapping(assess.get("context")) or _mapping(workflow.get("context")) or {}
+    assessment = _mapping(assess.get("assessment")) or _mapping(workflow.get("assessment")) or {}
+    diagnosis = _mapping(workflow.get("diagnosis")) or {}
+    approval = _mapping(workflow.get("approval")) or {}
+    facility = _mapping(workflow.get("facility")) or {}
+    action = _mapping(workflow.get("action")) or {}
+    containment = (
+        _mapping(workflows.get("RecordContainment", {}).get("containment"))
+        or _mapping(workflow.get("containment"))
+        or {}
+    )
+    options = _options(assessment.get("options"))
     sensor_rows = readings or []
     return ReportDocument(
         tenant_id=tenant_id,
@@ -179,20 +191,143 @@ def _document(
         shipment_id=_optional_text(incident.get("shipment_id")),
         state=_optional_text(incident.get("state")),
         generated_at=generated_at,
-        temperature_timeline=[
-            line for line in (_reading_line(entry) for entry in sensor_rows) if line
-        ],
-        state_timeline=[line for line in (_transition_line(entry) for entry in timeline) if line],
-        diagnosis=_optional_text(incident.get("diagnosis") or incident.get("reason")),
+        temperature_timeline=[line for line in (_reading_line(row) for row in sensor_rows) if line],
+        state_timeline=[line for line in (_transition_line(row) for row in timeline) if line],
+        diagnosis=(
+            _optional_text(diagnosis.get("summary"))
+            or _optional_text(diagnosis.get("status"))
+            or _optional_text(incident.get("diagnosis"))
+            or _optional_text(incident.get("reason"))
+        ),
         evidence=_evidence(incident.get("evidence")),
-        options=_options(incident.get("options")),
-        approval=_optional_text(incident.get("approval")),
-        facility=_optional_text(incident.get("facility")),
-        actions=_texts(incident.get("actions")),
-        containment=_optional_text(incident.get("containment")),
+        options=options,
+        approval=_optional_text(approval.get("status")),
+        facility=_facility_line(facility),
+        actions=_action_lines(action),
+        containment=_containment_line(containment),
         qa_disposition=_optional_text(incident.get("qa_disposition")),
-        decision_trace=_trace(incident.get("decision_trace")),
+        decision_trace=_decision_trace(context, assessment, options)
+        or _trace(incident.get("decision_trace")),
     )
+
+
+def _step_workflows(table: Any, pk: str) -> dict[str, dict[str, Any]]:
+    """Read persisted handler snapshots for one tenant-scoped incident."""
+    parsed: dict[str, dict[str, Any]] = {}
+    for row in _rows(table, pk, "STEP#"):
+        step = str(row.get("step") or row.get("sk", "").removeprefix("STEP#"))
+        raw = row.get("step_output")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+        output = raw.get("workflow") if isinstance(raw, dict) else None
+        if isinstance(output, dict):
+            parsed[step] = output
+    return parsed
+
+
+def _latest_workflow(workflows: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Merge snapshots in workflow order; later outputs carry prior values."""
+    order = (
+        "OPEN", "GatherContext", "Diagnose", "Assess", "Approval", "SecureFacility",
+        "SecureFacilityFallback", "Act", "Verify", "RecordContainment", "BeginDisposition",
+        "GenerateReport", "QA", "Close",
+    )
+    merged: dict[str, Any] = {}
+    for step in order:
+        snapshot = workflows.get(step)
+        if snapshot:
+            merged.update(snapshot)
+    if "SecureFacilityFallback" in workflows:
+        first_facility = _mapping(workflows.get("SecureFacility", {}).get("facility"))
+        fallback_facility = _mapping(workflows["SecureFacilityFallback"].get("facility"))
+        facility = fallback_facility.copy()
+        if first_facility:
+            history = fallback_facility.get("history")
+            facility["history"] = [
+                first_facility,
+                *([_mapping(item) for item in history] if isinstance(history, list) else []),
+            ]
+        merged["facility"] = facility
+    return merged
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _decision_trace(
+    context: dict[str, Any], assessment: dict[str, Any], options: list[ReportOption]
+) -> DecisionTrace | None:
+    """Build a numeric trace only when every required rule input is available."""
+    settings = _mapping(context.get("assessment"))
+    trigger = _mapping(context.get("trigger"))
+    limits = context.get("range_c")
+    numeric = {
+        "used_minutes": assessment.get("elapsed_minutes"),
+        "temperature_c": trigger.get("temperature_c"),
+        "allowance_minutes": context.get("allowance_minutes"),
+        "upper_c": limits[1] if isinstance(limits, list | tuple) and len(limits) == 2 else None,
+        "unload_min": settings.get("unload_min"),
+        "rise_rate_c_per_min": settings.get("rise_rate_c_per_min"),
+        "cooldown_rate_c_per_min": settings.get("cooldown_rate_c_per_min"),
+        "min_spare_allowance_min": settings.get("min_spare_allowance_min"),
+    }
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float, Decimal))
+        for value in numeric.values()
+    ):
+        return None
+    try:
+        return DecisionTrace(
+            **numeric,
+            options=options,
+            recommended=_optional_text(assessment.get("recommended_option")),
+        )
+    except Exception:
+        return None
+
+
+def _facility_line(facility: dict[str, Any]) -> str | None:
+    history = facility.get("history")
+    records = [_mapping(item) for item in history] if isinstance(history, list) else []
+    records.append(facility)
+    lines: list[str] = []
+    for record in records:
+        facility_id = _optional_text(record.get("facility_id"))
+        if facility_id is None:
+            continue
+        status = "accepted" if record.get("accepted") is True else "declined"
+        lines.append(f"{facility_id} ({status})")
+    return "; ".join(lines) or None
+
+
+def _action_lines(action: dict[str, Any]) -> list[str]:
+    if not action:
+        return []
+    values = (
+        _optional_text(action.get("kind")),
+        _optional_text(action.get("facility_id")),
+        _optional_text(action.get("status")),
+    )
+    line = " ".join(part for part in values if part)
+    return [line] if line else []
+
+
+def _containment_line(containment: dict[str, Any]) -> str | None:
+    if not containment:
+        return None
+    values = [_optional_text(containment.get("status"))]
+    temperature = containment.get("temperature_c")
+    stable = containment.get("stable_minutes")
+    if isinstance(temperature, (int, float, Decimal)) and not isinstance(temperature, bool):
+        values.append(f"{temperature} C")
+    if isinstance(stable, (int, float, Decimal)) and not isinstance(stable, bool):
+        values.append(f"stable {stable} min")
+    line = "; ".join(value for value in values if value)
+    return line or None
 
 
 def _rows(table: Any, pk: str, prefix: str) -> list[dict[str, Any]]:
