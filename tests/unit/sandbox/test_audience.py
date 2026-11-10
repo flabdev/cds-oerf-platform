@@ -97,6 +97,21 @@ def test_dynamo_join_stamps_a_label_and_assigns_the_shipment() -> None:
     assert contact["label"]["S"] == result.session.display_name
     assert contact["audience"]["S"] == "true"
     assert shipment["driver"]["S"] == result.session.contact_id
+    assert result.session.seed_driver == "C-T1-DRV"
     assert "155500019001" not in result.session.display_name
     again = store.claim(_message("m-2", "+155500019002"), NOW, registry)
     assert again.outcome == "full"
+
+    store.remove(result.session.contact_id, registry)
+    restored = client.get_item(
+        TableName="tenant",
+        Key=key("TENANT#t1", "SHIPMENT#PH-2841"),
+    )["Item"]
+    assert restored["driver"]["S"] == "C-T1-DRV"
+    assert (
+        client.get_item(
+            TableName="tenant",
+            Key=key("TENANT#t1", f"CONTACT#{result.session.contact_id}"),
+        ).get("Item")
+        is None
+    )

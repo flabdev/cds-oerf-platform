@@ -47,6 +47,7 @@ class AudienceSession(BaseModel):
     started_at: datetime
     expires_at: datetime
     consent_at: datetime
+    seed_driver: str = ""
 
 
 class AudienceResult(BaseModel):
@@ -336,6 +337,7 @@ class DynamoAudienceStore:
             started_at=now,
             expires_at=now + SESSION_LENGTH,
             consent_at=now,
+            seed_driver=self._seed_driver(shipment_id),
         )
         _register(registry, session)
         self._stamp_contact(session)
@@ -364,12 +366,13 @@ class DynamoAudienceStore:
 
     def remove(self, contact_id: str, registry: PhoneRegistry) -> None:
         session = self._session(contact_id)
+        if session is not None:
+            self._restore_driver(session)
+            registry.remove_contact(session.tenant_id, session.contact_id)
         self._client.delete_item(  # type: ignore[attr-defined]
             TableName=self._tenant,
             Key=key(f"TENANT#{AUDIENCE_TENANT}", f"AUDIENCE#{contact_id}"),
         )
-        if session is not None:
-            registry.remove_contact(session.tenant_id, session.contact_id)
 
     def assign(
         self,
@@ -388,7 +391,12 @@ class DynamoAudienceStore:
         }
         if shipment_id in taken:
             return None
-        updated = current.model_copy(update={"shipment_id": shipment_id})
+        if shipment_id != current.shipment_id:
+            self._restore_driver(current)
+            seed = self._seed_driver(shipment_id)
+        else:
+            seed = current.seed_driver
+        updated = current.model_copy(update={"shipment_id": shipment_id, "seed_driver": seed})
         self._put_session(updated)
         self._point_shipment(updated)
         return updated
@@ -435,6 +443,7 @@ class DynamoAudienceStore:
                 "expires_at": n(epoch_seconds(session.expires_at)),
                 "started_at": n(epoch_seconds(session.started_at)),
                 "consent_at": n(epoch_seconds(session.consent_at)),
+                "seed_driver": s(session.seed_driver),
             },
         )
 
@@ -457,6 +466,37 @@ class DynamoAudienceStore:
         if phone:
             phone["audience"] = s("true")
             self._client.put_item(TableName=self._routing, Item=phone)  # type: ignore[attr-defined]
+
+    def _seed_driver(self, shipment_id: str) -> str:
+        """The driver to put back. An audience id is not a seed."""
+
+        item = self._get(
+            self._tenant,
+            f"TENANT#{AUDIENCE_TENANT}",
+            f"SHIPMENT#{shipment_id}",
+        )
+        if not item or "driver" not in item:
+            return ""
+        driver = text(item["driver"])
+        if driver.startswith("AUD-"):
+            return ""
+        return driver
+
+    def _restore_driver(self, session: AudienceSession) -> None:
+        item = self._get(
+            self._tenant,
+            f"TENANT#{session.tenant_id}",
+            f"SHIPMENT#{session.shipment_id}",
+        )
+        if not item or "driver" not in item:
+            return
+        if text(item["driver"]) != session.contact_id:
+            return
+        if session.seed_driver:
+            item["driver"] = s(session.seed_driver)
+        else:
+            item.pop("driver", None)
+        self._client.put_item(TableName=self._tenant, Item=item)  # type: ignore[attr-defined]
 
     def _point_shipment(self, session: AudienceSession) -> None:
         item = self._get(
@@ -544,4 +584,5 @@ def _session_from_item(item: dict) -> AudienceSession:
         started_at=from_epoch(number(item["started_at"])),
         expires_at=from_epoch(number(item["expires_at"])),
         consent_at=from_epoch(number(item["consent_at"])),
+        seed_driver=text(item["seed_driver"]) if "seed_driver" in item else "",
     )
