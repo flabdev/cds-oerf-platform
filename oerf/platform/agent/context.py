@@ -43,6 +43,7 @@ STAGE_BY_STEP: dict[str, str] = {
     "Assess": "ASSESSING",
     "Approval": "AWAITING_APPROVAL",
     "SecureFacility": "SECURING_FACILITY",
+    "SecureFacilityFallback": "SECURING_FACILITY",
     "Act": "IN_TRANSIT",
     "Verify": "VERIFYING",
     "RecordContainment": "CONTAINED",
@@ -94,6 +95,9 @@ STEP_POSITIONS: dict[str, StepPosition] = {
     "SecureFacility": StepPosition(
         frozenset({"ASSESSING", "AWAITING_APPROVAL"}), "SECURING_FACILITY"
     ),
+    "SecureFacilityFallback": StepPosition(
+        frozenset({"SECURING_FACILITY"}), "SECURING_FACILITY"
+    ),
     "Act": StepPosition(
         frozenset({"ASSESSING", "AWAITING_APPROVAL", "SECURING_FACILITY"}), "IN_TRANSIT"
     ),
@@ -127,6 +131,7 @@ _DOWNSTREAM: dict[str, frozenset[str]] = {
     "Diagnose": frozenset({"DIAGNOSING", "ASSESSING"}),
     "Assess": frozenset({"ASSESSING", "AWAITING_APPROVAL", "SECURING_FACILITY", "ESCALATED"}),
     "SecureFacility": frozenset({"SECURING_FACILITY", "IN_TRANSIT"}),
+    "SecureFacilityFallback": frozenset({"SECURING_FACILITY", "IN_TRANSIT"}),
     "Act": frozenset(
         {"IN_TRANSIT", "VERIFYING", "CONTAINED", "REOPENED", "AWAITING_DISPOSITION", "CLOSED"}
     ),

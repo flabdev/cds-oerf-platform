@@ -123,6 +123,7 @@ WIRED_STATES = {
     "Assess": "assess",
     "Approval": "approval",
     "SecureFacility": "secure_facility",
+    "SecureFacilityFallback": "secure_facility",
     "Act": "act",
     "VerifyLoop": "verify",
     "RecordContainment": "record_containment",

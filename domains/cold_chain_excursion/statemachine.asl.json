@@ -347,6 +347,83 @@
             }
           ],
           "Next": "Act"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.facility.accepted",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.facility.accepted",
+              "BooleanEquals": false
+            },
+            {
+              "Variable": "$.facility.next_option_id",
+              "IsNull": false
+            }
+          ],
+          "Next": "SecureFacilityFallback"
+        }
+      ],
+      "Default": "Escalate"
+    },
+    "SecureFacilityFallback": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STEP_SECURE_FACILITY_ARN__",
+        "Payload": {
+          "step_name": "SecureFacilityFallback",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterSecureFacilityFallback?"
+    },
+    "CancelAfterSecureFacilityFallback?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.cancel_requested", "IsPresent": true},
+            {"Variable": "$.cancel_requested", "BooleanEquals": true}
+          ],
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "FacilityFallbackAccepted?"
+    },
+    "FacilityFallbackAccepted?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.facility.accepted", "IsPresent": true},
+            {"Variable": "$.facility.accepted", "BooleanEquals": true}
+          ],
+          "Next": "Act"
         }
       ],
       "Default": "Escalate"

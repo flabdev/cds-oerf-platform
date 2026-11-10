@@ -646,7 +646,56 @@ def test_secure_facility_decline_moves_to_the_next_feasible_facility() -> None:
     assert result.incident_state == "SECURING_FACILITY"
 
 
-def test_secure_facility_decline_with_no_fallback_leaves_nothing_to_try() -> None:
+def test_secure_facility_fallback_uses_next_option_under_a_distinct_idempotency_key() -> None:
+    dependencies = _dependencies("SECURING_FACILITY")
+    initial = HANDLERS["SecureFacility"](
+        _envelope(
+            "SecureFacility",
+            workflow=_approval_workflow(
+                facility_response={"status": "declined"}, context=_facility_context()
+            ),
+        ),
+        dependencies,
+    )
+
+    fallback_workflow = {
+        **initial.workflow,
+        "facility_response": {"status": "accepted"},
+    }
+    result = HANDLERS["SecureFacilityFallback"](
+        _envelope("SecureFacilityFallback", workflow=fallback_workflow), dependencies
+    )
+    replay = HANDLERS["SecureFacilityFallback"](
+        _envelope("SecureFacilityFallback"), dependencies
+    )
+
+    assert result.facility is not None
+    assert result.facility["accepted"] is True
+    assert result.facility["facility_id"] == "FAC-B"
+    assert result.workflow["assessment"]["recommended_option"] == "FAC-B"
+    assert result.last_completed_step == "SecureFacilityFallback"
+    assert replay == result
+    assert dependencies.results.get(
+        tenant_id=TENANT, incident_id=INCIDENT_ID, step="SecureFacility"
+    ) is not None
+    assert dependencies.results.get(
+        tenant_id=TENANT, incident_id=INCIDENT_ID, step="SecureFacilityFallback"
+    ) is not None
+
+
+def test_secure_facility_fallback_requires_a_recorded_next_option() -> None:
+    dependencies = _dependencies("SECURING_FACILITY")
+    workflow = _approval_workflow(
+        facility={"accepted": False, "kind": "facility", "next_option_id": None},
+        context=_facility_context(),
+    )
+
+    with pytest.raises(MissingStepInput, match="next feasible facility"):
+        HANDLERS["SecureFacilityFallback"](
+            _envelope("SecureFacilityFallback", workflow=workflow), dependencies
+        )
+
+
     dependencies = _dependencies("SECURING_FACILITY")
     envelope = _envelope(
         "SecureFacility",
