@@ -4,7 +4,6 @@
 	dev-diff dev-deploy
 
 BUTTON ?= running
-CHANNELS_LIVE ?= false
 PYTHON ?= python
 
 test:

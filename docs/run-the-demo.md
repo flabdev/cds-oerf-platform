@@ -31,7 +31,7 @@ make dev-deploy    PROFILE=<aws-profile> ACCOUNT=<account-id>
 
 `dev-seed` runs `seed_runtime --yes` and then `verify_seed`. `TENANT` is `t1`, `t2`, or `sbx`. `dev-users` reads the password from the terminal; it is not an argument and it is not a file. `dev-sensor` publishes the scenario on `oerf-dev-events`. `dev-reset` applies a reseeded reset. `dev-check` is `verify_seed`. `dev-diff` and `dev-deploy` build `web/` and run CDK on the four `*-dev` stacks with the same context the dev workflow uses. Normal dev deploys happen by merging to `develop`. The laptop targets are for a rehearsal from this machine.
 
-`dev-deploy` reads the phone-number id from `/oerf/dev/whatsapp/phone-number-id`, the shared inbound topic from main's `OerfComputeStack` (read-only), and `ALARM_EMAIL` from the environment or `gh variable get ALARM_EMAIL`. It stops before CDK if any of those is empty. `CHANNELS_LIVE` defaults to false.
+`dev-deploy` resolves `WA_PHONE_NUMBER_ID`, `ALARM_EMAIL`, `SHARED_INBOUND_TOPIC_ARN`, and `CHANNELS_LIVE` the way the dev workflow does: an environment variable wins, then `gh variable get <NAME> --env dev`, then the repository variable. The phone id then falls back to `/oerf/dev/whatsapp/phone-number-id`. A context key is omitted only when that value is empty. The phone id is required only when channels are live. If the deployed dev router already has a phone id, the dev alarm topic already has an email subscription, or the dev compute stack already subscribes to main's inbound topic, an empty resolution stops before CDK. `DEV_DEPLOY_ALLOW_OMIT=1` allows that omission. The command prints the source of each value and whether it is set or omitted. It does not print the values.
 
 ### Live rehearsal
 

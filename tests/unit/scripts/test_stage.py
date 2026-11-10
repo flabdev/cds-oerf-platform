@@ -11,7 +11,13 @@ from infra.naming import Stage
 from scripts._stage import resolve_stage
 from scripts.demo import main as demo_main
 from scripts.demo_reply import main as reply_main
-from scripts.dev_deploy import CONTEXT_KEYS, deploy_context, main as deploy_main, resolve_inputs
+from scripts.dev_deploy import (
+    CONTEXT_KEYS,
+    context_arguments,
+    deploy_context,
+    main as deploy_main,
+    resolve_inputs,
+)
 from scripts.dev_preflight import live_driver_parameter_names, main as preflight_main
 from scripts.reset import main as reset_main
 from scripts.seed_demo_users import main as users_main
@@ -277,48 +283,215 @@ def test_url_button_proposal_names_the_dev_copies() -> None:
     assert "does not submit" in text or "do not submit" in text
 
 
-def test_dev_deploy_refuses_each_empty_value() -> None:
-    with pytest.raises(SystemExit, match="phone-number id"):
-        deploy_context(
-            account=ACCOUNT,
-            phone_id="",
-            topic_arn="arn:aws:sns:us-east-1:000000000000:topic",
-            alarm_email="ops@example.com",
-            channels_live="false",
-        )
-    with pytest.raises(SystemExit, match="SHARED_INBOUND_TOPIC_ARN"):
-        deploy_context(
-            account=ACCOUNT,
-            phone_id="phone-number-id-00000000000000000000000000000000",
-            topic_arn="",
-            alarm_email="ops@example.com",
-            channels_live="false",
-        )
-    with pytest.raises(SystemExit, match="ALARM_EMAIL"):
-        deploy_context(
-            account=ACCOUNT,
-            phone_id="phone-number-id-00000000000000000000000000000000",
-            topic_arn="arn:aws:sns:us-east-1:000000000000:topic",
-            alarm_email="   ",
-            channels_live="false",
-        )
+def _gh(*rows: tuple[str, str | None, str]):
+    table = {(name, environment): value for name, environment, value in rows}
+
+    def get(name: str, *, environment: str | None) -> str:
+        return table.get((name, environment), "")
+
+    return get
 
 
-def test_dev_deploy_command_refuses_before_cdk(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mock_deploy_on_a_fresh_stack_omits_empty_values(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    context = resolve_inputs(
+        _Recording(),
+        account=ACCOUNT,
+        environ={},
+        gh_get=_gh(),
+    )
+    err = capsys.readouterr().err
+    assert context["channels:live"] == "false"
+    assert "whatsapp:phoneNumberId" not in context
+    assert "whatsapp:sharedInboundTopicArn" not in context
+    assert "alarms:email" not in context
+    assert "whatsapp:wabaId" not in context
+    assert "WA_PHONE_NUMBER_ID empty omitted" in err
+    assert "ALARM_EMAIL empty omitted" in err
+    assert "SHARED_INBOUND_TOPIC_ARN empty omitted" in err
+    assert "CHANNELS_LIVE empty set" in err
+    arguments = context_arguments(context)
+    assert "OerfComputeStack-dev" in arguments
+    assert not any(part.startswith("whatsapp:phoneNumberId=") for part in arguments)
+    assert not any(part.startswith("alarms:email=") for part in arguments)
+
+
+def test_channels_live_without_a_phone_fails(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit, match="WA_PHONE_NUMBER_ID"):
+        resolve_inputs(
+            _Recording(),
+            account=ACCOUNT,
+            environ={"CHANNELS_LIVE": "true", "DEV_DEPLOY_ALLOW_OMIT": "1"},
+            gh_get=_gh(),
+        )
+    assert "phone-number" not in capsys.readouterr().err
+
+
+def test_deployed_values_refuse_an_empty_resolution(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    phone = "phone-number-id-00000000000000000000000000000000"
+    session = _Recording(router_phone=phone, alarm_subscription=True)
+    with pytest.raises(SystemExit) as caught:
+        resolve_inputs(session, account=ACCOUNT, environ={}, gh_get=_gh())
+    message = str(caught.value)
+    assert "widen the router permission" in message
+    assert "delete the subscription" in message
+    assert "DEV_DEPLOY_ALLOW_OMIT=1" in message
+    assert phone not in message
+    assert phone not in capsys.readouterr().err
+
+    allowed = resolve_inputs(
+        _Recording(router_phone=phone, alarm_subscription=True),
+        account=ACCOUNT,
+        environ={"DEV_DEPLOY_ALLOW_OMIT": "1"},
+        gh_get=_gh(),
+    )
+    err = capsys.readouterr().err
+    assert "whatsapp:phoneNumberId" not in allowed
+    assert "alarms:email" not in allowed
+    assert phone not in err
+    assert "WA_PHONE_NUMBER_ID empty omitted" in err
+    assert "ALARM_EMAIL empty omitted" in err
+
+
+def test_shared_inbound_drift_refuses_an_empty_topic(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    main_topic = "arn:aws:sns:us-east-1:000000000000:OerfComputeStack-InboundTopicABC"
+    dev_topic = "arn:aws:sns:us-east-1:000000000000:OerfComputeStack-dev-InboundTopicABC"
+    with pytest.raises(SystemExit) as caught:
+        resolve_inputs(
+            _Recording(inbound_topic_arn=main_topic),
+            account=ACCOUNT,
+            environ={},
+            gh_get=_gh(),
+        )
+    message = str(caught.value)
+    assert (
+        "would move the dev inbound subscription off main's topic; "
+        "dev would stop receiving WhatsApp events"
+    ) in message
+    assert "DEV_DEPLOY_ALLOW_OMIT=1" in message
+    assert main_topic not in message
+    assert main_topic not in capsys.readouterr().err
+
+    allowed = resolve_inputs(
+        _Recording(inbound_topic_arn=main_topic),
+        account=ACCOUNT,
+        environ={"DEV_DEPLOY_ALLOW_OMIT": "1"},
+        gh_get=_gh(),
+    )
+    assert "whatsapp:sharedInboundTopicArn" not in allowed
+
+    kept = resolve_inputs(
+        _Recording(inbound_topic_arn=main_topic),
+        account=ACCOUNT,
+        environ={"SHARED_INBOUND_TOPIC_ARN": main_topic},
+        gh_get=_gh(),
+    )
+    assert kept["whatsapp:sharedInboundTopicArn"] == main_topic
+    assert main_topic not in capsys.readouterr().err
+
+    own_topic = resolve_inputs(
+        _Recording(inbound_topic_arn=dev_topic),
+        account=ACCOUNT,
+        environ={},
+        gh_get=_gh(),
+    )
+    assert "whatsapp:sharedInboundTopicArn" not in own_topic
+
+
+def test_dev_deploy_resolution_order(capsys: pytest.CaptureFixture[str]) -> None:
+    phone_env = "phone-number-id-11111111111111111111111111111111"
+    phone_repo = "phone-number-id-22222222222222222222222222222222"
+    phone_ssm = "phone-number-id-33333333333333333333333333333333"
+    topic = "arn:aws:sns:us-east-1:000000000000:inbound"
+    asked: list[tuple[str, str | None]] = []
+
+    def gh_get(name: str, *, environment: str | None) -> str:
+        asked.append((name, environment))
+        return _gh(
+            ("WA_PHONE_NUMBER_ID", "dev", phone_env),
+            ("WA_PHONE_NUMBER_ID", None, phone_repo),
+            ("ALARM_EMAIL", None, "ops@example.com"),
+            ("CHANNELS_LIVE", "dev", "true"),
+            ("CHANNELS_LIVE", None, "false"),
+        )(name, environment=environment)
+
+    session = _Recording(phone=phone_ssm)
+    context = resolve_inputs(session, account=ACCOUNT, environ={}, gh_get=gh_get)
+    err = capsys.readouterr().err
+    assert context["whatsapp:phoneNumberId"] == phone_env
+    assert context["alarms:email"] == "ops@example.com"
+    assert context["channels:live"] == "true"
+    assert "whatsapp:sharedInboundTopicArn" not in context
+    assert "WA_PHONE_NUMBER_ID gh env set" in err
+    assert "ALARM_EMAIL gh repo set" in err
+    assert "SHARED_INBOUND_TOPIC_ARN empty omitted" in err
+    assert "CHANNELS_LIVE gh env set" in err
+    assert ("WA_PHONE_NUMBER_ID", None) not in asked
+    assert session.parameters == []
+    for secret in (phone_env, phone_repo, phone_ssm, "ops@example.com"):
+        assert secret not in err
+
+    ssm_only = resolve_inputs(
+        _Recording(phone=phone_ssm),
+        account=ACCOUNT,
+        environ={},
+        gh_get=_gh(),
+    )
+    assert ssm_only["whatsapp:phoneNumberId"] == phone_ssm
+    assert "WA_PHONE_NUMBER_ID SSM set" in capsys.readouterr().err
+
+    def refuse_gh(name: str, *, environment: str | None) -> str:
+        raise AssertionError(name)
+
+    overridden = resolve_inputs(
+        _Recording(phone=phone_ssm),
+        account=ACCOUNT,
+        environ={
+            "WA_PHONE_NUMBER_ID": phone_env,
+            "ALARM_EMAIL": "override@example.com",
+            "SHARED_INBOUND_TOPIC_ARN": topic,
+            "CHANNELS_LIVE": "false",
+        },
+        gh_get=refuse_gh,
+    )
+    err = capsys.readouterr().err
+    assert overridden["whatsapp:phoneNumberId"] == phone_env
+    assert overridden["alarms:email"] == "override@example.com"
+    assert overridden["whatsapp:sharedInboundTopicArn"] == topic
+    assert overridden["channels:live"] == "false"
+    assert "WA_PHONE_NUMBER_ID override set" in err
+    assert "ALARM_EMAIL override set" in err
+    assert "SHARED_INBOUND_TOPIC_ARN override set" in err
+    assert "CHANNELS_LIVE override set" in err
+    assert phone_env not in err
+    assert topic not in err
+    assert list(overridden) == [key for key in CONTEXT_KEYS if key in overridden]
+
+
+def test_dev_deploy_command_on_a_fresh_stack(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     def _refuse_cdk(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("cdk")
 
     monkeypatch.setattr("scripts.dev_deploy.subprocess.run", _refuse_cdk)
     session = _Recording()
-    with pytest.raises(SystemExit, match="dev-deploy needs"):
-        deploy_main(
-            ["check", "--profile", "p", "--account", ACCOUNT],
-            session_factory=lambda _p: session,
-            gh_get=lambda: "",
-        )
-    assert session.stacks == ["OerfComputeStack"]
-    assert "OerfDataStack" not in session.stacks
-    assert "OerfComputeStack-dev" not in session.stacks
+    code = deploy_main(
+        ["check", "--profile", "p", "--account", ACCOUNT],
+        session_factory=lambda _profile: session,
+        gh_get=_gh(),
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "dev-deploy values present" in captured.out
+    assert "WA_PHONE_NUMBER_ID empty omitted" in captured.err
+    assert session.stacks == ["OerfObservabilityStack-dev", "OerfComputeStack-dev"]
+    assert "OerfComputeStack" not in session.stacks
 
 
 def test_dev_deploy_context_matches_the_workflow() -> None:
@@ -337,17 +510,6 @@ def test_dev_deploy_context_matches_the_workflow() -> None:
     assert context["auth:managedLogin"] == "true"
     assert context["channels:live"] == "false"
     assert "whatsapp:wabaId" not in context
-    filled = resolve_inputs(
-        _Recording(
-            phone="phone-number-id-00000000000000000000000000000000",
-            topic="arn:aws:sns:us-east-1:000000000000:inbound",
-        ),
-        account=ACCOUNT,
-        environ={"ALARM_EMAIL": "ops@example.com", "CHANNELS_LIVE": "true"},
-        gh_get=lambda: "",
-    )
-    assert filled["channels:live"] == "true"
-    assert filled["alarms:email"] == "ops@example.com"
 
 
 def test_make_targets_require_stage_and_dev_sensor_uses_the_dev_stage() -> None:
@@ -402,12 +564,23 @@ def _machine(name: str) -> str:
 class _Recording:
     """Enough of a session for a dry run. It records names and writes nothing."""
 
-    def __init__(self, *, phone: str = "", topic: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        phone: str = "",
+        topic: str = "",
+        router_phone: str = "",
+        alarm_subscription: bool = False,
+        inbound_topic_arn: str = "",
+    ) -> None:
         self.stacks: list[str] = []
         self.functions: list[str] = []
         self.parameters: list[str] = []
         self.phone = phone
         self.topic = topic
+        self.router_phone = router_phone
+        self.alarm_subscription = alarm_subscription
+        self.inbound_topic_arn = inbound_topic_arn
 
     def client(self, _service: str, **_kwargs: object) -> _Recording:
         return self
@@ -441,7 +614,10 @@ class _Recording:
 
     def get_function_configuration(self, *, FunctionName: str) -> dict[str, object]:
         self.functions.append(FunctionName)
-        return {"Environment": {"Variables": {"USE_MOCK_WHATSAPP": "true"}}}
+        variables = {"USE_MOCK_WHATSAPP": "true"}
+        if self.router_phone and FunctionName == "oerf-dev-channel-router":
+            variables["WHATSAPP_PHONE_NUMBER_ID"] = self.router_phone
+        return {"Environment": {"Variables": variables}}
 
     def get_parameter(self, *, Name: str, WithDecryption: bool = False) -> dict[str, object]:
         self.parameters.append(Name)
@@ -451,16 +627,39 @@ class _Recording:
 
     def list_stack_resources(self, **kwargs: str) -> dict[str, object]:
         self.stacks.append(kwargs["StackName"])
-        if not self.topic:
-            return {"StackResourceSummaries": []}
-        return {
-            "StackResourceSummaries": [
+        summaries: list[dict[str, str]] = []
+        if kwargs["StackName"] == "OerfComputeStack" and self.topic:
+            summaries.append(
                 {
                     "ResourceType": "AWS::SNS::Topic",
                     "LogicalResourceId": "InboundTopic",
                     "PhysicalResourceId": self.topic,
                 }
-            ]
+            )
+        if kwargs["StackName"] == "OerfComputeStack-dev" and self.inbound_topic_arn:
+            summaries.append(
+                {
+                    "ResourceType": "AWS::SNS::Subscription",
+                    "LogicalResourceId": "SharedInbound",
+                    "PhysicalResourceId": "arn:aws:sns:us-east-1:000000000000:pending:sub",
+                }
+            )
+        if kwargs["StackName"] == "OerfObservabilityStack-dev" and self.alarm_subscription:
+            summaries.append(
+                {
+                    "ResourceType": "AWS::SNS::Subscription",
+                    "LogicalResourceId": "AlarmEmail",
+                    "PhysicalResourceId": "subscription",
+                }
+            )
+        return {"StackResourceSummaries": summaries}
+
+    def get_subscription_attributes(self, *, SubscriptionArn: str) -> dict[str, object]:
+        return {
+            "Attributes": {
+                "SubscriptionArn": SubscriptionArn,
+                "TopicArn": self.inbound_topic_arn,
+            }
         }
 
     def get_item(self, **_kwargs: object) -> dict[str, object]:
