@@ -62,6 +62,8 @@ To include Bedrock guardrail customer-KMS handler simulations (only if you deplo
 
 ## Laptop deploy
 
+This is the deploy configuration for the laptop and the dev CI role. The desk-facing dev procedure is [docs/runbook-deploy.md](../../docs/runbook-deploy.md) (Dev stage).
+
 Run these from the repo root. Use the project Python 3.11 venv so `cdk` can import `aws_cdk`:
 
 ```bash

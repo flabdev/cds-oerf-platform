@@ -256,6 +256,9 @@ def test_written_numbers_stay_in_the_fictional_range() -> None:
     assert numbers
     assert all(re.fullmatch(r"\+15550100\d{3}", number) for number in numbers)
     qa = client.get_item(TableName=TABLE, Key=key("TENANT#t1", "CONTACT#C-T1-QA"))["Item"]
+    driver = client.get_item(TableName=TABLE, Key=key("TENANT#t1", "CONTACT#C-T1-DRV"))["Item"]
+    assert driver["label"]["S"] == "Mudita"
+    assert "e164" not in driver["label"]["S"]
     assert qa["email"]["S"] == "qa@example.com"
     assert qa["opt_in"]["S"] == "true"
 

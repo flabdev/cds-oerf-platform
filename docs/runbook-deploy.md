@@ -128,6 +128,8 @@ Use profile `Fission-OERF`, Python 3.11 with `aws_cdk` importable, and the oerfd
 
 After deploy, `OerfApiStack-dev` output `DashboardUrl` is the desk. Open `<DashboardUrl>/config.json` and confirm `apiUrl` and `userPoolClientId` are set. Do not paste that file into a ticket. Dev does not use a hand-built `VITE_*` upload.
 
+Post-deploy checks, now that the first dev deploy has run: stack status `*_COMPLETE`, `oerf-dev-cold-chain` and `oerf-dev-engage-party` exist, and `python -m scripts.seed_runtime` dry-run against the dev tables. `make demo-sensor` takes `SHIPMENT` and `DEVICE` (defaults `PH-2841` and `RF-7781`).
+
 Operator commands take one stage. `make dev-preflight`, `dev-seed`, `dev-users`, `dev-sensor`, `dev-reply`, `dev-reset`, `dev-check`, `dev-diff`, and `dev-deploy` set `STAGE=dev` and resolve the dev names. `make demo-*` and `make reset-*` require `STAGE`. `STAGE=main` also needs `ALLOW_MAIN=1`. The targets and the live-rehearsal checklist (driver parameters, `live_contacts`, the dev desk user, `CHANNELS_LIVE`, Bedrock model access) are in [run-the-demo.md](run-the-demo.md).
 
 ## First deploy from main

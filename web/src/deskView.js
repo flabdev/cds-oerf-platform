@@ -22,6 +22,7 @@ export function buildDesk(item, now = Date.now()) {
   const options = optionCards(item, total, remaining, apiRemaining, recommendationId, chosenId);
   return {
     shipmentId: text(item?.shipment_id),
+    driverName: driverName(item?.driver_label),
     profileName: text(profile?.name),
     rangeLabel: band ? `${formatLimit(band[0]).replace(" °C", "")}–${formatLimit(band[1])}` : "",
     opened: formatClock(item?.opened_at, now),
@@ -422,6 +423,14 @@ export function heroNote(view) {
     return "Inside the allowance. Confirm the transfer.";
   }
   return "Inside the allowance.";
+}
+
+function driverName(value) {
+  const label = text(value);
+  if (!label || /\d{6,}/.test(label)) {
+    return "";
+  }
+  return label;
 }
 
 function evidenceKpi(item) {

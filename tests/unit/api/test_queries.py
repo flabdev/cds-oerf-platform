@@ -98,12 +98,13 @@ def test_detail_selects_the_pinned_profile_by_id() -> None:
     ambient, ambient_client = _profile_detail(profile_id="PP-15-25-120")
     assert ambient["range_c"] == [15.0, 25.0]
     assert ambient["allowance_remaining"] == 120.0
-    assert ambient_client.shipment_reads == 0
+    # One shipment read is the driver name. The range still comes from the pinned profile.
+    assert ambient_client.shipment_reads == 1
 
     legacy, legacy_client = _profile_detail(shipment_profile="PP-15-25-120")
     assert legacy["range_c"] == [15.0, 25.0]
     assert legacy["allowance_remaining"] == 120.0
-    assert legacy_client.shipment_reads == 1
+    assert legacy_client.shipment_reads == 2
 
     unknown, _unknown_client = _profile_detail()
     assert unknown["range_c"] is None
@@ -115,7 +116,7 @@ def test_detail_selects_the_pinned_profile_by_id() -> None:
     )
     assert mismatch["range_c"] is None
     assert mismatch["allowance_remaining"] is None
-    assert mismatch_client.shipment_reads == 0
+    assert mismatch_client.shipment_reads == 1
 
 
 def test_cancel_does_not_need_an_engagement() -> None:

@@ -332,6 +332,12 @@ class OerfApiStack(Stack):
             ),
         )
         self.user_pool_client.node.add_dependency(self.hosted_domain)
+        # Login must not reveal whether the username exists. The L2 in this
+        # CDK build has no property for it; the L1 field is an in-place update.
+        self.user_pool_client.node.default_child.add_property_override(
+            "PreventUserExistenceErrors",
+            "ENABLED",
+        )
         if _managed_login_enabled(self):
             # The style references the client. It also waits for the domain so
             # version 2 exists before Cognito accepts the branding resource.

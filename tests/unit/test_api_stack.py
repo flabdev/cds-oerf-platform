@@ -326,6 +326,7 @@ def test_websocket_is_the_compute_endpoint_and_cors_is_cloudfront(
     template.has_resource_properties(
         "AWS::Cognito::UserPoolClient",
         {
+            "PreventUserExistenceErrors": "ENABLED",
             "AllowedOAuthFlows": ["code"],
             "AllowedOAuthScopes": [
                 "openid",

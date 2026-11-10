@@ -93,6 +93,13 @@ from oerf.platform.incidents.repository import (
     StaleIncidentUpdate,
 )
 from oerf.platform.observability.logging import get_logger, log
+from oerf.platform.sandbox.audience import (
+    AudienceStore,
+    DynamoAudienceStore,
+    handle_audience_message,
+    is_audience_join,
+    shipment_pool,
+)
 from oerf.platform.sandbox.join import (
     DynamoSandboxStore,
     SandboxStore,
@@ -350,11 +357,19 @@ class InboundDependencies:
     executions: ExecutionStop | None = None
     state_machine_arn: str = ""
     sandbox: SandboxStore | None = None
+    audience: AudienceStore | None = None
+    sandbox_join_enabled: bool = True
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
 
 
 _dependencies: InboundDependencies | None = None
 _client: Any = None
+
+
+def sandbox_join_enabled() -> bool:
+    """True only when the stage sets ``SANDBOX_JOIN_ENABLED=true``. Main leaves it off."""
+
+    return os.environ.get("SANDBOX_JOIN_ENABLED", "").strip().lower() == "true"
 
 
 def build_dependencies() -> InboundDependencies:
@@ -374,6 +389,7 @@ def build_dependencies() -> InboundDependencies:
     if _client is None:
         _client = boto3.client("dynamodb")
     stepfunctions = boto3.client("stepfunctions")
+    join_enabled = sandbox_join_enabled()
     return InboundDependencies(
         dedupe=DynamoMessageDedupe(_client, ROUTING_TABLE_NAME),
         engagements=DynamoEngagementStore(_client, INCIDENT_TABLE_NAME, ROUTING_TABLE_NAME),
@@ -383,7 +399,18 @@ def build_dependencies() -> InboundDependencies:
         incidents=DynamoIncidentStore(_client, INCIDENT_TABLE_NAME, tenant_table=TENANT_TABLE_NAME),
         executions=stepfunctions,
         state_machine_arn=os.environ.get("STATE_MACHINE_ARN", ""),
-        sandbox=DynamoSandboxStore(_client, ROUTING_TABLE_NAME, TENANT_TABLE_NAME),
+        sandbox=DynamoSandboxStore(_client, ROUTING_TABLE_NAME, TENANT_TABLE_NAME)
+        if join_enabled
+        else None,
+        audience=DynamoAudienceStore(
+            _client,
+            TENANT_TABLE_NAME,
+            ROUTING_TABLE_NAME,
+            shipment_pool(),
+        )
+        if join_enabled
+        else None,
+        sandbox_join_enabled=join_enabled,
     )
 
 
@@ -478,7 +505,7 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
         return "duplicate"
     if dependencies.registry is None:
         raise RuntimeError("provider inbound requires a sender registry")
-    if dependencies.sandbox is not None:
+    if dependencies.sandbox is not None and dependencies.sandbox_join_enabled:
         joined = handle_sandbox_message(
             message,
             registry=dependencies.registry,
@@ -494,6 +521,26 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
                 count=1,
             )
             return f"sandbox_{joined.outcome}"
+    if (
+        dependencies.audience is not None
+        and dependencies.sandbox_join_enabled
+        and is_audience_join(message.text)
+    ):
+        audience = handle_audience_message(
+            message,
+            registry=dependencies.registry,
+            store=dependencies.audience,
+            now=dependencies.clock(),
+        )
+        if audience.outcome != "ignored":
+            log(
+                logger,
+                logging.INFO,
+                "Handled audience driver join",
+                outcome=f"audience_{audience.outcome}",
+                count=1,
+            )
+            return f"audience_{audience.outcome}"
     reply = handle_reply(
         message.text,
         context_id,
@@ -974,6 +1021,8 @@ def _unowned_kind(
     """
 
     if is_join(message.text):
+        return None
+    if is_audience_join(message.text) and dependencies.sandbox_join_enabled:
         return None
     if is_opt_out(message.text):
         if dependencies.registry is None:

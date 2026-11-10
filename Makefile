@@ -5,6 +5,8 @@
 
 BUTTON ?= running
 PYTHON ?= python
+SHIPMENT ?= PH-2841
+DEVICE ?= RF-7781
 
 test:
 	pytest -q -m "not aws"
@@ -52,7 +54,7 @@ demo-prep:
 	STAGE=$(STAGE) ALLOW_MAIN=$(ALLOW_MAIN) $(PYTHON) -m scripts.demo prep --stage $(STAGE) --profile $(PROFILE) --account $(ACCOUNT) --tenant $(TENANT)
 
 demo-sensor:
-	STAGE=$(STAGE) ALLOW_MAIN=$(ALLOW_MAIN) $(PYTHON) -m scripts.demo sensor --stage $(STAGE) --profile $(PROFILE) --account $(ACCOUNT) --tenant $(TENANT)
+	STAGE=$(STAGE) ALLOW_MAIN=$(ALLOW_MAIN) $(PYTHON) -m scripts.demo sensor --stage $(STAGE) --profile $(PROFILE) --account $(ACCOUNT) --tenant $(TENANT) --shipment $(SHIPMENT) --device $(DEVICE)
 
 demo-reply:
 	STAGE=$(STAGE) ALLOW_MAIN=$(ALLOW_MAIN) $(PYTHON) -m scripts.demo reply --stage $(STAGE) --profile $(PROFILE) --account $(ACCOUNT) --tenant $(TENANT) --button $(BUTTON)

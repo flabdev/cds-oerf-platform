@@ -156,7 +156,8 @@ Decisions are indexed in [docs/adr/README.md](adr/README.md). The wire contract 
 | Voice | The cadence can name a voice rung. The router does not place a call. The text tells the person to reply on WhatsApp. |
 | Evidence | Inbound stores media with `GetWhatsAppMessageMedia`. The analyzer calls Nova Lite and a guardrail when Bedrock is not mocked (`channels:live`). Otherwise it is mocked. |
 | AgentCore | Off unless `agentcore:enabled` is true (dev laptop and GitHub deploys pass true). The runtime is ARM64. It advises. Interpret keeps the rule result. |
-| Desk | The React desk, Cognito hosted UI, REST query and action, and the WebSocket updates. The API stack is behind `dashboard:enabled`. |
+| Desk | The React desk, Cognito hosted UI, REST query and action, and the WebSocket updates. The API stack is behind `dashboard:enabled`. The incident header shows the driver name from `driver_label` and never the number. A stored evidence photo shows as a photo count. |
+| Audience drivers | Dev only (`SANDBOX_JOIN_ENABLED`). `JOIN DRIVER` adds a 24-hour t1 driver and assigns one free seeded shipment ([ADR-040](adr/ADR-040-audience-drivers.md)). Main ignores the keyword. |
 | Reports | `oerf-report-generator` publishes versioned HTML for one incident, or PDF when WeasyPrint is selected. The `GenerateReport` step invokes it through `oerf-step-generate-report`; the role reads the incident rows and writes the report bucket, and it does not send SES. |
 | Encryption | AWS managed keys. Table encryption with the managed KMS key is behind `dynamodb:kmsManaged` and defaults off ([ADR-033](adr/ADR-033-encryption-at-rest.md)). |
 

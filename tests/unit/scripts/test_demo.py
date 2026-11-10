@@ -110,6 +110,21 @@ def test_all_tenants_are_refused_before_aws() -> None:
         )
 
 
+def test_sensor_requires_shipment_and_device(capsys: pytest.CaptureFixture[str]) -> None:
+    sts, stubber = _aws("sts")
+    stubber.add_response("get_caller_identity", _identity(ACCOUNT))
+    session = Session(sts=sts)
+
+    code = main(
+        ["sensor", "--profile", "demo", "--account", ACCOUNT, "--tenant", "t1"],
+        session_factory=lambda _p: session,
+    )
+
+    assert code == 1
+    assert "sensor requires --shipment and --device" in capsys.readouterr().err
+    stubber.assert_no_pending_responses()
+
+
 def test_a_wrong_account_stops_before_any_other_call(capsys: pytest.CaptureFixture[str]) -> None:
     sts, stubber = _aws("sts")
     stubber.add_response("get_caller_identity", _identity(OTHER_ACCOUNT))
@@ -724,6 +739,8 @@ def test_demo_is_not_a_ci_step() -> None:
     assert "--profile $(PROFILE)" in makefile
     assert "--account $(ACCOUNT)" in makefile
     assert "--button $(BUTTON)" in makefile
+    assert "--shipment $(SHIPMENT)" in makefile
+    assert "--device $(DEVICE)" in makefile
 
 
 def _clients(**overrides: object) -> SimpleNamespace:

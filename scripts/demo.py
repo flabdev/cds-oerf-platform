@@ -105,6 +105,8 @@ def main(
         if args.command == "prep":
             _prepare_session(session, tenant_id)
         elif args.command == "sensor":
+            if not args.shipment or not args.device:
+                raise DemoError("sensor requires --shipment and --device")
             resources = _resources(session)
             if args.scenario:
                 publish_scenario(

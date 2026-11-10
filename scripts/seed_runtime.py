@@ -251,6 +251,11 @@ def _contact_item(row: dict[str, Any]) -> dict[str, Any]:
         "e164": s(number),
         "opt_in": s(opted_in),
     }
+    label = row.get("label")
+    if isinstance(label, str) and label.strip():
+        digits = "".join(ch for ch in label if ch.isdigit())
+        if len(digits) < 6:
+            item["label"] = s(" ".join(label.split()))
     if isinstance(row.get("email"), str) and row["email"].strip():
         item["email"] = s(f"{role}@example.com")
     return item
