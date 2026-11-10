@@ -22,7 +22,22 @@ deploy (sheet A6).
 | SEC-08 | Evidence expiry. | Evidence bucket lifecycle 90 days. |
 | SEC-10 | Synth must not embed secret-shaped values. | `tests/unit/security/test_synth_secrets.py`. |
 | Pagination | `GET /incidents` pages by incident id cursor, max 50. | `oerf/platform/api/queries.py`. |
-| Secrets scan | Working-tree gitleaks. | `.gitleaks.toml`; CI `gitleaks detect --no-git`. History: `gitleaks detect` with a full clone after A6 if needed. |
+| Secrets scan | Working-tree gitleaks. | `.gitleaks.toml`; CI `gitleaks detect --no-git` runs before pytest. `tests/unit/security/test_gitleaks_config.py` records the config checksum. History, on a full clone: `gitleaks detect --source . --config .gitleaks.toml`. |
+| Login enumeration | Cognito told a caller whether the username existed. | Dashboard user-pool client sets `PreventUserExistenceErrors=ENABLED`. |
+
+## Older tickets (E6)
+
+Checked in this repo. A live dev execution is still required before calling them accepted.
+
+| Ticket | What the repo shows |
+| --- | --- |
+| OERF-208 | Action idempotency is covered by the action-handler and inbound tests. The trigger route stays retired. |
+| OERF-112a | Incident GSI1 is on the data stack and `GET /incidents` queries it. Verify the index on the deployed table. |
+| OERF-118 | The scripted responder is the demo reply path (`scripts.demo_reply`). It refuses `--live`. |
+
+## Contract sign-off (G3)
+
+`docs/interfaces.md` is v1.43. Vivek signed v1.40 for OERF-206 on 2026-11-04. OERF-201 through OERF-205 and OERF-207 still need their owners. This change does not record those signatures.
 
 ## Residual
 

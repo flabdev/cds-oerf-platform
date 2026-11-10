@@ -7,6 +7,7 @@ goes to SQS. Incident state is not changed here.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -93,7 +94,11 @@ class DynamoIncidentQuery:
             "product_profile_id": profile_id,
             "allowance_remaining": _allowance_remaining(profile, readings),
             "range_c": _range_c(profile),
-            "evidence": _evidence(item.get("evidence_analysis")),
+            "evidence": _evidence(
+                item.get("evidence_analysis"),
+                stored_photo=bool(_optional_text(item, "last_analyzed_key")),
+            ),
+            "driver_label": self._driver_label(context.tenant_id, shipment_id),
             "recommendation": recommendation,
             "options": recommendation["options"] if recommendation else [],
             "engagement_id": engagement_id,
@@ -180,6 +185,24 @@ class DynamoIncidentQuery:
         if not row:
             return None
         return _optional_text(row, "product_profile") or _optional_text(row, "product_profile_id")
+
+    def _driver_label(self, tenant_id: str, shipment_id: str) -> str:
+        """The shipment driver's display name. A phone-shaped value is omitted."""
+
+        if not self._tenant_table or not shipment_id:
+            return ""
+        shipment = self._client.get_item(
+            TableName=self._tenant_table,
+            Key=key(f"TENANT#{tenant_id}", f"SHIPMENT#{shipment_id}"),
+        ).get("Item")
+        contact_id = _optional_text(shipment or {}, "driver")
+        if not contact_id:
+            return ""
+        contact = self._client.get_item(
+            TableName=self._tenant_table,
+            Key=key(f"TENANT#{tenant_id}", f"CONTACT#{contact_id}"),
+        ).get("Item")
+        return _public_name(_optional_text(contact or {}, "label"))
 
     def _metas(self, tenant_id: str) -> list[dict[str, Any]]:
         found: list[dict[str, Any]] = []
@@ -363,14 +386,27 @@ def _moment(value: Any) -> datetime | None:
         return None
 
 
-def _evidence(raw: Any) -> dict[str, list[str]]:
+def _evidence(raw: Any, *, stored_photo: bool = False) -> dict[str, list[str]]:
     parsed = _decode(raw)
     codes = parsed.get("fault_codes") if isinstance(parsed, dict) else None
-    if not isinstance(codes, list):
-        return {"fault_codes": []}
-    return {
-        "fault_codes": [code.strip() for code in codes if isinstance(code, str) and code.strip()]
-    }
+    fault_codes = (
+        [code.strip() for code in codes if isinstance(code, str) and code.strip()]
+        if isinstance(codes, list)
+        else []
+    )
+    body: dict[str, list[str]] = {"fault_codes": fault_codes}
+    if stored_photo:
+        body["photos"] = ["stored"]
+    return body
+
+
+def _public_name(label: str | None) -> str:
+    if not isinstance(label, str):
+        return ""
+    name = " ".join(label.split())
+    if not name or re.search(r"\d{6,}", name):
+        return ""
+    return name
 
 
 def _option(option: dict[str, Any]) -> dict[str, Any] | None:

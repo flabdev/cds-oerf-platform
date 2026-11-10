@@ -2,6 +2,8 @@
 	demo-preflight demo-prep demo-sensor demo-reply demo-status demo-cleanup demo-run
 
 BUTTON ?= running
+SHIPMENT ?= PH-2841
+DEVICE ?= RF-7781
 
 test:
 	pytest -q -m "not aws"
@@ -34,7 +36,7 @@ demo-prep:
 	python -m scripts.demo prep --profile $(PROFILE) --account $(ACCOUNT) --tenant $(TENANT)
 
 demo-sensor:
-	python -m scripts.demo sensor --profile $(PROFILE) --account $(ACCOUNT) --tenant $(TENANT)
+	python -m scripts.demo sensor --profile $(PROFILE) --account $(ACCOUNT) --tenant $(TENANT) --shipment $(SHIPMENT) --device $(DEVICE)
 
 demo-reply:
 	python -m scripts.demo reply --profile $(PROFILE) --account $(ACCOUNT) --tenant $(TENANT) --button $(BUTTON)

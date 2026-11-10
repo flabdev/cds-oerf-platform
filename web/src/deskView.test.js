@@ -108,6 +108,9 @@ test("options keep the rules order and name continue without inventing a facilit
   assert.equal(desk.profileName, "Biologic 2-8");
   assert.equal(desk.kpis.temperature.value, "8.4 °C");
   assert.equal(desk.kpis.temperature.hot, true);
+  assert.equal(desk.driverName, "");
+  assert.equal(buildDesk({ driver_label: "Mudita" }, now).driverName, "Mudita");
+  assert.equal(buildDesk({ driver_label: "+15550100001" }, now).driverName, "");
   assert.equal(desk.kpis.evidence.value, "None");
   assert.equal(buildDesk({ evidence: { fault_codes: ["E17"] } }, now).kpis.evidence.value, "E17");
   assert.equal(buildDesk({

@@ -92,6 +92,7 @@ EXPECTED_FUNCTIONS = {
             "WA_PHONE_NUMBER_ID_PARAM",
             "WHATSAPP_PHONE_NUMBER_ID",
             "INBOUND_MEDIA_MAX_BYTES",
+            "SANDBOX_JOIN_ENABLED",
             "LOG_LEVEL",
         },
     },
@@ -659,6 +660,7 @@ def test_inbound_media_permissions_use_end_user_messaging_not_a_token_secret(
     assert variables["WA_PHONE_NUMBER_ID_PARAM"] == "/oerf/whatsapp/phone-number-id"
     assert variables["WHATSAPP_PHONE_NUMBER_ID"] == ""
     assert variables["INBOUND_MEDIA_MAX_BYTES"] == str(10 * 1024 * 1024)
+    assert variables["SANDBOX_JOIN_ENABLED"] == "false"
     statements = statements_for_role(template, role_logical_id(inbound))
     assert _statements_with_action(statements, "secretsmanager:GetSecretValue") == []
     puts = _statements_with_action(statements, "s3:PutObject")

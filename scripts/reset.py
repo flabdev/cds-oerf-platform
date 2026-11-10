@@ -125,7 +125,12 @@ def reset_tenant(
         apply=apply,
     )
     routing, targets = _routing(clients, tenant_id, apply=apply)
-    counts["routing_rows"] = routing
+    counts["routing_rows"] = routing + _delete_matching(
+        clients.dynamodb,
+        clients.tenant_table,
+        lambda item: _audience_tenant_row(tenant_id, item),
+        apply=apply,
+    )
     counts["routing_targets"] = targets
     counts["inbound_messages"] = _delete_matching(
         clients.dynamodb,
@@ -378,6 +383,10 @@ def _lock_item(tenant_id: str, item: dict[str, Any]) -> bool:
 def _routing_row(tenant_id: str, item: dict[str, Any]) -> bool:
     pk = _text(item, "pk")
     sk = _text(item, "sk")
+    if tenant_id == "t1" and pk.startswith("AUDIENCE#JOINS#"):
+        return True
+    if _text(item, "audience") == "true" and _text(item, "tenant_id") == tenant_id:
+        return True
     if pk.startswith(f"TENANT#{tenant_id}#OUTBOX#"):
         return True
     if pk.startswith(f"ENGREF#{tenant_id}#") or pk.startswith(f"CONTACTENG#{tenant_id}#"):
@@ -385,6 +394,17 @@ def _routing_row(tenant_id: str, item: dict[str, Any]) -> bool:
     return pk.startswith(f"TENANT#{tenant_id}#INCIDENT#") and (
         sk.startswith("MSG#") or sk == "ACTIVE_TASK_TOKEN"
     )
+
+
+def _audience_tenant_row(tenant_id: str, item: dict[str, Any]) -> bool:
+    """Audience session and contact rows. Seeded team contacts have no audience flag."""
+
+    if _text(item, "pk") != f"TENANT#{tenant_id}":
+        return False
+    sk = _text(item, "sk")
+    if sk.startswith("AUDIENCE#") or sk.startswith("AUDIENCEMSG#"):
+        return True
+    return sk.startswith("CONTACT#") and _text(item, "audience") == "true"
 
 
 def _inbound(tenant_id: str, item: dict[str, Any]) -> bool:

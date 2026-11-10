@@ -266,6 +266,40 @@ def test_reseed_restores_only_the_target_allowance() -> None:
     assert _text_tenant(dynamo, "DEVICE#RF-7781") == "t2"
 
 
+def test_reset_clears_audience_drivers_and_keeps_the_seeded_contact() -> None:
+    dynamo, _steps, _objects, clients = _world()
+    dynamo.put_item(
+        TableName=TENANT_TABLE,
+        Item={
+            **key("TENANT#t1", "CONTACT#C-T1-DRV"),
+            "tenant_id": s("t1"),
+            "label": s("Mudita"),
+        },
+    )
+    dynamo.put_item(
+        TableName=TENANT_TABLE,
+        Item={
+            **key("TENANT#t1", "AUDIENCE#AUD-ABCDEF12"),
+            "tenant_id": s("t1"),
+            "audience": s("true"),
+        },
+    )
+    dynamo.put_item(
+        TableName=TENANT_TABLE,
+        Item={
+            **key("TENANT#t1", "CONTACT#AUD-ABCDEF12"),
+            "tenant_id": s("t1"),
+            "audience": s("true"),
+        },
+    )
+
+    reset_tenant(clients, "t1", apply=True, reseed=False)
+
+    assert _exists(dynamo, TENANT_TABLE, "TENANT#t1", "CONTACT#C-T1-DRV")
+    assert not _exists(dynamo, TENANT_TABLE, "TENANT#t1", "AUDIENCE#AUD-ABCDEF12")
+    assert not _exists(dynamo, TENANT_TABLE, "TENANT#t1", "CONTACT#AUD-ABCDEF12")
+
+
 def _text_tenant(client: FakeDynamoClient, pk: str) -> str:
     item = client.get_item(TableName=ROUTING, Key=key(pk, "META"))["Item"]
     return item["tenant_id"]["S"]

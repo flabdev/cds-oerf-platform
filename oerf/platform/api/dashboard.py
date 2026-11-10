@@ -527,6 +527,7 @@ def _detail_body(item: dict[str, Any]) -> dict[str, Any]:
         "incident_id": item.get("incident_id"),
         "tenant_id": item.get("tenant_id"),
         "shipment_id": item.get("shipment_id"),
+        "driver_label": item.get("driver_label") or "",
         "state": item.get("state"),
         "stage": item.get("stage") or item.get("state"),
         "version": item.get("version") if isinstance(item.get("version"), int) else 1,

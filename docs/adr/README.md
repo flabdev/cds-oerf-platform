@@ -42,3 +42,4 @@ A **file** link is the full record. **Summary only** means the one-line decision
 | 034 | Cognito tenant claim | Accepted | `custom:tenant_id` is added on the existing user pool, and a pre-token trigger copies it onto the access token. | [file](ADR-034-cognito-tenant-claim.md) |
 | 035 | Incident list by status | Accepted | GSI1 lists one tenant's incidents in one state, ordered by open time. | [file](ADR-035-incident-gsi1.md) |
 | 036 | State machine tracing | Accepted | Both playbook state machines export X-Ray traces. Execution data is not logged. | [file](ADR-036-state-machine-tracing.md) |
+| 040 | Audience driver contacts expire | Accepted | Dev `JOIN DRIVER` registers a t1 driver for 24 hours. The number is masked. This amends ADR-029 for audience rows only. | [file](ADR-040-audience-drivers.md) |
