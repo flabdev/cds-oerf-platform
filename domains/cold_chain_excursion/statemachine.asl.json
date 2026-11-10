@@ -1,7 +1,7 @@
 {
   "Comment": "cold_chain_excursion_v1 workflow. Human approval uses a task token; cancellation and all failure branches are bounded and routed through canonical incident transitions.",
   "StartAt": "OPEN",
-  "TimeoutSeconds": 86400,
+  "TimeoutSeconds": 691200,
   "States": {
     "OPEN": {
       "Type": "Task",
@@ -747,6 +747,33 @@
       ],
       "Next": "CancelAfterGenerateReport?"
     },
+    "QAReviewWait": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "Parameters": {
+        "FunctionName": "__STEP_QA_ARN__",
+        "Payload": {
+          "step_name": "QA",
+          "workflow.$": "$",
+          "task_token.$": "$$.Task.Token"
+        }
+      },
+      "ResultPath": "$.qa_review",
+      "TimeoutSeconds": 604800,
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {"ErrorEquals": ["States.Timeout"], "ResultPath": "$.failure", "Next": "RecordFailure"},
+        {"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure"}
+      ],
+      "Next": "QA"
+    },
     "QA": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
@@ -1411,7 +1438,7 @@
           "Next": "Cancel"
         }
       ],
-      "Default": "QA"
+      "Default": "QAReviewWait"
     },
     "CancelAfterQA?": {
       "Type": "Choice",

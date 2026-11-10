@@ -57,6 +57,7 @@ from oerf.platform.agent.context import ConfigReader, StepDependencies
 from oerf.platform.agent.dynamo_step_results import DynamoStepResultStore
 from oerf.platform.agent.envelope import parse_envelope
 from oerf.platform.agent.handlers import HANDLERS
+from oerf.platform.agent.qa_review import DynamoQAReviewStore
 from oerf.platform.agent.reports import GeneratorReportPublisher
 from oerf.platform.incidents.dynamo import DynamoIncidentStore
 from oerf.platform.observability.logging import get_logger, log
@@ -195,6 +196,7 @@ def build_dependencies(
         config=config,
         facilities=facilities,
         reports=GeneratorReportPublisher(),
+        qa_reviews=DynamoQAReviewStore(dynamo, resolved.incident_table, clock=moment),
         clock=moment,
     )
 

@@ -105,6 +105,7 @@ TASK_EVENT_KEYS = frozenset(
         "facility",
         "containment",
         "qa",
+        "qa_review",
         "task_token",
         "report",
         "approval_timeout",
@@ -135,6 +136,7 @@ class StepEnvelope(BaseModel):
     facility: dict[str, Any] | None = None
     containment: dict[str, Any] | None = None
     qa: dict[str, Any] | None = None
+    qa_review: dict[str, Any] | None = None
     task_token: str | None = None
 
     @field_validator("step")

@@ -15,8 +15,9 @@ inbound message never names another tenant as input that the platform trusts.
 
 ## Assets
 
-Incident META (`TENANT#{tid}#INC#{iid}`), engagement tokens on `ENG#`, inbound
-media under `tenants/{tid}/inbound/`, report objects
+Incident META (`TENANT#{tid}#INC#{iid}`), engagement tokens on `ENG#`, pending
+QA callback tokens on `QA_REVIEW` (retained for up to seven days), inbound media
+under `tenants/{tid}/inbound/`, report objects
 `reports/{tid}/{iid}/v{n}.html`, Cognito users, and the dashboard WebSocket.
 
 ## Trust boundaries

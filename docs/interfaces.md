@@ -1,6 +1,8 @@
 # OERF interface contract
 
-**FROZEN v1.44** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.45** — authored 2026-10-18 by OERF-304 (Ananda).
+
+- v1.45 (2026-11-10) Human QA review window is seven days. `QAReviewWait` in `domains/cold_chain_excursion/statemachine.asl.json` waits `604800` seconds for the reviewer's verdict and the cold-chain execution cap rises to `691200` seconds so the task can time out into `RecordFailure`. The pending callback token is stored as incident `SK=QA_REVIEW` with `expires_at` seven days out (§6.1). The token still never reaches the wire or a caller-supplied field.
 
 - v1.44 (2026-11-10) Operator scripts take one stage (`--stage` or `STAGE`; `main` needs `ALLOW_MAIN=1`). Demo-number parameters for every role use that stage's prefix (`/oerf/dev/demo-numbers` on dev, `/oerf/demo-numbers` on main): drivers `{prefix}/{tenant}/driver/{contact_id}`, other roles `{prefix}/{tenant}/{role}`. `DEMO_NUMBERS_PREFIX`, when set, overrides that prefix and is logged. `scripts.seed_runtime --live-contacts` reads those names. The router still resolves the same shapes from `DEMO_NUMBERS_PREFIX` on the function.
 
@@ -378,6 +380,7 @@ Pattern 12 is deployed on the incident table (`GSI1`, projection ALL). Create an
 | --- | --- | --- | --- | --- |
 | `INGEST#` | incident | `PK=INGEST#{event_id}`, `SK=META` | 7 days from accept | yes |
 | `READ#` | incident | `PK=TENANT#{tid}#INC#{iid}`, `SK=READ#{ts}#{seq}#{sha256}` | 90 days from the reading `ts`. `expires_at` is epoch seconds of `ts` plus 90 days. Attributes: `pk`, `sk`, `tenant_id`, `ts`, `temperature_c`, `expires_at`. | yes |
+| `QA_REVIEW` | incident | `PK=TENANT#{tid}#INC#{iid}`, `SK=QA_REVIEW` | 7 days from callback-token write | yes. Contains the private Step Functions task token while a human QA review is pending. |
 | `DEBOUNCE#` | incident | `PK=DEBOUNCE#{tid}#{shipment_id}#{device_id}`, `SK=META` | 10 minutes from the reading | yes |
 | `INMSG#` | routing | `PK=INMSG#{id}`, `SK=META` | 7 days from accept, not from `received_at` | yes |
 | `OUTBOX#` | routing | `PK=TENANT#{tid}#OUTBOX#{dedupe_key}`, `SK=META` | 7 days from the sent or simulated result. Attributes: `pk`, `sk`, `tenant_id`, `dedupe_key`, `status`, `expires_at`, and `provider_msg_id` when one was returned. Written only after `sent` or `simulated`. | yes |

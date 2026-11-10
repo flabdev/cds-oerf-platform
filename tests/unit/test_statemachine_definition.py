@@ -184,6 +184,14 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
             assert state["Retry"][0]["MaxAttempts"] == 3
             assert state["Catch"][-1]["Next"] == "RecordFailure"
             continue
+        if name == "QAReviewWait":
+            assert state["Resource"] == "arn:aws:states:::lambda:invoke.waitForTaskToken"
+            assert state["Parameters"]["Payload"]["task_token.$"] == "$$.Task.Token"
+            assert state["Parameters"]["Payload"]["step_name"] == "QA"
+            assert state["ResultPath"] == "$.qa_review"
+            assert "OutputPath" not in state
+            assert state["TimeoutSeconds"] == 604800
+            continue
         expected_resource = (
             "arn:aws:states:::lambda:invoke.waitForTaskToken"
             if name == "Approval"
@@ -689,6 +697,9 @@ def test_contained_branch_reaches_success() -> None:
     assert states["RecordContainment"]["Next"] == "CancelAfterRecordContainment?"
     assert states["CancelAfterRecordContainment?"]["Default"] == "BeginDisposition"
     assert states["BeginDisposition"]["Next"] == "CancelAfterBeginDisposition?"
+    assert states["CancelAfterGenerateReport?"]["Default"] == "QAReviewWait"
+    assert states["QAReviewWait"]["Next"] == "QA"
+    assert states["QAReviewWait"]["Catch"][-1]["Next"] == "RecordFailure"
     assert states["CancelAfterBeginDisposition?"]["Default"] == "GenerateReport"
     assert chain == [
         "ContainmentDecision",
@@ -698,6 +709,7 @@ def test_contained_branch_reaches_success() -> None:
         "CancelAfterBeginDisposition?",
         "GenerateReport",
         "CancelAfterGenerateReport?",
+        "QAReviewWait",
         "QA",
         "CancelAfterQA?",
         "QADecision",
@@ -727,7 +739,8 @@ def test_definition_guards_against_orphaned_executions() -> None:
     # The CDK L2 `timeout` prop is not rendered for a from_string definition,
     # so the execution timeout lives in the ASL top level instead.
     definition = load_definition()
-    assert definition["TimeoutSeconds"] == 86400
+    assert definition["TimeoutSeconds"] == 8 * 24 * 60 * 60
+    assert definition["States"]["QAReviewWait"]["TimeoutSeconds"] == 7 * 24 * 60 * 60
 
     # Walk Next, Default, Choices[].Next, and Catch[].Next from StartAt.
     # Nested Parallel branches and Map ItemProcessor/Iterator are separate

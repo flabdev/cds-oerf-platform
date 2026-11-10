@@ -1300,6 +1300,8 @@ def _submitted_review(
     review inside the context the step inherited.
     """
     sources: list[Mapping[str, Any]] = [workflow, envelope.context]
+    if envelope.qa_review is not None:
+        sources.append(envelope.qa_review)
     for source in (workflow, envelope.context):
         for key in _REVIEW_KEYS:
             nested = mapping(source, key)

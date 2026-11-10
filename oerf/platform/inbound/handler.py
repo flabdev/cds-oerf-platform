@@ -68,6 +68,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from oerf.platform.agent.qa_review import DynamoQAReviewStore
 from oerf.platform.channels.engagement import DynamoEngagementStore, Engagement, EngagementStore
 from oerf.platform.channels.optout import handle_reply, is_opt_out
 from oerf.platform.channels.phone_id import _whatsapp_phone_number_id as _resolve_phone_number_id
@@ -137,7 +138,8 @@ _THROTTLE_CODES = frozenset(
         "SlowDown",
     }
 )
-DASHBOARD_ACTIONS = frozenset({"confirm_transfer", "pick_option", "cancel"})
+_QA_REVIEW_ROLES = frozenset({"tenant_admin", "platform_admin"})
+DASHBOARD_ACTIONS = frozenset({"confirm_transfer", "pick_option", "cancel", "review_qa"})
 CANCEL_ROLES = frozenset({"platform_admin", "tenant_admin", "ops_user"})
 _FINISHED_EXECUTION = frozenset({"ExecutionDoesNotExist"})
 _STATE_MACHINE = ":stateMachine:"
@@ -355,6 +357,7 @@ class InboundDependencies:
     media_evidence: MediaEvidenceStore | None = None
     incidents: IncidentStore | None = None
     executions: ExecutionStop | None = None
+    qa_reviews: Any | None = None
     state_machine_arn: str = ""
     sandbox: SandboxStore | None = None
     audience: AudienceStore | None = None
@@ -372,14 +375,15 @@ def sandbox_join_enabled() -> bool:
     return os.environ.get("SANDBOX_JOIN_ENABLED", "").strip().lower() == "true"
 
 
-def build_dependencies() -> InboundDependencies:
+def build_dependencies(*, clock: Callable[[], datetime] | None = None) -> InboundDependencies:
     """Build runtime adapters lazily from the OERF-301 environment contract.
 
     The inbound function receives ``INCIDENT_TABLE_NAME``,
     ``ROUTING_TABLE_NAME`` and ``TENANT_TABLE_NAME`` from the compute stack,
     with read/write access to the incident and routing tables. Missing
     configuration fails the invocation rather than acknowledging records that
-    were never processed.
+    were never processed. ``clock`` is injectable for deterministic expiry and
+    dedupe behavior.
     """
     global _client
     if not ROUTING_TABLE_NAME or not INCIDENT_TABLE_NAME or not TENANT_TABLE_NAME:
@@ -388,6 +392,7 @@ def build_dependencies() -> InboundDependencies:
         )
     if _client is None:
         _client = boto3.client("dynamodb")
+    moment = clock or (lambda: datetime.now(UTC))
     stepfunctions = boto3.client("stepfunctions")
     join_enabled = sandbox_join_enabled()
     return InboundDependencies(
@@ -397,6 +402,7 @@ def build_dependencies() -> InboundDependencies:
         registry=DynamoPhoneRegistry(_client, ROUTING_TABLE_NAME, TENANT_TABLE_NAME),
         media_evidence=_evidence_store(),
         incidents=DynamoIncidentStore(_client, INCIDENT_TABLE_NAME, tenant_table=TENANT_TABLE_NAME),
+        qa_reviews=DynamoQAReviewStore(_client, INCIDENT_TABLE_NAME, clock=moment),
         executions=stepfunctions,
         state_machine_arn=os.environ.get("STATE_MACHINE_ARN", ""),
         sandbox=DynamoSandboxStore(_client, ROUTING_TABLE_NAME, TENANT_TABLE_NAME)
@@ -411,6 +417,7 @@ def build_dependencies() -> InboundDependencies:
         if join_enabled
         else None,
         sandbox_join_enabled=join_enabled,
+        clock=moment,
     )
 
 
@@ -666,6 +673,8 @@ def _process_dashboard(body: dict[str, Any], dependencies: InboundDependencies) 
         return "duplicate"
     if body.get("action") == "cancel":
         return _cancel(body, tenant_id, incident_id, engagement_id, action_id, dependencies)
+    if body.get("action") == "review_qa":
+        return _review_qa(body, tenant_id, incident_id, action_id, dependencies)
     if not engagement_id:
         log(
             logger,
@@ -710,6 +719,45 @@ def _process_dashboard(body: dict[str, Any], dependencies: InboundDependencies) 
     if action == "pick_option":
         payload["option_id"] = option_id
     return _resume(engagement, payload, dependencies)
+
+
+def _review_qa(
+    body: dict[str, Any],
+    tenant_id: str,
+    incident_id: str,
+    action_id: str,
+    dependencies: InboundDependencies,
+) -> str:
+    """Resume the QA task using only its server-side callback token."""
+    if dependencies.qa_reviews is None:
+        raise RuntimeError("QA review store is not configured")
+    role = _nonblank(body.get("role"))
+    approved = body.get("approved")
+    disposition = _nonblank(body.get("disposition"))
+    if role not in _QA_REVIEW_ROLES or not isinstance(approved, bool) or not disposition:
+        return "invalid"
+    task_token = dependencies.qa_reviews.get(tenant_id=tenant_id, incident_id=incident_id)
+    if task_token is None:
+        return "ignored"
+    output = json.dumps(
+        {
+            "approved": approved,
+            "disposition": disposition,
+            "reviewer_role": role,
+            "reviewed_at": _nonblank(body.get("received_at")),
+            "review_action_id": action_id,
+        },
+        separators=(",", ":"),
+    )
+    try:
+        dependencies.callbacks.send_task_success(taskToken=task_token, output=output)
+    except Exception as exc:
+        if _error_code(exc) in _LATE_TOKEN:
+            dependencies.qa_reviews.delete(tenant_id=tenant_id, incident_id=incident_id)
+            return "ignored"
+        raise
+    dependencies.qa_reviews.delete(tenant_id=tenant_id, incident_id=incident_id)
+    return "resumed"
 
 
 def _cancel(

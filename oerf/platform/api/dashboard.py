@@ -29,8 +29,10 @@ from oerf.platform.tenancy.config_resolver import ConfigInvalid, FileConfigRepos
 from oerf.platform.tenancy.dynamo_config import DynamoConfigRepository
 from oerf.platform.tenancy.publisher import ConfigPublisher
 
-_ACTIONS = frozenset({"confirm_transfer", "pick_option", "cancel"})
-_ACTION_FIELDS = frozenset({"action", "action_id", "engagement_id", "option_id", "reason"})
+_ACTIONS = frozenset({"confirm_transfer", "pick_option", "cancel", "review_qa"})
+_ACTION_FIELDS = frozenset(
+    {"action", "action_id", "engagement_id", "option_id", "reason", "approved", "disposition"}
+)
 _ACTION_ROLES = frozenset({"platform_admin", "tenant_admin", "ops_user"})
 _NEEDS_ENGAGEMENT = frozenset({"confirm_transfer", "pick_option"})
 _CATALOGS = frozenset({"contacts", "facilities", "faultcodes"})
@@ -318,6 +320,8 @@ def _action(
         return 400, {"error": "invalid_body"}
     if parsed is None:
         return 400, {"error": "invalid_body"}
+    if parsed["action"] == "review_qa" and principal.role not in {"platform_admin", "tenant_admin"}:
+        return 403, {"error": "forbidden"}
     if services.queue is None:
         return 503, {"error": "queue_unavailable"}
     action_id = parsed["action_id"]
@@ -339,6 +343,9 @@ def _action(
         "media_ref": None,
         "received_at": services.clock().strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if parsed["action"] == "review_qa":
+        message["approved"] = parsed["approved"]
+        message["disposition"] = parsed["disposition"]
     try:
         services.queue.send(body=message, dedup_id=action_id)
     except Exception:
@@ -574,6 +581,13 @@ def _action_body(body: dict[str, Any]) -> dict[str, Any] | None:
     option = body.get("option_id")
     if action == "pick_option" and not _text(option):
         return None
+    approved = body.get("approved")
+    disposition = body.get("disposition")
+    if action == "review_qa":
+        if not isinstance(approved, bool) or not _text(disposition):
+            return None
+    elif approved is not None or disposition is not None:
+        return None
     if option is not None and not isinstance(option, str):
         return None
     if "reason" in body and not isinstance(body.get("reason"), str):
@@ -583,6 +597,8 @@ def _action_body(body: dict[str, Any]) -> dict[str, Any] | None:
         "action_id": action_id.strip(),
         "engagement_id": engagement.strip() if _text(engagement) else None,
         "option_id": option.strip() if _text(option) else None,
+        "approved": approved,
+        "disposition": disposition.strip() if _text(disposition) else None,
     }
 
 
