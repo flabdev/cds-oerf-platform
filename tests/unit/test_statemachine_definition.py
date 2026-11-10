@@ -170,7 +170,10 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
             assert state["Resource"] == "arn:aws:states:::lambda:invoke"
             assert state["Parameters"]["FunctionName"] == "__CHANNEL_ROUTER_ARN__"
             assert state["Parameters"]["Payload"]["step_name"] == "EngagementSendOneWay"
-            assert state["ResultPath"] == "$.driver_notice"
+            # Notices are best-effort side effects; discard their result so the
+            # strict workflow envelope stays unchanged for the next task.
+            assert state["ResultPath"] is None
+            assert state["Catch"][0]["ResultPath"] is None
             assert "OutputPath" not in state
             assert "task_token" not in json.dumps(state["Parameters"])
             assert state["Catch"][0]["Next"].startswith("CancelAfterNotify")
@@ -886,14 +889,17 @@ def simulate(event: dict, handler_fn=handler, max_steps: int = 48) -> tuple:
                 )
                 if catcher is None:
                     raise
-                data = dict(data)
-                data["simulated_error"] = error_name
+                if "ResultPath" not in catcher:
+                    data = {"Error": error_name}
+                elif catcher["ResultPath"] is not None:
+                    data = dict(data)
+                    _assign(data, catcher["ResultPath"], {"Error": error_name})
                 current = catcher["Next"]
                 continue
-            if state.get("ResultPath"):
-                _assign(data, state["ResultPath"], result)
-            else:
+            if "ResultPath" not in state:
                 data = result
+            elif state["ResultPath"] is not None:
+                _assign(data, state["ResultPath"], result)
             next_incident_state = data.get("incident_state")
             if (
                 previous_incident_state is not None
@@ -926,6 +932,22 @@ def test_missing_cancel_flag_still_reaches_closed() -> None:
 
     assert outcome == "WorkflowComplete"
     assert final["incident_state"] == "CLOSED"
+
+
+def test_notice_task_failure_preserves_the_envelope_and_workflow_closes() -> None:
+    """Best-effort notice failures must not poison the strict next-step envelope."""
+
+    def fail_notice(event: dict, context: object) -> dict:
+        if event["step_name"] == "EngagementSendOneWay":
+            raise RuntimeError("simulated router failure")
+        return handler(event, context)
+
+    outcome, final = simulate(dict(INITIAL_EVENT), handler_fn=fail_notice)
+
+    assert outcome == "WorkflowComplete"
+    assert final["incident_state"] == "CLOSED"
+    assert "driver_notice" not in final
+    assert "driver_notice_error" not in final
 
 
 def test_unguarded_choice_on_a_missing_path_raises() -> None:
