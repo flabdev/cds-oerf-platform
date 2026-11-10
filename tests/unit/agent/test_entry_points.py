@@ -1,4 +1,4 @@
-"""The six frozen entry points: contract, phase guard, and replay at the edge."""
+"""The frozen entry points: contract, phase guard, and replay at the edge."""
 
 import importlib
 import inspect
@@ -30,7 +30,7 @@ def _rows() -> dict[str, str]:
     return dict(ROW.findall(INTERFACES.read_text(encoding="utf-8")))
 
 
-def test_interfaces_freezes_exactly_the_six_phase_modules() -> None:
+def test_interfaces_freezes_exactly_the_phase_modules() -> None:
     rows = _rows()
 
     assert set(rows) == set(runtime.MODULES.values())
