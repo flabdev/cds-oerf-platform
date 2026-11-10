@@ -196,7 +196,7 @@ def build_dependencies(
         config=config,
         facilities=facilities,
         reports=GeneratorReportPublisher(),
-        qa_reviews=DynamoQAReviewStore(dynamo, resolved.incident_table),
+        qa_reviews=DynamoQAReviewStore(dynamo, resolved.incident_table, clock=moment),
         clock=moment,
     )
 

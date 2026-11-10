@@ -6,6 +6,8 @@ from typing import Any
 
 import pytest
 
+import oerf.platform.inbound.handler as inbound
+from oerf.platform.agent.qa_review import QA_REVIEW_TTL_SECONDS
 from oerf.platform.channels.engagement import DynamoEngagementStore
 from oerf.platform.channels.registry import DynamoPhoneRegistry
 from oerf.platform.inbound.dynamo import DynamoMessageDedupe
@@ -55,6 +57,40 @@ def wired() -> tuple[InboundDependencies, FakeDynamoClient, CallbackClient]:
     )
     engagements.register_outbound("wamid-outbound-1", engagement)
     return InboundDependencies(dedupe, engagements, callbacks, registry), client, callbacks
+
+
+def test_build_dependencies_injects_clock_into_qa_review_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeStepFunctions:
+        pass
+
+    client = FakeDynamoClient()
+    stepfunctions = FakeStepFunctions()
+    monkeypatch.setattr(inbound, "INCIDENT_TABLE_NAME", INCIDENT_TABLE)
+    monkeypatch.setattr(inbound, "TENANT_TABLE_NAME", TENANT_TABLE)
+    monkeypatch.setattr(inbound, "ROUTING_TABLE_NAME", ROUTING_TABLE)
+    monkeypatch.setattr(inbound, "_client", client)
+    monkeypatch.setattr(inbound.boto3, "client", lambda service: stepfunctions)
+    monkeypatch.setattr(inbound, "_evidence_store", lambda: None)
+    monkeypatch.setenv("SANDBOX_JOIN_ENABLED", "false")
+
+    def fixed_clock() -> datetime:
+        return NOW
+
+    deps = inbound.build_dependencies(clock=fixed_clock)
+    deps.qa_reviews.put(
+        tenant_id="t1",
+        incident_id="INC-000001",
+        task_token="private-token",
+    )
+
+    item = client.get_item(
+        TableName=INCIDENT_TABLE,
+        Key={"pk": {"S": "TENANT#t1#INC#INC-000001"}, "sk": {"S": "QA_REVIEW"}},
+    )["Item"]
+    assert int(item["expires_at"]["N"]) == int(NOW.timestamp()) + QA_REVIEW_TTL_SECONDS
+    assert deps.clock is fixed_clock
 
 
 def _record(body: dict[str, Any], message_id: str = "sqs-1") -> dict[str, str]:

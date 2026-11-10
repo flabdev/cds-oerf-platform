@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from oerf.platform.storage.dynamo import incident_pk, key, s, text
+from oerf.platform.storage.dynamo import epoch_seconds, incident_pk, key, n, s, text
+
+QA_REVIEW_TTL_SECONDS = 7 * 24 * 60 * 60
 
 
 class QAReviewStore(Protocol):
@@ -19,9 +23,16 @@ class QAReviewStore(Protocol):
 class DynamoQAReviewStore:
     """Store the private callback token in the incident table."""
 
-    def __init__(self, client: Any, table_name: str) -> None:
+    def __init__(
+        self,
+        client: Any,
+        table_name: str,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self._client = client
         self._table = table_name
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     def put(self, *, tenant_id: str, incident_id: str, task_token: str) -> None:
         self._client.put_item(
@@ -31,6 +42,7 @@ class DynamoQAReviewStore:
                 "tenant_id": s(tenant_id),
                 "incident_id": s(incident_id),
                 "task_token": s(task_token),
+                "expires_at": n(epoch_seconds(self._clock()) + QA_REVIEW_TTL_SECONDS),
             },
         )
 

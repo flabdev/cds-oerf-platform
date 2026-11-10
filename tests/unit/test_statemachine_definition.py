@@ -739,7 +739,8 @@ def test_definition_guards_against_orphaned_executions() -> None:
     # The CDK L2 `timeout` prop is not rendered for a from_string definition,
     # so the execution timeout lives in the ASL top level instead.
     definition = load_definition()
-    assert definition["TimeoutSeconds"] == 86400
+    assert definition["TimeoutSeconds"] == 8 * 24 * 60 * 60
+    assert definition["States"]["QAReviewWait"]["TimeoutSeconds"] == 7 * 24 * 60 * 60
 
     # Walk Next, Default, Choices[].Next, and Catch[].Next from StartAt.
     # Nested Parallel branches and Map ItemProcessor/Iterator are separate

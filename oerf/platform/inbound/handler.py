@@ -375,14 +375,15 @@ def sandbox_join_enabled() -> bool:
     return os.environ.get("SANDBOX_JOIN_ENABLED", "").strip().lower() == "true"
 
 
-def build_dependencies() -> InboundDependencies:
+def build_dependencies(*, clock: Callable[[], datetime] | None = None) -> InboundDependencies:
     """Build runtime adapters lazily from the OERF-301 environment contract.
 
     The inbound function receives ``INCIDENT_TABLE_NAME``,
     ``ROUTING_TABLE_NAME`` and ``TENANT_TABLE_NAME`` from the compute stack,
     with read/write access to the incident and routing tables. Missing
     configuration fails the invocation rather than acknowledging records that
-    were never processed.
+    were never processed. ``clock`` is injectable for deterministic expiry and
+    dedupe behavior.
     """
     global _client
     if not ROUTING_TABLE_NAME or not INCIDENT_TABLE_NAME or not TENANT_TABLE_NAME:
@@ -391,6 +392,7 @@ def build_dependencies() -> InboundDependencies:
         )
     if _client is None:
         _client = boto3.client("dynamodb")
+    moment = clock or (lambda: datetime.now(UTC))
     stepfunctions = boto3.client("stepfunctions")
     join_enabled = sandbox_join_enabled()
     return InboundDependencies(
@@ -400,7 +402,7 @@ def build_dependencies() -> InboundDependencies:
         registry=DynamoPhoneRegistry(_client, ROUTING_TABLE_NAME, TENANT_TABLE_NAME),
         media_evidence=_evidence_store(),
         incidents=DynamoIncidentStore(_client, INCIDENT_TABLE_NAME, tenant_table=TENANT_TABLE_NAME),
-        qa_reviews=DynamoQAReviewStore(_client, INCIDENT_TABLE_NAME),
+        qa_reviews=DynamoQAReviewStore(_client, INCIDENT_TABLE_NAME, clock=moment),
         executions=stepfunctions,
         state_machine_arn=os.environ.get("STATE_MACHINE_ARN", ""),
         sandbox=DynamoSandboxStore(_client, ROUTING_TABLE_NAME, TENANT_TABLE_NAME)
@@ -415,6 +417,7 @@ def build_dependencies() -> InboundDependencies:
         if join_enabled
         else None,
         sandbox_join_enabled=join_enabled,
+        clock=moment,
     )
 
 
@@ -716,6 +719,7 @@ def _process_dashboard(body: dict[str, Any], dependencies: InboundDependencies) 
     if action == "pick_option":
         payload["option_id"] = option_id
     return _resume(engagement, payload, dependencies)
+
 
 def _review_qa(
     body: dict[str, Any],

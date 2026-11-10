@@ -1,7 +1,7 @@
 {
   "Comment": "cold_chain_excursion_v1 workflow. Human approval uses a task token; cancellation and all failure branches are bounded and routed through canonical incident transitions.",
   "StartAt": "OPEN",
-  "TimeoutSeconds": 86400,
+  "TimeoutSeconds": 691200,
   "States": {
     "OPEN": {
       "Type": "Task",
