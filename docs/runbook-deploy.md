@@ -89,6 +89,7 @@ make demo-preflight TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=m
 make demo-prep TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1
 make demo-sensor TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1
 make demo-reply TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1 BUTTON=running
+make demo-review-qa TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1 INCIDENT=<incident-id> DECISION=qa_pass
 make demo-status TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1
 make demo-cleanup TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1
 make demo-run TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=main ALLOW_MAIN=1
