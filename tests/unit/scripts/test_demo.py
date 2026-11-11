@@ -1,6 +1,8 @@
 """Operator demo commands. Stubber stands in for AWS. Nothing here calls the network."""
 
 import json
+import urllib.error
+import urllib.request
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,9 +22,11 @@ from scripts.demo import (
     parse_temps,
     path_line,
     post_driver_reply,
+    post_qa_review,
     prepare,
     public_error,
     publish_excursion,
+    qa_review_action,
     reading_note,
     rehearse,
     resolve_subject,
@@ -720,6 +724,310 @@ def test_errors_drop_arns_and_numbers() -> None:
     assert public_error(RuntimeError(PHONE)) == "demo command failed (RuntimeError)"
 
 
+def test_review_qa_cli_dispatches_named_incident_and_default_disposition(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    sts, stubber = _aws("sts")
+    stubber.add_response("get_caller_identity", _identity(ACCOUNT))
+    session = Session(sts=sts)
+    calls: list[tuple] = []
+
+    code = main(
+        [
+            "review-qa",
+            "--profile",
+            "demo",
+            "--account",
+            ACCOUNT,
+            "--tenant",
+            "t1",
+            "--incident",
+            "INC-000123",
+            "--decision",
+            "qa_pass",
+            "--stage",
+            "dev",
+        ],
+        session_factory=lambda _profile: session,
+        send_qa_review=lambda *args: calls.append(args),
+    )
+
+    assert code == 0
+    assert calls == [(session, "t1", "INC-000123", True, "release")]
+    assert "queued" not in capsys.readouterr().err
+    stubber.assert_no_pending_responses()
+
+
+def test_review_qa_cli_fails_closed_for_invalid_incident(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    sts, stubber = _aws("sts")
+    stubber.add_response("get_caller_identity", _identity(ACCOUNT))
+    session = Session(sts=sts)
+    calls: list[tuple] = []
+
+    code = main(
+        [
+            "review-qa",
+            "--profile",
+            "demo",
+            "--account",
+            ACCOUNT,
+            "--tenant",
+            "t1",
+            "--incident",
+            "bad-id",
+            "--decision",
+            "qa_fail",
+            "--stage",
+            "dev",
+        ],
+        session_factory=lambda _profile: session,
+        send_qa_review=lambda *args: calls.append(args),
+    )
+
+    assert code == 1
+    assert "incident id" in capsys.readouterr().err
+    assert calls == []
+    stubber.assert_no_pending_responses()
+
+
+def test_qa_review_body_survives_the_dashboard_and_inbound_contract() -> None:
+    """The CLI body is accepted by the API schema and resumes the stored token."""
+
+    from oerf.platform.agent.qa_review import MemoryQAReviewStore
+    from oerf.platform.api.dashboard import (
+        DashboardServices,
+        MemoryActionQueue,
+        MemoryIncidentQuery,
+        Principal,
+        dispatch,
+    )
+    from oerf.platform.inbound.dedupe import InboundDedupe
+    from oerf.platform.inbound.handler import InboundDependencies, process_message
+
+    body = qa_review_action(action_id="qa-review-1", approved=True, disposition="release")
+    queue = MemoryActionQueue()
+    services = DashboardServices(
+        queries=MemoryIncidentQuery([]),
+        queue=queue,
+        clock=lambda: NOW,
+    )
+    admin = Principal("t1", "tenant_admin", "admin-1", True)
+
+    response = dispatch(
+        "POST",
+        "/incidents/INC-000123/actions",
+        admin,
+        body,
+        services,
+        idempotency_key=body["action_id"],
+    )
+
+    assert response == (202, {"action_id": "qa-review-1", "status": "queued"})
+    queued = queue.messages[0]
+    assert queued["action"] == "review_qa"
+    assert queued["role"] == "tenant_admin"
+    assert "task_token" not in queued
+
+    reviews = MemoryQAReviewStore()
+    reviews.put(tenant_id="t1", incident_id="INC-000123", task_token="qa-secret-token")
+    callbacks = _Callbacks()
+    deps = InboundDependencies(
+        InboundDedupe(clock=lambda: NOW),
+        _Engagements(),
+        callbacks,
+        _Registry(),
+        _Evidence(),
+        qa_reviews=reviews,
+    )
+
+    assert process_message(queued, deps) == "resumed"
+    assert callbacks.calls == [
+        {
+            "taskToken": "qa-secret-token",
+            "output": json.dumps(
+                {
+                    "approved": True,
+                    "disposition": "release",
+                    "reviewer_role": "tenant_admin",
+                    "reviewed_at": "2026-10-28T15:13:05Z",
+                    "review_action_id": "qa-review-1",
+                },
+                separators=(",", ":"),
+            ),
+        }
+    ]
+
+
+class _Callbacks:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, str]] = []
+
+    def send_task_success(self, *, taskToken: str, output: str) -> None:
+        self.calls.append({"taskToken": taskToken, "output": output})
+
+
+class _Engagements:
+    def get(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
+class _Registry:
+    def resolve(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
+class _Evidence:
+    def store(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
+def test_post_qa_review_uses_authenticated_dashboard_api(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("OERF_ACCESS_TOKEN", "access-token-secret")
+    cloudformation, formed_stub = _aws("cloudformation")
+    formed_stub.add_response(
+        "describe_stacks",
+        _stack("OerfDataStack", "CREATE_COMPLETE", {"IncidentTableName": INCIDENT_TABLE}),
+        {"StackName": "OerfDataStack"},
+    )
+    formed_stub.add_response(
+        "describe_stacks",
+        _stack("OerfApiStack", "CREATE_COMPLETE", {"RestApiUrl": "https://api.example/"}),
+        {"StackName": "OerfApiStack"},
+    )
+    dynamo, dynamo_stub = _aws("dynamodb")
+    dynamo_stub.add_response(
+        "get_item",
+        {"Item": {**key(incident_pk("t1", "INC-000123"), "QA_REVIEW"), "pk": {"S": "PK"}}},
+        {
+            "TableName": INCIDENT_TABLE,
+            "Key": key(incident_pk("t1", "INC-000123"), "QA_REVIEW"),
+            "ProjectionExpression": "pk",
+        },
+    )
+    session = Session(cloudformation=cloudformation, dynamodb=dynamo)
+    seen: dict[str, object] = {}
+
+    class Response:
+        status = 202
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def open_request(request: urllib.request.Request, *, timeout: float) -> Response:
+        seen["url"] = request.full_url
+        seen["method"] = request.method
+        seen["headers"] = dict(request.header_items())
+        seen["body"] = json.loads(request.data.decode("utf-8"))
+        seen["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr("scripts.demo.urllib.request.urlopen", open_request)
+    post_qa_review(session, "t1", "INC-000123", True, "release")
+
+    assert seen["url"] == "https://api.example/incidents/INC-000123/actions"
+    assert seen["method"] == "POST"
+    assert seen["timeout"] == 15
+    assert seen["headers"]["Authorization"] == "Bearer access-token-secret"
+    assert seen["body"]["action"] == "review_qa"
+    assert seen["body"]["approved"] is True
+    assert seen["body"]["disposition"] == "release"
+    assert "task_token" not in seen["body"]
+    output = capsys.readouterr().out
+    assert "INC-000123" in output
+    assert "access-token-secret" not in output
+    formed_stub.assert_no_pending_responses()
+    dynamo_stub.assert_no_pending_responses()
+
+
+def test_post_qa_review_stops_when_no_review_is_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OERF_ACCESS_TOKEN", "access-token-secret")
+    cloudformation, formed_stub = _aws("cloudformation")
+    formed_stub.add_response(
+        "describe_stacks",
+        _stack("OerfDataStack", "CREATE_COMPLETE", {"IncidentTableName": INCIDENT_TABLE}),
+        {"StackName": "OerfDataStack"},
+    )
+    dynamo, dynamo_stub = _aws("dynamodb")
+    dynamo_stub.add_response(
+        "get_item",
+        {},
+        {
+            "TableName": INCIDENT_TABLE,
+            "Key": key(incident_pk("t1", "INC-000123"), "QA_REVIEW"),
+            "ProjectionExpression": "pk",
+        },
+    )
+    session = Session(cloudformation=cloudformation, dynamodb=dynamo)
+
+    def no_network(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("dashboard was called without a pending review")
+
+    monkeypatch.setattr("scripts.demo.urllib.request.urlopen", no_network)
+
+    with pytest.raises(DemoError, match="no QA review is pending"):
+        post_qa_review(session, "t1", "INC-000123", True, "release")
+
+    formed_stub.assert_no_pending_responses()
+    dynamo_stub.assert_no_pending_responses()
+
+
+def test_post_qa_review_reports_a_refused_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OERF_ACCESS_TOKEN", "access-token-secret")
+    cloudformation, formed_stub = _aws("cloudformation")
+    formed_stub.add_response(
+        "describe_stacks",
+        _stack("OerfDataStack", "CREATE_COMPLETE", {"IncidentTableName": INCIDENT_TABLE}),
+        {"StackName": "OerfDataStack"},
+    )
+    formed_stub.add_response(
+        "describe_stacks",
+        _stack("OerfApiStack", "CREATE_COMPLETE", {"RestApiUrl": "https://api.example/"}),
+        {"StackName": "OerfApiStack"},
+    )
+    dynamo, dynamo_stub = _aws("dynamodb")
+    dynamo_stub.add_response(
+        "get_item",
+        {"Item": key(incident_pk("t1", "INC-000123"), "QA_REVIEW")},
+        {
+            "TableName": INCIDENT_TABLE,
+            "Key": key(incident_pk("t1", "INC-000123"), "QA_REVIEW"),
+            "ProjectionExpression": "pk",
+        },
+    )
+    session = Session(cloudformation=cloudformation, dynamodb=dynamo)
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise urllib.error.HTTPError("url", 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr("scripts.demo.urllib.request.urlopen", forbidden)
+
+    with pytest.raises(DemoError, match="refused the QA review with status 403"):
+        post_qa_review(session, "t1", "INC-000123", True, "release")
+
+    formed_stub.assert_no_pending_responses()
+    dynamo_stub.assert_no_pending_responses()
+
+
+def test_post_qa_review_requires_access_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OERF_ACCESS_TOKEN", raising=False)
+    with pytest.raises(DemoError, match="OERF_ACCESS_TOKEN"):
+        post_qa_review(object(), "t1", "INC-000123", True, "release")
+
+
 def test_demo_is_not_a_ci_step() -> None:
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "scripts.demo" not in workflow
@@ -741,6 +1049,9 @@ def test_demo_is_not_a_ci_step() -> None:
     assert "--button $(BUTTON)" in makefile
     assert "--shipment $(SHIPMENT)" in makefile
     assert "--device $(DEVICE)" in makefile
+    assert "demo-review-qa" in makefile
+    assert "--incident $(INCIDENT)" in makefile
+    assert "--decision $(DECISION)" in makefile
 
 
 def _clients(**overrides: object) -> SimpleNamespace:

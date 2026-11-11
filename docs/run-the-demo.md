@@ -69,6 +69,30 @@ Publishes two `TemperatureReading` events on the stage bus (`oerf-events` on mai
 
 The command then waits up to 30 seconds for a new `{tenant}-INC-*` execution on `oerf-cold-chain`. Each run uses a new EventBridge id. Replaying the same id is ignored for 7 days, and prep does not clear those `INGEST#` rows.
 
+## demo-review-qa
+
+Queues the human QA verdict for an incident that is waiting at `QAReviewWait`.
+
+```text
+make demo-review-qa TENANT=t1 PROFILE=<aws-profile> ACCOUNT=<account-id> STAGE=dev \
+  INCIDENT=INC-000123 DECISION=qa_pass
+make demo-review-qa ... DECISION=qa_fail DISPOSITION=quarantine
+```
+
+`INCIDENT` and `DECISION` are required; `DECISION` is `qa_pass` or `qa_fail`. `DISPOSITION` defaults to `release` for `qa_pass` and `quarantine` for `qa_fail`; pass `reject` to override. The disposition must be one of the pinned closure dispositions on the tenant config, otherwise the `QA` step fails and the execution goes to `RecordFailure`.
+
+The command first reads the incident's `SK=QA_REVIEW` row with `ProjectionExpression=pk`, so it learns whether a review is actually pending without fetching the callback token. No pending row stops the command with `no QA review is pending for <incident>`; the inbound handler would otherwise ignore the action silently.
+
+It then posts to the dashboard route `POST /incidents/{id}/actions` (`RestApiUrl` on that stage's API stack) with the access token in `OERF_ACCESS_TOKEN`:
+
+```text
+export OERF_ACCESS_TOKEN=<tenant_admin or platform_admin Cognito access token>
+```
+
+The body is `action`, `action_id`, `approved`, and `disposition` only. Role and tenant come from the token, not from this tool, so the desk's own role gate decides whether the verdict is accepted. A token for `ops_user` is refused by the API with `403`. The command never reads, accepts, or prints a task token, and it never calls `SendTaskSuccess`; the inbound handler resolves the private token from the `QA_REVIEW` row and resumes the wait.
+
+**Observable:** `queued QA review tenant=t1 incident=<id> decision=<qa_pass|qa_fail> disposition=<d>`. The dashboard answers `202`, the inbound handler writes the verdict to the waiting task, and the execution moves `QAReviewWait -> QA`. On `qa_pass` with `release` it continues to `Close`; on `qa_fail` the `QA` step records the rejection.
+
 ## demo-cleanup
 
 Resets the tenant again and requires the dry run to report zero. Run this when the rehearsal is over. `make reset-test` and `make reset-demo` are the lower-level reset; they do not take `ACCOUNT`.

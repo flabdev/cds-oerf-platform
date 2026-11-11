@@ -5,21 +5,32 @@ seed, and the driver reply are function calls, not shell commands.
 
     python -m scripts.demo preflight --profile <profile> --account <account-id> --tenant t1
     python -m scripts.demo run --profile <profile> --account <account-id> --tenant t1
+    python -m scripts.demo review-qa --profile <profile> --account <account-id> \\
+        --tenant t1 --incident INC-000001 --decision qa_pass
 
 ``--profile`` and ``--account`` are required. The region is ``us-east-1``.
 ``--shipment`` and ``--device`` default to that tenant's seeded shipment.
 Every command refuses a caller that is not the demo account before it reads
 or writes anything else. Phone numbers, task tokens, ARNs, and raw payloads
 are not printed.
+
+``review-qa`` posts to the dashboard's authenticated action route with the
+access token in ``OERF_ACCESS_TOKEN``, so the reviewer role and tenant come
+from the token rather than from this tool. The QA callback token stays on the
+incident row and is never read here.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
+import urllib.error
+import urllib.request
+import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -33,6 +44,7 @@ from scripts._stage import (
     add_stage_argument,
     remember_stage,
     resolve_stage,
+    stack_outputs,
 )
 from scripts.demo_reply import (
     channels_live_from_configuration,
@@ -55,6 +67,7 @@ _INCIDENT_NAME = re.compile(r"INC-\d{6}")
 Clock = Callable[[], datetime]
 Sleeper = Callable[[float], None]
 ReplySender = Callable[[str, str, str, str], None]
+QAReviewSender = Callable[[Any, str, str, bool, str], None]
 
 
 class DemoError(Exception):
@@ -83,6 +96,7 @@ def main(
     clock: Clock | None = None,
     sleep: Sleeper | None = None,
     send_reply: ReplySender | None = None,
+    send_qa_review: QAReviewSender | None = None,
 ) -> int:
     """Dispatch one subcommand. Returns 0 on success."""
 
@@ -92,17 +106,36 @@ def main(
         target.announce()
         account = parse_account(args.account)
         tenant_id = tenants_for(args.tenant)[0]
-        shipment_id, device_id = resolve_subject(tenant_id, args.shipment, args.device)
+        shipment_id, device_id = (
+            (None, None)
+            if args.command == "review-qa"
+            else resolve_subject(tenant_id, args.shipment, args.device)
+        )
         session = (session_factory or _session)(args.profile)
         now = clock or _now
         pause_for = sleep or time.sleep
         sender = send_reply or send_driver_reply
+        qa_sender = send_qa_review or post_qa_review
         if args.command == "preflight":
             return preflight(session, tenant_id, account=account, live=args.live)
         require_demo_account(session, account)
         if args.command == "reply" and args.live:
             raise DemoError("reply is for mocked runs")
-        if args.command == "prep":
+        if args.command == "review-qa":
+            incident_id = args.incident.strip()
+            if _INCIDENT_NAME.fullmatch(incident_id) is None:
+                raise DemoError("--incident must be an incident id like INC-000001")
+            disposition = args.disposition or (
+                "release" if args.decision == "qa_pass" else "quarantine"
+            )
+            qa_sender(
+                session,
+                tenant_id,
+                incident_id,
+                args.decision == "qa_pass",
+                disposition,
+            )
+        elif args.command == "prep":
             _prepare_session(session, tenant_id)
         elif args.command == "sensor":
             if not args.shipment or not args.device:
@@ -872,6 +905,93 @@ def router_is_live(lambda_client: Any, function_name: str | None = None) -> bool
         raise DemoError(message or f"cannot read USE_MOCK_WHATSAPP on {name}") from None
 
 
+def pending_qa_review(session: Any, tenant_id: str, incident_id: str) -> bool:
+    """True when the incident has a pending QA row. The callback token is not read."""
+
+    stage = resolve_stage()
+    try:
+        outputs = stack_outputs(_client(session, "cloudformation"), stage.data_stack)
+    except Exception:
+        raise DemoError("could not read the incident table output") from None
+    table = outputs.get("IncidentTableName", "")
+    if not table:
+        raise DemoError("data stack has no incident table output")
+    try:
+        found = _client(session, "dynamodb").get_item(
+            TableName=table,
+            Key=key(incident_pk(tenant_id, incident_id), "QA_REVIEW"),
+            ProjectionExpression="pk",
+        )
+    except Exception:
+        raise DemoError("could not read the QA review row") from None
+    return isinstance(found, dict) and bool(found.get("Item"))
+
+
+def qa_review_action(*, action_id: str, approved: bool, disposition: str) -> dict[str, Any]:
+    """The dashboard QA verdict body. It carries no tenant, role, or task token."""
+
+    return {
+        "action": "review_qa",
+        "action_id": action_id,
+        "approved": approved,
+        "disposition": disposition,
+    }
+
+
+def post_qa_review(
+    session: Any,
+    tenant_id: str,
+    incident_id: str,
+    approved: bool,
+    disposition: str,
+) -> None:
+    """Post an authenticated dashboard QA verdict; never impersonate a role."""
+
+    token = os.environ.get("OERF_ACCESS_TOKEN", "").strip()
+    if not token:
+        raise DemoError("set OERF_ACCESS_TOKEN to a dashboard access token")
+    if not pending_qa_review(session, tenant_id, incident_id):
+        raise DemoError(f"no QA review is pending for {incident_id}")
+    stage = resolve_stage()
+    try:
+        outputs = stack_outputs(_client(session, "cloudformation"), stage.api_stack)
+    except Exception:
+        raise DemoError("could not read the dashboard API output") from None
+    api_url = outputs.get("RestApiUrl", "").rstrip("/")
+    if not api_url:
+        raise DemoError("API stack has no REST API output")
+    action_id = f"qa-review-{uuid.uuid4().hex}"
+    body = json.dumps(
+        qa_review_action(action_id=action_id, approved=approved, disposition=disposition),
+        separators=(",", ":"),
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        f"{api_url}/incidents/{incident_id}/actions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Idempotency-Key": action_id,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            if response.status != 202:
+                raise DemoError("dashboard did not accept the QA review")
+    except DemoError:
+        raise
+    except urllib.error.HTTPError as exc:
+        raise DemoError(f"dashboard refused the QA review with status {exc.code}") from None
+    except (urllib.error.URLError, TimeoutError, OSError):
+        raise DemoError("could not post the QA review to the dashboard") from None
+    decision = "qa_pass" if approved else "qa_fail"
+    say(
+        f"queued QA review tenant={tenant_id} incident={incident_id} "
+        f"decision={decision} disposition={disposition}"
+    )
+
+
 def send_driver_reply(profile: str, tenant_id: str, shipment_id: str, button: str) -> None:
     """Post the driver button through ``scripts.demo_reply``."""
 
@@ -1176,6 +1296,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     reply = commands.add_parser("reply", parents=[common], help="Post the mocked driver reply.")
     reply.add_argument("--button", default="running", choices=("running", "stopped"))
+    review = commands.add_parser(
+        "review-qa",
+        parents=[common],
+        help="Queue a QA verdict for a named incident.",
+    )
+    review.add_argument("--incident", required=True)
+    review.add_argument("--decision", required=True, choices=("qa_pass", "qa_fail"))
+    review.add_argument("--disposition", choices=("release", "quarantine", "reject"))
     commands.add_parser("status", parents=[common], help="Print the execution and incident.")
     commands.add_parser("cleanup", parents=[common], help="Reset the tenant and require zero.")
     run = commands.add_parser("run", parents=[common], help="Prep, sensor, mocked reply, status.")

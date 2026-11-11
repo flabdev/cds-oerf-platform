@@ -12,7 +12,7 @@ test:
 	pytest -q -m "not aws"
 
 RESETS = reset-test reset-demo
-DEMOS = demo-preflight demo-prep demo-sensor demo-reply demo-status demo-cleanup demo-run
+DEMOS = demo-preflight demo-prep demo-sensor demo-reply demo-review-qa demo-status demo-cleanup demo-run
 
 ifndef PROFILE
 $(RESETS) $(DEMOS):
@@ -58,6 +58,11 @@ demo-sensor:
 
 demo-reply:
 	STAGE=$(STAGE) ALLOW_MAIN=$(ALLOW_MAIN) $(PYTHON) -m scripts.demo reply --stage $(STAGE) --profile $(PROFILE) --account $(ACCOUNT) --tenant $(TENANT) --button $(BUTTON)
+
+demo-review-qa:
+	@test -n "$(INCIDENT)" || { echo "INCIDENT is required"; exit 1; }
+	@test -n "$(DECISION)" || { echo "DECISION is required (qa_pass or qa_fail)"; exit 1; }
+	STAGE=$(STAGE) ALLOW_MAIN=$(ALLOW_MAIN) $(PYTHON) -m scripts.demo review-qa --stage $(STAGE) --profile $(PROFILE) --account $(ACCOUNT) --tenant $(TENANT) --incident $(INCIDENT) --decision $(DECISION) $(if $(DISPOSITION),--disposition $(DISPOSITION),)
 
 demo-status:
 	STAGE=$(STAGE) ALLOW_MAIN=$(ALLOW_MAIN) $(PYTHON) -m scripts.demo status --stage $(STAGE) --profile $(PROFILE) --account $(ACCOUNT) --tenant $(TENANT)
