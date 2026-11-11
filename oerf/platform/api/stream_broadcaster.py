@@ -142,6 +142,12 @@ def _deliver(record: dict[str, Any], table, apigw) -> bool:
     """Return True when the record must not be retried."""
 
     event_name = record.get("eventName")
+    image_name = "OldImage" if event_name == "REMOVE" else "NewImage"
+    item = _image(record, image_name)
+    if _sort_key(record, item) == "QA_REVIEW":
+        _skip_private_row(item)
+        return True
+
     if event_name == "REMOVE":
         identity = _identity(_image(record, "OldImage"))
         if identity is None:
@@ -159,7 +165,6 @@ def _deliver(record: dict[str, Any], table, apigw) -> bool:
             )
         return True
 
-    item = _image(record, "NewImage")
     identity = _identity(item)
     if item is None or identity is None:
         log(logger, logging.WARNING, "stream_record", outcome="malformed", count=1)
@@ -337,6 +342,40 @@ def _audience(subscription: dict[str, Any], tenant_id: str, incident_id: str) ->
     if scope == "tenant":
         return "tenant"
     return None
+
+
+def _skip_private_row(item: dict[str, Any] | None) -> None:
+    """Drop the QA callback row before any state check. The token stays off the log."""
+
+    fields: dict[str, object] = {"outcome": "skipped", "count": 1}
+    identity = _identity(item)
+    if identity is not None:
+        fields["tenant_id"], fields["incident_id"] = identity
+    log(
+        logger,
+        logging.DEBUG,
+        "stream_record outcome=skipped reason=private_row",
+        **fields,
+    )
+
+
+def _sort_key(record: dict[str, Any], item: dict[str, Any] | None) -> str:
+    if isinstance(item, dict):
+        sk = _text(item.get("sk"))
+        if sk is not None:
+            return sk
+    dynamodb = record.get("dynamodb")
+    if not isinstance(dynamodb, dict):
+        return ""
+    keys = dynamodb.get("Keys")
+    if not isinstance(keys, dict):
+        return ""
+    raw = keys.get("sk")
+    if isinstance(raw, dict):
+        value = raw.get("S")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _identity(item: dict[str, Any] | None) -> tuple[str, str] | None:

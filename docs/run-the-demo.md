@@ -83,11 +83,15 @@ make demo-review-qa ... DECISION=qa_fail DISPOSITION=quarantine
 
 The command first reads the incident's `SK=QA_REVIEW` row with `ProjectionExpression=pk`, so it learns whether a review is actually pending without fetching the callback token. No pending row stops the command with `no QA review is pending for <incident>`; the inbound handler would otherwise ignore the action silently.
 
-It then posts to the dashboard route `POST /incidents/{id}/actions` (`RestApiUrl` on that stage's API stack) with the access token in `OERF_ACCESS_TOKEN`:
+It then posts to the dashboard route `POST /incidents/{id}/actions` (`RestApiUrl` on that stage's API stack). The REST methods use the Cognito user pool authorizer and set no authorization scopes, so API Gateway expects the ID token. The desk sends that token as `Authorization: Bearer` plus the value stored under session storage key `oerf.idToken`. Set the same value in `OERF_ID_TOKEN`:
 
 ```text
-export OERF_ACCESS_TOKEN=<tenant_admin or platform_admin Cognito access token>
+export OERF_ID_TOKEN=<tenant_admin or platform_admin Cognito ID token>
 ```
+
+`OERF_ACCESS_TOKEN` still works. The command prints `OERF_ACCESS_TOKEN is deprecated; set OERF_ID_TOKEN` and does not print the token. If `OERF_ID_TOKEN` is unset and stdin is a terminal, the command prompts once with `getpass` and does not echo the value. An HTTP refusal prints the status code only. The response body is not printed.
+
+To copy the token for the dev admin user, sign in to the dev desk as the tenant_admin user and read session storage key `oerf.idToken` (`ID_TOKEN_KEY` in `web/src/session.js`). The user pool client allows `USER_SRP_AUTH` and the authorization-code grant. `USER_PASSWORD_AUTH` is not enabled, so `aws cognito-idp initiate-auth` does not apply to this client.
 
 The body is `action`, `action_id`, `approved`, and `disposition` only. Role and tenant come from the token, not from this tool, so the desk's own role gate decides whether the verdict is accepted. A token for `ops_user` is refused by the API with `403`. The command never reads, accepts, or prints a task token, and it never calls `SendTaskSuccess`; the inbound handler resolves the private token from the `QA_REVIEW` row and resumes the wait.
 

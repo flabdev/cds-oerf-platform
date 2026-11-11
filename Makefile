@@ -59,6 +59,7 @@ demo-sensor:
 demo-reply:
 	STAGE=$(STAGE) ALLOW_MAIN=$(ALLOW_MAIN) $(PYTHON) -m scripts.demo reply --stage $(STAGE) --profile $(PROFILE) --account $(ACCOUNT) --tenant $(TENANT) --button $(BUTTON)
 
+# OERF_ID_TOKEN is the Cognito ID token the desk sends. OERF_ACCESS_TOKEN is a deprecated alias.
 demo-review-qa:
 	@test -n "$(INCIDENT)" || { echo "INCIDENT is required"; exit 1; }
 	@test -n "$(DECISION)" || { echo "DECISION is required (qa_pass or qa_fail)"; exit 1; }
