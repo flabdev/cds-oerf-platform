@@ -148,7 +148,7 @@ accordingly.
 
 ```bash
 JSII_RUNTIME_PACKAGE_CACHE_ROOT="$(pwd)/.jsii-cache" \
-  .venv311/bin/python -m pytest -q \
+  .venv/bin/python -m pytest -q \
   tests/unit/test_cfn_handler_permissions.py \
   tests/unit/test_dev_boundary.py::test_policy_documents_fit_the_managed_policy_quota \
   tests/unit/test_boundary_equivalence.py
