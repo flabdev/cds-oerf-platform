@@ -1,5 +1,6 @@
 """Operator demo commands. Stubber stands in for AWS. Nothing here calls the network."""
 
+import io
 import json
 import urllib.error
 import urllib.request
@@ -883,11 +884,66 @@ class _Evidence:
         return None
 
 
+class _TokenInput:
+    def __init__(self, terminal: bool) -> None:
+        self._terminal = terminal
+
+    def isatty(self) -> bool:
+        return self._terminal
+
+
+def _pending_qa_session() -> tuple[Session, Stubber, Stubber]:
+    cloudformation, formed_stub = _aws("cloudformation")
+    formed_stub.add_response(
+        "describe_stacks",
+        _stack("OerfDataStack", "CREATE_COMPLETE", {"IncidentTableName": INCIDENT_TABLE}),
+        {"StackName": "OerfDataStack"},
+    )
+    formed_stub.add_response(
+        "describe_stacks",
+        _stack("OerfApiStack", "CREATE_COMPLETE", {"RestApiUrl": "https://api.example/"}),
+        {"StackName": "OerfApiStack"},
+    )
+    dynamo, dynamo_stub = _aws("dynamodb")
+    dynamo_stub.add_response(
+        "get_item",
+        {"Item": key(incident_pk("t1", "INC-000123"), "QA_REVIEW")},
+        {
+            "TableName": INCIDENT_TABLE,
+            "Key": key(incident_pk("t1", "INC-000123"), "QA_REVIEW"),
+            "ProjectionExpression": "pk",
+        },
+    )
+    return Session(cloudformation=cloudformation, dynamodb=dynamo), formed_stub, dynamo_stub
+
+
+def _capture_dashboard(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    seen: dict[str, object] = {}
+
+    class Response:
+        status = 202
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def open_request(request: urllib.request.Request, *, timeout: float) -> Response:
+        del timeout
+        seen["headers"] = dict(request.header_items())
+        return Response()
+
+    monkeypatch.setattr("scripts.demo.urllib.request.urlopen", open_request)
+    return seen
+
+
 def test_post_qa_review_uses_authenticated_dashboard_api(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setenv("OERF_ACCESS_TOKEN", "access-token-secret")
+    monkeypatch.delenv("OERF_ACCESS_TOKEN", raising=False)
+    monkeypatch.setenv("OERF_ID_TOKEN", "id-token")
     cloudformation, formed_stub = _aws("cloudformation")
     formed_stub.add_response(
         "describe_stacks",
@@ -935,14 +991,15 @@ def test_post_qa_review_uses_authenticated_dashboard_api(
     assert seen["url"] == "https://api.example/incidents/INC-000123/actions"
     assert seen["method"] == "POST"
     assert seen["timeout"] == 15
-    assert seen["headers"]["Authorization"] == "Bearer access-token-secret"
+    assert seen["headers"]["Authorization"] == "Bearer id-token"
     assert seen["body"]["action"] == "review_qa"
     assert seen["body"]["approved"] is True
     assert seen["body"]["disposition"] == "release"
     assert "task_token" not in seen["body"]
-    output = capsys.readouterr().out
-    assert "INC-000123" in output
-    assert "access-token-secret" not in output
+    captured = capsys.readouterr()
+    assert "INC-000123" in captured.out
+    assert "id-token" not in captured.out
+    assert "id-token" not in captured.err
     formed_stub.assert_no_pending_responses()
     dynamo_stub.assert_no_pending_responses()
 
@@ -950,7 +1007,8 @@ def test_post_qa_review_uses_authenticated_dashboard_api(
 def test_post_qa_review_stops_when_no_review_is_pending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("OERF_ACCESS_TOKEN", "access-token-secret")
+    monkeypatch.delenv("OERF_ACCESS_TOKEN", raising=False)
+    monkeypatch.setenv("OERF_ID_TOKEN", "id-token")
     cloudformation, formed_stub = _aws("cloudformation")
     formed_stub.add_response(
         "describe_stacks",
@@ -983,8 +1041,10 @@ def test_post_qa_review_stops_when_no_review_is_pending(
 
 def test_post_qa_review_reports_a_refused_verdict(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setenv("OERF_ACCESS_TOKEN", "access-token-secret")
+    monkeypatch.delenv("OERF_ACCESS_TOKEN", raising=False)
+    monkeypatch.setenv("OERF_ID_TOKEN", "id-token")
     cloudformation, formed_stub = _aws("cloudformation")
     formed_stub.add_response(
         "describe_stacks",
@@ -1009,23 +1069,91 @@ def test_post_qa_review_reports_a_refused_verdict(
     session = Session(cloudformation=cloudformation, dynamodb=dynamo)
 
     def forbidden(*_args: object, **_kwargs: object) -> None:
-        raise urllib.error.HTTPError("url", 403, "Forbidden", {}, None)
+        body = io.BytesIO(b'{"detail":"response-body-marker","authorization":"id-token"}')
+        raise urllib.error.HTTPError(
+            "url",
+            403,
+            "response-body-marker id-token",
+            None,
+            body,
+        )
 
     monkeypatch.setattr("scripts.demo.urllib.request.urlopen", forbidden)
 
-    with pytest.raises(DemoError, match="refused the QA review with status 403"):
+    with pytest.raises(DemoError, match="refused the QA review with status 403") as caught:
         post_qa_review(session, "t1", "INC-000123", True, "release")
 
+    message = str(caught.value)
+    assert message == "dashboard refused the QA review with status 403"
+    assert "response-body-marker" not in message
+    assert "id-token" not in message
+    captured = capsys.readouterr()
+    assert "response-body-marker" not in captured.out
+    assert "response-body-marker" not in captured.err
+    assert "id-token" not in captured.out
+    assert "id-token" not in captured.err
     formed_stub.assert_no_pending_responses()
     dynamo_stub.assert_no_pending_responses()
 
 
-def test_post_qa_review_requires_access_token(
+def test_post_qa_review_requires_id_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("OERF_ID_TOKEN", raising=False)
     monkeypatch.delenv("OERF_ACCESS_TOKEN", raising=False)
-    with pytest.raises(DemoError, match="OERF_ACCESS_TOKEN"):
+    monkeypatch.setattr("scripts.demo.sys.stdin", _TokenInput(False))
+    with pytest.raises(DemoError, match="set OERF_ID_TOKEN to the dashboard ID token") as caught:
         post_qa_review(object(), "t1", "INC-000123", True, "release")
+    assert "Bearer" not in str(caught.value)
+
+
+def test_post_qa_review_accepts_the_deprecated_access_token_alias(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("OERF_ID_TOKEN", raising=False)
+    monkeypatch.setenv("OERF_ACCESS_TOKEN", "id-token")
+    session, formed_stub, dynamo_stub = _pending_qa_session()
+    seen = _capture_dashboard(monkeypatch)
+
+    post_qa_review(session, "t1", "INC-000123", True, "release")
+
+    assert seen["headers"]["Authorization"] == "Bearer id-token"
+    captured = capsys.readouterr()
+    assert captured.err.strip() == "OERF_ACCESS_TOKEN is deprecated; set OERF_ID_TOKEN"
+    assert "id-token" not in captured.out
+    assert "id-token" not in captured.err
+    formed_stub.assert_no_pending_responses()
+    dynamo_stub.assert_no_pending_responses()
+
+
+def test_post_qa_review_prompts_with_getpass_when_stdin_is_a_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("OERF_ID_TOKEN", raising=False)
+    monkeypatch.delenv("OERF_ACCESS_TOKEN", raising=False)
+    monkeypatch.setattr("scripts.demo.sys.stdin", _TokenInput(True))
+    prompts: list[str] = []
+
+    def prompt(text: str = "Password: ") -> str:
+        prompts.append(text)
+        return "id-token"
+
+    monkeypatch.setattr("scripts.demo.getpass.getpass", prompt)
+    session, formed_stub, dynamo_stub = _pending_qa_session()
+    seen = _capture_dashboard(monkeypatch)
+
+    post_qa_review(session, "t1", "INC-000123", True, "release")
+
+    assert prompts == ["Dashboard ID token: "]
+    assert seen["headers"]["Authorization"] == "Bearer id-token"
+    captured = capsys.readouterr()
+    assert "id-token" not in captured.out
+    assert "id-token" not in captured.err
+    assert "OERF_ACCESS_TOKEN is deprecated" not in captured.err
+    formed_stub.assert_no_pending_responses()
+    dynamo_stub.assert_no_pending_responses()
 
 
 def test_demo_is_not_a_ci_step() -> None:
@@ -1052,6 +1180,8 @@ def test_demo_is_not_a_ci_step() -> None:
     assert "demo-review-qa" in makefile
     assert "--incident $(INCIDENT)" in makefile
     assert "--decision $(DECISION)" in makefile
+    assert "OERF_ID_TOKEN" in makefile
+    assert "OERF_ACCESS_TOKEN is a deprecated alias" in makefile
 
 
 def _clients(**overrides: object) -> SimpleNamespace:

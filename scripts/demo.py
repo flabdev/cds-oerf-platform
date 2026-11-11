@@ -15,14 +15,17 @@ or writes anything else. Phone numbers, task tokens, ARNs, and raw payloads
 are not printed.
 
 ``review-qa`` posts to the dashboard's authenticated action route with the
-access token in ``OERF_ACCESS_TOKEN``, so the reviewer role and tenant come
-from the token rather than from this tool. The QA callback token stays on the
-incident row and is never read here.
+ID token in ``OERF_ID_TOKEN``. The REST authorizer sets no OAuth scopes, so
+that is the token the desk sends as ``Authorization: Bearer``.
+``OERF_ACCESS_TOKEN`` is a deprecated alias and prints a one-line notice.
+The reviewer role and tenant come from the token rather than from this tool.
+The QA callback token stays on the incident row and is never read here.
 """
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import re
@@ -68,6 +71,9 @@ Clock = Callable[[], datetime]
 Sleeper = Callable[[float], None]
 ReplySender = Callable[[str, str, str, str], None]
 QAReviewSender = Callable[[Any, str, str, bool, str], None]
+_ID_TOKEN_ENV = "OERF_ID_TOKEN"
+_LEGACY_TOKEN_ENV = "OERF_ACCESS_TOKEN"
+_LEGACY_TOKEN_NOTICE = "OERF_ACCESS_TOKEN is deprecated; set OERF_ID_TOKEN"
 
 
 class DemoError(Exception):
@@ -938,6 +944,33 @@ def qa_review_action(*, action_id: str, approved: bool, disposition: str) -> dic
     }
 
 
+def dashboard_id_token() -> str:
+    """The Cognito ID token the desk sends. The value is never printed."""
+
+    chosen = os.environ.get(_ID_TOKEN_ENV, "").strip()
+    if chosen:
+        return chosen
+    legacy = os.environ.get(_LEGACY_TOKEN_ENV, "").strip()
+    if legacy:
+        print(_LEGACY_TOKEN_NOTICE, file=sys.stderr, flush=True)
+        return legacy
+    if _stdin_is_terminal():
+        try:
+            entered = getpass.getpass("Dashboard ID token: ")
+        except (EOFError, KeyboardInterrupt):
+            entered = ""
+        if isinstance(entered, str) and entered.strip():
+            return entered.strip()
+    raise DemoError("set OERF_ID_TOKEN to the dashboard ID token")
+
+
+def _stdin_is_terminal() -> bool:
+    try:
+        return bool(sys.stdin.isatty())
+    except Exception:
+        return False
+
+
 def post_qa_review(
     session: Any,
     tenant_id: str,
@@ -947,9 +980,7 @@ def post_qa_review(
 ) -> None:
     """Post an authenticated dashboard QA verdict; never impersonate a role."""
 
-    token = os.environ.get("OERF_ACCESS_TOKEN", "").strip()
-    if not token:
-        raise DemoError("set OERF_ACCESS_TOKEN to a dashboard access token")
+    token = dashboard_id_token()
     if not pending_qa_review(session, tenant_id, incident_id):
         raise DemoError(f"no QA review is pending for {incident_id}")
     stage = resolve_stage()
@@ -982,7 +1013,9 @@ def post_qa_review(
     except DemoError:
         raise
     except urllib.error.HTTPError as exc:
-        raise DemoError(f"dashboard refused the QA review with status {exc.code}") from None
+        status = exc.code if isinstance(exc.code, int) else 0
+        exc.close()
+        raise DemoError(f"dashboard refused the QA review with status {status}") from None
     except (urllib.error.URLError, TimeoutError, OSError):
         raise DemoError("could not post the QA review to the dashboard") from None
     decision = "qa_pass" if approved else "qa_fail"
@@ -1299,7 +1332,7 @@ def _parser() -> argparse.ArgumentParser:
     review = commands.add_parser(
         "review-qa",
         parents=[common],
-        help="Queue a QA verdict for a named incident.",
+        help="Queue a QA verdict. Reads the dashboard ID token from OERF_ID_TOKEN.",
     )
     review.add_argument("--incident", required=True)
     review.add_argument("--decision", required=True, choices=("qa_pass", "qa_fail"))

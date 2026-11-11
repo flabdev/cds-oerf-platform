@@ -1,6 +1,7 @@
 """Stream broadcaster isolation, envelope, and batch failures. No AWS calls."""
 
 import json
+import logging
 import os
 import subprocess
 from datetime import UTC, datetime
@@ -340,6 +341,48 @@ def test_row_without_scope_receives_nothing(monkeypatch) -> None:
     _result, _table, api = _run(monkeypatch, items, [_record(_meta())])
 
     assert api.sent == []
+
+
+@pytest.mark.security
+def test_qa_review_rows_produce_no_payload_and_no_warning(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(broadcaster.logger, "level", logging.DEBUG)
+    private = {
+        "pk": "TENANT#tenant-a#INC#INC-X",
+        "sk": "QA_REVIEW",
+        "tenant_id": "tenant-a",
+        "incident_id": "INC-X",
+        "task_token": TOKEN,
+        "expires_at": 1,
+    }
+    stated = {**private, "state": "QA_REVIEW", "version": 3}
+    items = [_sub("conn-x", "incident", "INC-X"), _sub("conn-list", "tenant")]
+    result, table, api = _run(
+        monkeypatch,
+        items,
+        [
+            _record(private, event_name="INSERT"),
+            _record(stated, event_name="MODIFY"),
+            _record(private, event_name="REMOVE", image="OldImage"),
+            _record(_meta()),
+        ],
+    )
+
+    assert result == {"batchItemFailures": []}
+    assert table.queried == ["WS_SUB#tenant-a"]
+    assert [payload["data"]["state"] for _connection, payload in api.sent] == [
+        "VERIFYING",
+        "VERIFYING",
+    ]
+    _assert_clean([payload for _connection, payload in api.sent])
+    text = capsys.readouterr().out
+    assert text.count("reason=private_row") == 3
+    assert "stream_record outcome=skipped reason=private_row" in text
+    assert "malformed" not in text
+    assert '"level":"WARNING"' not in text
+    assert "stream_remove_skipped" not in text
+    assert "task_token" not in text
+    assert TOKEN not in text
+    assert "[redacted-token]" not in text
 
 
 def test_remove_is_skipped_because_the_contract_has_no_removed_event(monkeypatch, capsys) -> None:

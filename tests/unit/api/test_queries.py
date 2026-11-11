@@ -62,6 +62,56 @@ def test_list_and_detail_stay_in_one_tenant_and_hide_secrets() -> None:
     assert other == (404, {"error": "not_found"})
 
 
+@pytest.mark.security
+def test_qa_review_row_stays_off_list_detail_and_timeline() -> None:
+    client = FakeDynamoClient()
+    _incident(client, "t1", "INC-1", "PH-2841", "ASSESSING")
+    client.put_item(
+        TableName="incidents",
+        Item={
+            **key(incident_pk("t1", "INC-1"), "QA_REVIEW"),
+            "tenant_id": s("t1"),
+            "incident_id": s("INC-1"),
+            "task_token": s("secret-token"),
+            "expires_at": {"N": "1"},
+        },
+    )
+    client.put_item(
+        TableName="incidents",
+        Item={
+            **key(incident_pk("t1", "INC-1"), "EVT#2026-10-20T09:00:00Z#0001"),
+            "tenant_id": s("t1"),
+            "previous_state": s(""),
+            "state": s("ASSESSING"),
+        },
+    )
+    stored = client.get_item(
+        TableName="incidents",
+        Key=key(incident_pk("t1", "INC-1"), "QA_REVIEW"),
+    )
+    assert stored["Item"]["task_token"]["S"] == "secret-token"
+    queries = DynamoIncidentQuery(client, "incidents")
+    services = DashboardServices(queries=queries, queue=MemoryActionQueue())
+    principal = Principal("t1", "ops_user", "user-1", True)
+
+    listed = dispatch("GET", "/incidents", principal, None, services)
+    detail = dispatch("GET", "/incidents/INC-1", principal, None, services)
+    timeline = detail[1]["timeline"]
+    listed_text = json.dumps(listed[1])
+    detail_text = json.dumps(detail[1])
+    timeline_text = json.dumps(timeline)
+
+    assert listed[0] == 200
+    assert detail[0] == 200
+    assert timeline == [
+        {"at": "2026-10-20T09:00:00Z", "from_state": "", "to_state": "ASSESSING"}
+    ]
+    for text in (listed_text, detail_text, timeline_text):
+        assert "QA_REVIEW" not in text
+        assert "task_token" not in text
+        assert "secret-token" not in text
+
+
 def test_detail_returns_timeline_readings_assessment_and_hides_the_token() -> None:
     client = _PagingClient()
     queries = DynamoIncidentQuery(client, "incidents")
