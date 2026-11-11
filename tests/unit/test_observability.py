@@ -13,7 +13,12 @@ from infra.naming import Stage
 from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
-from infra.stacks.observability import OerfObservabilityStack, error_alarm_id, lambda_functions
+from infra.stacks.observability import (
+    OerfObservabilityStack,
+    error_alarm_id,
+    keeps_transition_export,
+    lambda_functions,
+)
 
 ACCOUNT = "123456789012"
 REGION = "us-east-1"
@@ -24,7 +29,6 @@ _NAMED_FUNCTIONS = {
     "oerf-ws-handler",
     "oerf-ws-authorizer",
     "oerf-stream-broadcaster",
-    "oerf-action-handler",
     "oerf-inbound",
     "oerf-ingest",
     "oerf-pre-token",
@@ -101,7 +105,8 @@ def built():
 def test_alarms_cover_every_dlq_machine_and_lambda(built) -> None:
     template, functions, queues, machines, names = built
     assert _NAMED_FUNCTIONS <= names
-    expected = len(queues) + (2 * len(machines)) + len(functions) + 2
+    monitored = _monitored(functions)
+    expected = len(queues) + (2 * len(machines)) + len(monitored) + 2
     alarms = template.find_resources("AWS::CloudWatch::Alarm")
     assert len(alarms) == expected
     metrics = [
@@ -112,15 +117,15 @@ def test_alarms_cover_every_dlq_machine_and_lambda(built) -> None:
     assert metrics.count("ApproximateNumberOfMessagesVisible") == len(queues)
     assert metrics.count("ExecutionsFailed") == len(machines)
     assert metrics.count("ExecutionsTimedOut") == len(machines)
-    assert metrics.count("Errors") == len(functions)
-    _assert_unique_function_alarms_keep_their_ids(alarms, functions)
+    assert metrics.count("Errors") == len(monitored)
+    _assert_unique_function_alarms_keep_their_ids(alarms, monitored)
+    assert not any("ActionHandler" in logical_id for logical_id in alarms)
     for prefix in (
         "ChannelRouterFunctionErrors",
         "EvidenceAnalyzerFunctionErrors",
         "ReportGeneratorFunctionErrors",
         "InboundFunctionErrors",
         "IngestFunctionErrors",
-        "ActionHandlerFunctionErrors",
         "ColdChainWorkflowStubErrors",
         "ContextFunctionErrors",
         "DiagnoseFunctionErrors",
@@ -198,9 +203,9 @@ def test_waba_providers_each_get_one_errors_alarm() -> None:
     )
     errors = _error_alarms(functions)
     assert "WabaEventDestination" not in json.dumps(template.to_json())
-    assert len(errors) == len(functions)
+    assert len(errors) == len(_monitored(functions))
     assert len({_function_dimension(alarm["Properties"]) for alarm in errors.values()}) == len(
-        functions
+        _monitored(functions)
     )
     framework = [fn for fn in functions if fn.node.id == "framework-onEvent"]
     assert len(framework) == 2
@@ -218,14 +223,14 @@ def test_device_seed_gate_adds_one_provider_alarm() -> None:
     off_errors, off_framework, off_names, off_functions = _framework_alarms()
     assert "oerf-device-seed" not in off_names
     assert len(off_framework) == 1
-    assert len(off_errors) == len(off_functions)
+    assert len(off_errors) == len(_monitored(off_functions))
 
     on_errors, on_framework, on_names, on_functions = _framework_alarms(
         {"demo:seedDevices": "true"}
     )
     assert "oerf-device-seed" in on_names
     assert len(on_framework) == len(off_framework) + 1
-    assert len(on_errors) == len(on_functions)
+    assert len(on_errors) == len(_monitored(on_functions))
     _assert_each_framework_alarm(on_errors, on_framework, on_functions)
 
 
@@ -240,7 +245,7 @@ def test_waba_and_seed_providers_each_get_one_errors_alarm() -> None:
     )
     assert "oerf-device-seed" in names
     assert len(framework) == 3
-    assert len(errors) == len(functions)
+    assert len(errors) == len(_monitored(functions))
     _assert_each_framework_alarm(errors, framework, functions)
 
 
@@ -252,10 +257,16 @@ def test_dashboard_lambdas_get_error_alarms() -> None:
         alarm["Properties"]["MetricName"]
         for alarm in _error_alarms(functions).values()
     ]
-    assert errors.count("Errors") == len(functions)
+    assert errors.count("Errors") == len(_monitored(functions))
     rendered = json.dumps(template.to_json())
     assert "DashboardQueryFunction" not in rendered
     assert "DashboardActionFunction" not in rendered
+
+
+def _monitored(functions: list) -> list:
+    """Functions that still receive an errors alarm."""
+
+    return [fn for fn in functions if not keeps_transition_export(fn)]
 
 
 def _framework_alarms(context: dict | None = None):

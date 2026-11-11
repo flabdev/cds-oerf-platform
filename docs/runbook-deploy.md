@@ -125,7 +125,7 @@ Do not run this workflow from `main`. Main still uses the older GitHub deploy ro
 
 ### Laptop
 
-Use profile `Fission-OERF`, Python 3.11 with `aws_cdk` importable, and the oerfdev bootstrap (`CDKToolkit-dev`, qualifier `oerfdev`). First deploy also needs `web/dist` (`cd web && npm ci && npm run build`) when `desk:publish=true`. Pass `whatsapp:phoneNumberId` (End User Messaging phone-number id, never an E.164) and `whatsapp:sharedInboundTopicArn` (main inbound topic). Seed devices only on the first deploy (`demo:seedDevices=true`); later deploys omit that flag.
+Use profile `Fission-OERF`, Python 3.14 with `aws_cdk` importable, and the oerfdev bootstrap (`CDKToolkit-dev`, qualifier `oerfdev`). First deploy also needs `web/dist` (`cd web && npm ci && npm run build`) when `desk:publish=true`. Pass `whatsapp:phoneNumberId` (End User Messaging phone-number id, never an E.164) and `whatsapp:sharedInboundTopicArn` (main inbound topic). Seed devices only on the first deploy (`demo:seedDevices=true`); later deploys omit that flag.
 
 After deploy, `OerfApiStack-dev` output `DashboardUrl` is the desk. Open `<DashboardUrl>/config.json` and confirm `apiUrl` and `userPoolClientId` are set. Do not paste that file into a ticket. Dev does not use a hand-built `VITE_*` upload.
 

@@ -165,6 +165,13 @@ def test_waba_app_gives_each_lambda_one_errors_alarm(tmp_path):
     assert provider == [
         "CustomAWSCDKOpenIdConnectProviderCustomResourceProviderHandlerF2C543E0"
     ]
+    # F8 removes oerf-action-handler. Until then it stays deployed with no alarm.
+    retained = [
+        logical_id
+        for logical_id in lambdas
+        if logical_id.startswith("ActionHandlerFunction")
+    ]
+    assert retained == ["ActionHandlerFunction5BCE418A"]
     errors = [
         resource["Properties"]
         for template in templates.values()
@@ -172,7 +179,7 @@ def test_waba_app_gives_each_lambda_one_errors_alarm(tmp_path):
         if resource["Type"] == "AWS::CloudWatch::Alarm"
         and resource["Properties"].get("MetricName") == "Errors"
     ]
-    assert len(errors) == len(lambdas) - 1
+    assert len(errors) == len(lambdas) - len(provider) - len(retained)
     dimensions = [_function_name(props) for props in errors]
     assert len(dimensions) == len(set(dimensions))
     framework = [

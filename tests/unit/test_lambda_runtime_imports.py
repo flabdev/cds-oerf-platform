@@ -20,7 +20,7 @@ import aws_cdk as cdk
 import boto3
 
 from infra.naming import Stage
-from infra.runtime_asset import LAMBDA_PLATFORM, VENDORED_REQUIREMENTS, WHEELS
+from infra.runtime_asset import LAMBDA_PLATFORM, LAMBDA_PYTHON, VENDORED_REQUIREMENTS, WHEELS
 from infra.stacks.api_stack import OerfApiStack
 from infra.stacks.compute_stack import OerfComputeStack
 from infra.stacks.data_stack import OerfDataStack
@@ -80,7 +80,7 @@ def test_every_pinned_package_has_a_hash() -> None:
         assert len(digest) == 64
         assert digest == digest.lower()
         if name in {"pydantic-core", "rpds-py"}:
-            assert "cp311" in filename
+            assert f"cp{LAMBDA_PYTHON.replace('.', '')}" in filename
             assert "manylinux2014_x86_64" in filename
         else:
             assert filename.endswith("-py3-none-any.whl")
@@ -170,9 +170,10 @@ def _python_functions(outdir: Path) -> list[tuple[str, Path]]:
             runtime = str(props.get("Runtime", ""))
             if not runtime.startswith("python"):
                 continue
+            handler = str(props["Handler"])
+            assert runtime == f"python{LAMBDA_PYTHON}", handler
             architectures = props.get("Architectures")
             assert architectures in (None, ["x86_64"]), architectures
-            handler = str(props["Handler"])
             key = str(props["Code"]["S3Key"])
             asset = outdir / f"asset.{key.removesuffix('.zip')}"
             assert asset.is_dir(), handler
@@ -186,7 +187,8 @@ def _assert_vendored(asset: Path) -> None:
     assert (asset / "typing_extensions.py").is_file()
     cores = list((asset / "pydantic_core").glob("_pydantic_core*.so"))
     assert cores, "pydantic_core binary is missing from the runtime asset"
-    assert any("cpython-311" in path.name and "x86_64" in path.name for path in cores)
+    tag = "cpython-" + LAMBDA_PYTHON.replace(".", "")
+    assert any(tag in path.name and "x86_64" in path.name for path in cores)
     assert list((asset / "rpds").glob("*.so")), "rpds binary is missing"
     assert not list(asset.rglob("*.dist-info"))
     assert not (asset / "bin").exists()
