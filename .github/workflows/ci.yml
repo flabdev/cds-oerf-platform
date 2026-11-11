@@ -45,6 +45,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # test_removed_exports_are_not_imported_by_a_deployed_stack synths
+      # origin/develop via git archive. The default PR checkout is shallow.
+      - name: Fetch develop for export baseline
+        run: git fetch --no-tags origin develop:refs/remotes/origin/develop --depth=1
+
       # Scan the checkout before pytest/synth write .jsii-cache (generic-api-key noise).
       - name: Gitleaks
         run: |

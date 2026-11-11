@@ -145,20 +145,76 @@ def test_imported_exports_do_not_depend_on_optional_flags(tmp_path: Path) -> Non
                 assert "BucketDeployment" not in name
 
 
+def _verify_ref(ref: str) -> bool:
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", ref],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _github_pr_base_sha() -> str | None:
+    path = os.environ.get("GITHUB_EVENT_PATH")
+    if not path:
+        return None
+    try:
+        event = json.loads(Path(path).read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    sha = event.get("pull_request", {}).get("base", {}).get("sha")
+    return sha if isinstance(sha, str) and sha else None
+
+
+def _fetch_develop() -> None:
+    subprocess.run(
+        [
+            "git",
+            "fetch",
+            "--no-tags",
+            "origin",
+            "develop:refs/remotes/origin/develop",
+            "--depth=1",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+    )
+
+
 def _develop_ref() -> str:
     """The deployed tree. ``origin/develop`` is the comparison the guard uses."""
 
+    override = os.environ.get("OERF_EXPORT_BASE_REF", "").strip()
+    if override and _verify_ref(override):
+        return override
+
     for ref in ("origin/develop", "develop"):
-        result = subprocess.run(
-            ["git", "rev-parse", "--verify", "--quiet", ref],
+        if _verify_ref(ref):
+            return ref
+
+    _fetch_develop()
+    for ref in ("origin/develop", "develop"):
+        if _verify_ref(ref):
+            return ref
+
+    base_sha = _github_pr_base_sha()
+    if base_sha:
+        subprocess.run(
+            ["git", "fetch", "--no-tags", "origin", base_sha, "--depth=1"],
             cwd=REPO_ROOT,
             capture_output=True,
-            text=True,
             check=False,
         )
-        if result.returncode == 0:
-            return ref
-    raise AssertionError("origin/develop is not available for the export comparison")
+        if _verify_ref(base_sha):
+            return base_sha
+
+    raise AssertionError(
+        "origin/develop is not available for the export comparison "
+        "(fetch develop or set OERF_EXPORT_BASE_REF)"
+    )
 
 
 def _synth_ref(outdir: Path, context: dict[str, str], ref: str) -> dict[str, dict]:
