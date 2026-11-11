@@ -692,17 +692,19 @@ def test_send_task_success_is_only_on_the_inbound_role(template: Template) -> No
     assert "states:SendTaskSuccess" not in action
     assert "states:SendTaskFailure" not in action
     assert "states:StartExecution" not in action
+    assert "sqs:SendMessage" not in action
     assert "states:StartExecution" in role_actions(template, "oerf-ingest")
     assert "states:SendTaskSuccess" not in role_actions(template, "oerf-ingest")
-    assert "sqs:SendMessage" not in action
     routes = [
         resource["Properties"]["RouteKey"]
         for resource in template.find_resources("AWS::ApiGatewayV2::Route").values()
     ]
-    assert "GET /incidents" in routes
-    assert "GET /incidents/{id}" in routes
+    assert "GET /incidents" not in routes
+    assert "GET /incidents/{id}" not in routes
     assert "POST /incidents/{id}/actions" not in routes
     assert all(not key.endswith("trigger") for key in routes)
+    http_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
+    assert not any(key.split(" ", 1)[0] in http_methods for key in routes)
 
 
 @pytest.mark.security

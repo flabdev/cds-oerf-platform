@@ -143,3 +143,94 @@ def test_imported_exports_do_not_depend_on_optional_flags(tmp_path: Path) -> Non
                 assert "DashboardQueryFunction" not in name
                 assert "DashboardActionFunction" not in name
                 assert "BucketDeployment" not in name
+
+
+def _develop_ref() -> str:
+    """The deployed tree. ``origin/develop`` is the comparison the guard uses."""
+
+    for ref in ("origin/develop", "develop"):
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", ref],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return ref
+    raise AssertionError("origin/develop is not available for the export comparison")
+
+
+def _synth_ref(outdir: Path, context: dict[str, str], ref: str) -> dict[str, dict]:
+    """Synthesize ``ref`` into ``outdir`` without checking out the working tree."""
+
+    source = outdir / "source"
+    source.mkdir(parents=True)
+    archive = subprocess.run(
+        ["git", "archive", ref],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+    )
+    assert archive.returncode == 0, archive.stderr.decode()
+    extracted = subprocess.run(
+        ["tar", "-x", "-C", str(source)],
+        input=archive.stdout,
+        capture_output=True,
+        check=False,
+    )
+    assert extracted.returncode == 0, extracted.stderr.decode()
+    assembly = outdir / "assembly"
+    assembly.mkdir()
+    env = {key: value for key, value in os.environ.items() if key != "CDK_DEFAULT_ACCOUNT"}
+    env.update(
+        {
+            "CDK_OUTDIR": str(assembly),
+            "CDK_DEFAULT_REGION": REGION,
+            "CDK_DEFAULT_ACCOUNT": ACCOUNT,
+            "CDK_CONTEXT_JSON": json.dumps(context),
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "infra.app"],
+        cwd=source,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return _templates(assembly)
+
+
+def test_removed_exports_are_not_imported_by_a_deployed_stack(tmp_path: Path) -> None:
+    """An export dropped in this change must not still be imported.
+
+    Compare the default main and dev synths with ``origin/develop``. Compute
+    deploys before observability, so deleting an export that a deployed stack
+    still imports fails the update (A0). The action-handler name export is
+    the case this guards: it stays until F8.
+    """
+
+    ref = _develop_ref()
+    for stage in ("main", "dev"):
+        context = {"stage": stage, "account": ACCOUNT}
+        current_dir = tmp_path / "current" / stage
+        current_dir.mkdir(parents=True)
+        current_run = _run(current_dir, context)
+        assert current_run.returncode == 0, current_run.stderr
+        current = _templates(current_dir)
+        deployed = _synth_ref(tmp_path / "develop" / stage, context, ref)
+        removed = _export_names(deployed) - _export_names(current)
+        deployed_imports = _imports(deployed)
+        current_imports = _imports(current)
+        still_deployed = sorted(removed & deployed_imports)
+        still_here = sorted(removed & current_imports)
+        assert still_deployed == [], (
+            "export removed while a deployed stack still imports it: "
+            + ", ".join(still_deployed)
+        )
+        assert still_here == [], (
+            "export removed while another stack in this change imports it: "
+            + ", ".join(still_here)
+        )

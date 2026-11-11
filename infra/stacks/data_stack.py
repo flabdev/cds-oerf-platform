@@ -21,6 +21,7 @@ from aws_cdk import (
 from constructs import Construct
 
 from infra.naming import Stage, qualify_dev_names
+from infra.runtime_asset import LAMBDA_RUNTIME
 from infra.step_functions import (
     ASL_ENGAGE_PLACEHOLDERS,
     ASL_STEP_PLACEHOLDERS,
@@ -152,7 +153,7 @@ def _auth_lambda(
         stack,
         construct_id,
         function_name=function_name,
-        runtime=lambda_.Runtime.PYTHON_3_11,
+        runtime=LAMBDA_RUNTIME,
         handler=handler,
         code=lambda_.Code.from_asset(
             str(_AUTH_ASSET),
@@ -374,7 +375,7 @@ class OerfDataStack(Stack):
         workflow_stub = lambda_.Function(
             self,
             "ColdChainWorkflowStub",
-            runtime=lambda_.Runtime.PYTHON_3_11,
+            runtime=LAMBDA_RUNTIME,
             handler="workflow_stub.handler",
             code=lambda_.Code.from_asset(
                 str(

@@ -46,7 +46,7 @@ The script synthesizes the dev application stacks (same context flags as the uni
 **Live check (execution role):** after the managed policies exist in the account, simulate the same probes with no tag context against `cdk-oerfdev-cfn-exec-role-<account>-<region>`:
 
 ```bash
-.venv311/bin/python -m scripts.check_dev_boundary \
+.venv/bin/python -m scripts.check_dev_boundary \
   --profile Fission-OERF \
   --region us-east-1 \
   --account 906048429638 \
@@ -64,12 +64,12 @@ To include Bedrock guardrail customer-KMS handler simulations (only if you deplo
 
 This is the deploy configuration for the laptop and the dev CI role. The desk-facing dev procedure is [docs/runbook-deploy.md](../../docs/runbook-deploy.md) (Dev stage).
 
-Run these from the repo root. Use the project Python 3.11 venv so `cdk` can import `aws_cdk`:
+Run these from the repo root. Use the project Python 3.14 venv so `cdk` can import `aws_cdk`:
 
 ```bash
 export AWS_PROFILE=Fission-OERF
 export AWS_DEFAULT_REGION=us-east-1
-source .venv311/bin/activate
+source .venv/bin/activate
 python3 -c "import aws_cdk; print('ok')"
 ```
 
@@ -340,7 +340,7 @@ aws cloudformation list-stack-resources \
   --query "StackResourceSummaries[?ResourceType=='AWS::ApiGatewayV2::Api'].[LogicalResourceId,PhysicalResourceId]" \
   --output text
 
-.venv311/bin/python -m scripts.check_dev_boundary \
+.venv/bin/python -m scripts.check_dev_boundary \
   --profile Fission-OERF \
   --region us-east-1 \
   --account 906048429638 \
@@ -504,6 +504,6 @@ First full dev deploy (section 3) also passes `-c auth:managedLogin=true`, `-c a
 | Symptom | Fix |
 | --- | --- |
 | `stage' is required ... (got None)` | Add `-c stage=dev` or `-c stage=main` on every `cdk` command. |
-| `No module named 'aws_cdk'` | Activate `.venv311` before `cdk` (see top of this section). |
+| `No module named 'aws_cdk'` | Activate `.venv` before `cdk` (see top of this section). |
 | `InvalidClientTokenId` on `aws sts` | Use `Fission-OERF`, not the default profile; clear stale `AWS_*` session env vars. |
 | Explicit deny on `OerfCiStack-dev` during `cdk deploy` | Deploy that stack with `aws cloudformation deploy` as laptop admin (section 2). |

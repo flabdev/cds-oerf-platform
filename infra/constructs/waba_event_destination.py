@@ -31,6 +31,7 @@ from constructs import Construct
 
 from infra.constructs.social_messaging_arns import waba_arn
 from infra.naming import Stage
+from infra.runtime_asset import LAMBDA_RUNTIME
 
 _ASSET = Path(__file__).resolve().parents[1] / "custom_resources"
 _HANDLER = _ASSET / "waba_destination.py"
@@ -169,13 +170,13 @@ def _handler(scope: Construct, waba_arn: str, stage: Stage) -> lambda_.Function:
         scope,
         "Function",
         function_name=stage.res("waba-event-destination"),
-        runtime=lambda_.Runtime.PYTHON_3_11,
+        runtime=LAMBDA_RUNTIME,
         handler="waba_destination.on_event",
         code=lambda_.Code.from_asset(
             str(_ASSET),
             exclude=["__pycache__", "*.pyc"],
             bundling=BundlingOptions(
-                image=lambda_.Runtime.PYTHON_3_11.bundling_image,
+                image=LAMBDA_RUNTIME.bundling_image,
                 local=_BundleBoto3(),
                 command=[
                     "bash",

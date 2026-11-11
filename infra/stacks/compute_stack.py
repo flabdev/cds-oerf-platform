@@ -1,7 +1,7 @@
 """Compute, API Gateway, and Lambda stack for the OERF platform.
 
 Provisions the channel router, evidence analyzer, report generator, WebSocket
-API, stream broadcaster, action handler, inbound queue, and ingest rule.
+API, stream broadcaster, inbound queue, and ingest rule.
 One role, one 30-day log group, and active tracing per function.
 """
 
@@ -38,7 +38,7 @@ from infra.constructs.social_messaging_arns import phone_number_arn
 from infra.constructs.waba_event_destination import WabaEventDestination
 from infra.iam_conditions import pin_source_account
 from infra.naming import Stage, qualify_dev_names
-from infra.runtime_asset import runtime_code_args
+from infra.runtime_asset import LAMBDA_RUNTIME, runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
 from infra.step_functions import STEP_HANDLERS, step_function_names_for
 
@@ -189,7 +189,7 @@ class OerfComputeStack(Stack):
         # and do not shadow the stdlib ``platform`` module. The allow-list is
         # ``oerf``, ``domains``, and ``sim``, which keeps the demo shipment
         # seed data available to ``seed_demo_devices``. The same zip vendors
-        # pydantic and jsonschema for manylinux2014 / Python 3.11.
+        # pydantic and jsonschema for manylinux2014 and ``LAMBDA_RUNTIME``.
         lambda_code = lambda_.Code.from_asset(".", **runtime_code_args())
 
         # Demo rows for t1, t2, and sbx. A normal deploy leaves the registry
@@ -416,8 +416,8 @@ class OerfComputeStack(Stack):
         data_stack.report_bucket.grant_read_write(self.report_generator_fn)
         data_stack.incident_table.grant_read_data(self.report_generator_fn)
 
-        # Cognito app client shared by the HTTP API authorizer and by the
-        # WebSocket $connect authorizer.
+        # Cognito app client for the WebSocket $connect authorizer. The
+        # construct id stays OerfHttpApiClient so the deployed client is kept.
         user_pool_client = data_stack.user_pool.add_client(
             "OerfHttpApiClient",
             user_pool_client_name=stage.res("http-api-client"),
@@ -706,8 +706,12 @@ class OerfComputeStack(Stack):
         )
 
         # ---------------------------------------------------------
-        # 7. REST / HTTP Action & Ingestion API (ADR-004, ADR-009)
+        # 7. HTTP API. No routes.
         # ---------------------------------------------------------
+        # The function stays so its name export survives this deploy.
+        # Observability used to import it. F8 removes the function and the
+        # export after main and dev have both deployed this release.
+        # Desk reads and dashboard actions use the REST API.
         self.action_handler_fn = self._function(
             "ActionHandlerFunction",
             function_name=stage.res("action-handler"),
@@ -722,41 +726,12 @@ class OerfComputeStack(Stack):
         data_stack.incident_table.grant_read_write_data(self.action_handler_fn)
         data_stack.routing_table.grant_read_write_data(self.action_handler_fn)
 
+        # The API stays so the stage still has an HTTP API id for the dev
+        # boundary check. It has no routes, integration, or authorizer.
         self.http_api = apigwv2.HttpApi(
             self,
             "OerfHttpApi",
             api_name=stage.res("http-api"),
-            cors_preflight=apigwv2.CorsPreflightOptions(
-                allow_headers=["Content-Type", "Authorization"],
-                allow_methods=[
-                    apigwv2.CorsHttpMethod.GET,
-                    apigwv2.CorsHttpMethod.OPTIONS,
-                ],
-                allow_origins=["*"],
-            ),
-        )
-
-        http_authorizer = authorizers.HttpUserPoolAuthorizer(
-            "OerfHttpAuthorizer",
-            pool=data_stack.user_pool,
-            user_pool_clients=[user_pool_client],
-            identity_source=["$request.header.Authorization"],
-        )
-
-        action_integration = integrations.HttpLambdaIntegration(
-            "ActionIntegration", self.action_handler_fn
-        )
-        self.http_api.add_routes(
-            path="/incidents",
-            methods=[apigwv2.HttpMethod.GET],
-            integration=action_integration,
-            authorizer=http_authorizer,
-        )
-        self.http_api.add_routes(
-            path="/incidents/{id}",
-            methods=[apigwv2.HttpMethod.GET],
-            integration=action_integration,
-            authorizer=http_authorizer,
         )
 
         # ---------------------------------------------------------
@@ -1104,7 +1079,7 @@ class OerfComputeStack(Stack):
             self,
             construct_id,
             function_name=function_name,
-            runtime=lambda_.Runtime.PYTHON_3_11,
+            runtime=LAMBDA_RUNTIME,
             handler=handler,
             code=code,
             role=role,

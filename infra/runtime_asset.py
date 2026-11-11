@@ -11,13 +11,13 @@ packages, a basename that starts with ``.`` is dropped, as are ``*.env``,
 ``.demo-numbers*``, ``__pycache__``, and ``*.pyc``.
 
 Synth then installs the third-party closure into that same directory. The
-Lambda Python 3.11 runtime supplies the standard library and boto3, and does
-not supply pydantic or jsonschema. Wheels are downloaded for
-``manylinux2014_x86_64`` and CPython 3.11, which is the default Lambda
-architecture: no function in the compute, data, or API stacks sets
+Lambda runtime (``LAMBDA_RUNTIME``) supplies the standard library and boto3,
+and does not supply pydantic or jsonschema. Wheels are downloaded for
+``manylinux2014_x86_64`` and that same CPython version, which is the default
+Lambda architecture: no function in the compute, data, or API stacks sets
 ``Architecture``. One shared zip cannot carry a second architecture. Each
-wheel is pinned by the sha256 of the exact file: ``cp311`` /
-``manylinux2014_x86_64`` where the project publishes one, and the
+wheel is pinned by the sha256 of the exact file: the matching ``cp`` /
+``manylinux2014_x86_64`` wheel where the project publishes one, and the
 ``py3-none-any`` wheel otherwise. ``pip install --require-hashes`` checks
 that file. Docker is not used.
 """
@@ -39,13 +39,16 @@ _PACKAGES = ("oerf", "domains", "sim")
 
 #: Default Lambda architecture. ``Architecture`` is unset on every function.
 LAMBDA_PLATFORM = "manylinux2014_x86_64"
-#: Matches ``lambda_.Runtime.PYTHON_3_11`` on every function.
-LAMBDA_PYTHON = "3.11"
+#: Every Python function uses this runtime. Do not set ``runtime=`` anywhere else.
+LAMBDA_RUNTIME = lambda_.Runtime.PYTHON_3_14
+#: ``pip --python-version``. The ``python`` prefix of ``LAMBDA_RUNTIME.name`` is removed.
+LAMBDA_PYTHON = LAMBDA_RUNTIME.name.removeprefix("python")
 
 #: Name, version, wheel filename, and sha256 from the PyPI JSON API.
-#: ``pydantic-core`` and ``rpds-py`` are the cp311 manylinux2014_x86_64 wheels.
-#: The other projects publish a py3-none-any wheel, which is the file pip
-#: selects for this platform. ``attr`` is shipped by the ``attrs`` distribution.
+#: ``pydantic-core`` and ``rpds-py`` are the manylinux2014_x86_64 wheels for
+#: ``LAMBDA_PYTHON``. The other projects publish a py3-none-any wheel, which
+#: is the file pip selects for this platform. ``attr`` is shipped by the
+#: ``attrs`` distribution.
 WHEELS: tuple[tuple[str, str, str, str], ...] = (
     (
         "pydantic",
@@ -56,8 +59,8 @@ WHEELS: tuple[tuple[str, str, str, str], ...] = (
     (
         "pydantic-core",
         "2.50.1",
-        "pydantic_core-2.50.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-        "8812592c85d0edf423f10eadcef42716d71e8219085ad9e85b775057b7306133",
+        "pydantic_core-2.50.1-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "42b54c2c90ad348b5e3a85e03e715d572c1fde357ef104cdfe3b03b697a404ea",
     ),
     (
         "annotated-types",
@@ -104,8 +107,8 @@ WHEELS: tuple[tuple[str, str, str, str], ...] = (
     (
         "rpds-py",
         "2026.9.1",
-        "rpds_py-2026.9.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-        "136a1c3fe4402b7008bc81cb62ee538481795b61a7e83df88dff3b3f02b726ff",
+        "rpds_py-2026.9.1-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "eac2f5dbafd585dfe31f86a23ebf0d3ba480a9d49ebc87947267b5608d4ea0cd",
     ),
 )
 
@@ -134,7 +137,7 @@ def runtime_code_args() -> dict[str, object]:
         "exclude": RUNTIME_ASSET_EXCLUDE,
         "ignore_mode": IgnoreMode.GIT,
         "bundling": BundlingOptions(
-            image=lambda_.Runtime.PYTHON_3_11.bundling_image,
+            image=LAMBDA_RUNTIME.bundling_image,
             command=[
                 "python",
                 "-c",

@@ -490,7 +490,7 @@ class _ReportTable:
         self._incident = incident
         self._readings = readings
 
-    def Table(self, _name: str) -> "_ReportTable":
+    def Table(self, _name: str) -> _ReportTable:
         return self
 
     def get_item(self, Key: dict[str, str]) -> dict[str, Any]:

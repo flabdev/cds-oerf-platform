@@ -242,7 +242,7 @@ The incident logic does not call these AWS resources yet. The DynamoDB adapters 
 
 | File | Role |
 | --- | --- |
-| `pyproject.toml` | Package metadata, Python 3.11+, pytest, and ruff. Runtime dependencies are pydantic, jsonschema, and the CDK libraries. |
+| `pyproject.toml` | Package metadata, Python 3.14+, pytest, and ruff. Runtime dependencies are pydantic, jsonschema, and the CDK libraries. |
 
 ## Run the tests
 

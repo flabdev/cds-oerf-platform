@@ -47,6 +47,17 @@ def lambda_functions(*scopes: Construct) -> list[lambda_.Function]:
     return found
 
 
+def keeps_transition_export(fn: lambda_.IFunction) -> bool:
+    """True when the function stays only to keep an export for one release.
+
+    ``oerf-action-handler`` has no routes. Observability no longer alarms it.
+    The export remains because the deployed observability stack still imports
+    it, and the compute stack updates first.
+    """
+
+    return fn.node.id == "ActionHandlerFunction"
+
+
 def is_flag_gated(fn: lambda_.IFunction) -> bool:
     """True when a context flag is the only reason this function exists.
 
@@ -111,11 +122,11 @@ def _alarm_beside_function(
 def _retain_function_export(fn: lambda_.IFunction) -> None:
     """Keep the function-name export observability used to import.
 
-    TODO(export-removal): Delete this call after main and dev have each
-    deployed the release that stops importing the export. The producer
-    stacks update before observability, so the export has to survive that
-    first deploy or CloudFormation cancels the delete. Remove it in the
-    following release, not in the same one that drops the import.
+    TODO(F8): Delete this call after main and dev have each deployed the
+    release that stops importing the export. The producer stacks update
+    before observability, so the export has to survive that first deploy
+    or CloudFormation cancels the delete. Remove it in the following
+    release, not in the same one that drops the import.
     """
 
     Stack.of(fn).export_value(fn.function_name)
@@ -167,7 +178,11 @@ class OerfObservabilityStack(Stack):
                 machine.metric_timed_out(period=_PERIOD, statistic="Sum"),
             )
         ]
-        stable = [fn for fn in functions if not is_flag_gated(fn)]
+        stable = [
+            fn
+            for fn in functions
+            if not is_flag_gated(fn) and not keeps_transition_export(fn)
+        ]
         if not stable:
             raise ValueError("observability stack needs functions that exist for every flag")
         error_metrics = [
@@ -239,6 +254,10 @@ class OerfObservabilityStack(Stack):
         for fn in functions:
             if is_flag_gated(fn):
                 _alarm_beside_function(fn, functions, stage)
+            elif keeps_transition_export(fn):
+                # F8: delete oerf-action-handler and this export after main
+                # and dev have both deployed the release that stops importing it.
+                _retain_function_export(fn)
 
     def _delivery_failures(
         self, log_group: logs.ILogGroup, namespace: str

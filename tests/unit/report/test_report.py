@@ -355,7 +355,7 @@ class _Table:
         self.item = item
         self.keys: list[dict] = []
 
-    def Table(self, _name: str) -> "_Table":
+    def Table(self, _name: str) -> _Table:
         return self
 
     def get_item(self, Key: dict) -> dict:

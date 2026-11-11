@@ -30,7 +30,7 @@ from constructs import Construct
 
 from infra.iam_conditions import pin_source_account
 from infra.naming import Stage, qualify_dev_names
-from infra.runtime_asset import runtime_code_args
+from infra.runtime_asset import LAMBDA_RUNTIME, runtime_code_args
 from infra.stacks.data_stack import OerfDataStack
 
 _DEFAULT_THROTTLE_RATE = 20
@@ -91,6 +91,7 @@ def _dashboard_function(stack: Stack, construct_id: str, **kwargs: object) -> la
         # tracing ACTIVE adds xray:PutTraceSegments and xray:PutTelemetryRecords
         # on Resource *. X-Ray rejects a resource ARN. See iam-exceptions.md.
         tracing=lambda_.Tracing.ACTIVE,
+        runtime=LAMBDA_RUNTIME,
         **kwargs,
     )
 
@@ -113,7 +114,6 @@ class OerfApiStack(Stack):
         self.query_fn = _dashboard_function(
             self,
             "DashboardQueryFunction",
-            runtime=lambda_.Runtime.PYTHON_3_11,
             handler="oerf.platform.api.dashboard.handler",
             code=code,
             timeout=Duration.seconds(15),
@@ -127,7 +127,6 @@ class OerfApiStack(Stack):
         self.action_fn = _dashboard_function(
             self,
             "DashboardActionFunction",
-            runtime=lambda_.Runtime.PYTHON_3_11,
             handler="oerf.platform.api.dashboard.handler",
             code=code,
             timeout=Duration.seconds(10),

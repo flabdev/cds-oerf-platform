@@ -1,6 +1,6 @@
 # Validate the dev scenarios
 
-Operator sheet for the three cold-chain walks on the **dev** stage (`us-east-1`). Commands run on a laptop. They do not print phone numbers, task tokens, or payloads. `PROFILE` is the AWS profile. `ACCOUNT` is that profile's 12-digit account id. Use Python 3.11 (`.venv311/bin/python`).
+Operator sheet for the three cold-chain walks on the **dev** stage (`us-east-1`). Commands run on a laptop. They do not print phone numbers, task tokens, or payloads. `PROFILE` is the AWS profile. `ACCOUNT` is that profile's 12-digit account id. Use Python 3.14 (`.venv/bin/python`).
 
 The rehearsal commands are in [run-the-demo.md](run-the-demo.md). This page is the pass criteria for the three stories.
 
@@ -60,7 +60,7 @@ aws ssm get-parameter --profile <aws-profile> --region us-east-1 \
 Then write the routing-table `PHONE#` ownership row inbound checks against (reads SSM; does not print numbers):
 
 ```text
-STAGE=dev .venv311/bin/python -m scripts.seed_runtime --stage dev \
+STAGE=dev .venv/bin/python -m scripts.seed_runtime --stage dev \
   --profile <aws-profile> --tenant t1 --yes --live-contacts --roles driver
 ```
 
@@ -75,7 +75,7 @@ Only **drivers** are contact-scoped. Ops, QA, and facility sends on live channel
 Two readings above 8 °C open the incident. One reading opens nothing. `SCENARIO=excursion` ends on a single reading above 8 °C, so it does not open `PH-2841`. Publish temperatures instead. Event times are 30 seconds apart and end when the command starts. Twelve readings at 5.2 °C cover the 5-minute in-range window Verify uses (`stable_in_range` is 5 minutes, range 2–8 °C).
 
 ```text
-STAGE=dev .venv311/bin/python -m scripts.demo sensor \
+STAGE=dev .venv/bin/python -m scripts.demo sensor \
   --stage dev --profile <aws-profile> --account <account-id> \
   --tenant t1 --shipment PH-2841 --device RF-7781 \
   --temps 8.1,8.6,5.2,5.2,5.2,5.2,5.2,5.2,5.2,5.2,5.2,5.2,5.2,5.2

@@ -1,6 +1,8 @@
 # OERF interface contract
 
-**FROZEN v1.45** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.46** — authored 2026-10-18 by OERF-304 (Ananda).
+
+- v1.46 (2026-11-11) `oerf-http-api` no longer serves `GET /incidents` or `GET /incidents/{id}`, and it has no other routes. Those reads are on the OerfApiStack REST API (`RestApiUrl`, `oerf.platform.api.dashboard.handler`). `oerf-action-handler` stays deployed with no routes so its name export survives until F8. Observability no longer alarms it. The desk `config.json` `apiUrl` and `scripts.demo` already use `RestApiUrl`.
 
 - v1.45 (2026-11-10) Human QA review window is seven days. `QAReviewWait` in `domains/cold_chain_excursion/statemachine.asl.json` waits `604800` seconds for the reviewer's verdict and the cold-chain execution cap rises to `691200` seconds so the task can time out into `RecordFailure`. The pending callback token is stored as incident `SK=QA_REVIEW` with `expires_at` seven days out (§6.1). The token still never reaches the wire or a caller-supplied field.
 
@@ -101,9 +103,9 @@ The user pool `oerf-users` has three groups: `platform_admin`, `tenant_admin`, `
 
 `platform_admin` may pass an explicit tenant only where an admin route says so (`/admin/tenants/...`). `tenant_admin` and `ops_user` operate inside the tenant on their token. Party roles (driver, facility, QA, and the escalation roles) do not log in.
 
-The pool schema is create-only, so CDK does not set `custom_attributes` on `OerfUserPool`. A custom resource calls `AddCustomAttributes` for string `tenant_id` (stored as `custom:tenant_id`), mutable, not required. `oerf-pre-token` is a V2 pre-token-generation trigger: it copies that attribute onto the ID token and the access token ([ADR-034](adr/ADR-034-cognito-tenant-claim.md)). [oerf/platform/api/ws_authorizer.py](../oerf/platform/api/ws_authorizer.py) denies `$connect` when the attribute is missing. Dashboard and action handlers read the same claim. Demo seeding sets the attribute on users it creates. Existing users that were never seeded still have no tenant until that attribute is set.
+The pool schema is create-only, so CDK does not set `custom_attributes` on `OerfUserPool`. A custom resource calls `AddCustomAttributes` for string `tenant_id` (stored as `custom:tenant_id`), mutable, not required. `oerf-pre-token` is a V2 pre-token-generation trigger: it copies that attribute onto the ID token and the access token ([ADR-034](adr/ADR-034-cognito-tenant-claim.md)). [oerf/platform/api/ws_authorizer.py](../oerf/platform/api/ws_authorizer.py) denies `$connect` when the attribute is missing. The dashboard handler reads the same claim. Demo seeding sets the attribute on users it creates. Existing users that were never seeded still have no tenant until that attribute is set.
 
-The HTTP API authorizer reads JWT claims. The WebSocket authorizer calls `GetUser`, which returns user attributes. Both paths need the attribute on the user. The HTTP path also needs the claim on the access token; the pre-token trigger is that copy.
+The REST API authorizer checks the Cognito JWT. The WebSocket authorizer calls `GetUser`, which returns user attributes. Both paths need the attribute on the user. The pre-token trigger copies the claim onto the tokens.
 
 Example access-token claims this contract expects:
 
@@ -143,7 +145,7 @@ ADR-013: incident open stores `config_version` and `config_snapshot` on the inci
 
 Owner: Mudita (OERF-208 implements the handler, OERF-302 owns the route).
 
-Frozen route: `POST /incidents/{id}/actions` on the OerfApiStack REST API (`RestApiUrl`, `oerf.platform.api.dashboard.handler`). Cognito JWT. The body schema rejects unknown fields, so `tenant_id` is not a client field. `oerf-http-api` does not serve this route.
+Frozen route: `POST /incidents/{id}/actions` on the OerfApiStack REST API (`RestApiUrl`, `oerf.platform.api.dashboard.handler`). Cognito JWT. The body schema rejects unknown fields, so `tenant_id` is not a client field. `oerf-http-api` has no routes.
 
 ```json
 {
@@ -198,7 +200,7 @@ Queued message (tenant and user come from the token):
 
 Dedupe key: `INMSG#{action_id}` (section 5). An action whose engagement is no longer waiting is ignored and logged, without a task-token call.
 
-The frozen route is `POST /incidents/{id}/actions` with `confirm_transfer`, `pick_option`, or `cancel`. The REST dashboard handler queues those verbs. `oerf-action-handler` is GET-only and does not call `SendTaskSuccess`.
+The frozen route is `POST /incidents/{id}/actions` with `confirm_transfer`, `pick_option`, or `cancel`. The REST dashboard handler queues those verbs and serves the incident reads. `oerf-action-handler` has no routes and does not call `SendTaskSuccess`. F8 removes the function after main and dev have deployed this release.
 
 `cancel` enters through this queue. The inbound handler stops the execution ingest started (`states:StopExecution` on that machine's executions only). The execution name is `{tenant}-{incident}` after characters outside `A-Za-z0-9_-` are replaced with `-`, the same value ingest passes to `StartExecution`. A pair longer than 80 characters keeps a 20-character tenant prefix, an 8-character SHA-256 of the pair, and the start of the incident id. Inbound rebuilds that name from the stored tenant and incident id under `STATE_MACHINE_ARN`. The handler then sets the incident to `CANCELLED` through the repository, which writes the timeline event and releases the shipment lock (ADR-019). It does not call `states:SendTaskSuccess`. A duplicate `action_id`, or an incident already `CLOSED` or `CANCELLED`, does not call `StopExecution` again. `ExecutionDoesNotExist` means the execution is already finished and is not an error. Authorised roles are `platform_admin`, `tenant_admin`, and `ops_user`. Any other role is ignored. The queued `role` is the token role, not a client field. When `engagement_id` is present, the tenant cancelled is that stored engagement's tenant. Otherwise it is the stored incident's tenant. A message `tenant_id` that does not match the stored engagement is ignored.
 
@@ -407,16 +409,16 @@ Evidence objects expire 90 days after they are written. A noncurrent evidence ve
 
 Owner: Mudita (OERF-302) for routes and the subscribe message. Ananda (OERF-308) for the broadcast payload. Both sign this section.
 
-### 7.1 HTTP API
+### 7.1 Incident reads
 
-API `oerf-http-api`. Cognito JWT authorizer, identity source `Authorization`. CORS allows `Content-Type` and `Authorization`.
+`oerf-http-api` has no routes. `GET /incidents` and `GET /incidents/{id}` are on the OerfApiStack REST API (`RestApiUrl`, `oerf.platform.api.dashboard.handler`). Cognito JWT. The desk `config.json` `apiUrl` is that URL.
 
 | Route | Contract |
 | --- | --- |
 | `GET /incidents/{id}` | Incident for the token tenant and path id. META fields: `incident_id`, `tenant_id`, `shipment_id`, `state`, `stage`, `version`, `reason`, `opened_at`, `config_version`, `config_snapshot`, `product_profile_id`. `version` is `event_seq` when `version` is absent. `range_c` and `allowance_remaining` use the profile named by `product_profile_id` in the pinned snapshot. A META row without that id uses the shipment row (`PK=TENANT#{tid}`, `SK=SHIPMENT#{sid}`, `product_profile` or `product_profile_id`). Both are null when that profile is unknown. `allowance_remaining` is also null when the readings cannot compute it. The first snapshot profile is not used. Also `evidence` (`fault_codes` only), `recommendation`, `options`, `engagement_id`, `engagement_status`, `timeline`, and `readings`. Timeline and readings are the tenant's incident partition, `EVT#` and `READ#`, paged, oldest first. `pk`, `sk`, task tokens, and raw step output stay off the wire. |
 | `GET /incidents` | List for the token tenant. Blocked on GSI1 (pattern 12). Each row is the summary object in section 7.3. |
 
-Dashboard `POST /incidents/{id}/actions` is section 3.2 on the REST API. Ingest (`sim.reefer` / `TemperatureReading`) is the only way an incident and its execution start.
+Dashboard `POST /incidents/{id}/actions` is section 3.2 on the same REST API. Ingest (`sim.reefer` / `TemperatureReading`) is the only way an incident and its execution start.
 
 ### 7.2 Subscribe
 
@@ -516,7 +518,7 @@ IAM column is the target. Current wildcards are called out and are not the targe
 | `oerf.platform.api.stream_broadcaster` | `handler` | Ananda (OERF-308) | Incident table stream | Read incident stream. Read routing subscriptions. Delete gone connections. `execute-api:ManageConnections` on this API. No Step Functions, no incident writes. No EventBridge `IncidentStateChanged` consumer. | deployed `oerf-stream-broadcaster` |
 | `oerf.platform.api.ws_handler` | `handler` | Mudita (OERF-302) | `$connect`, `$disconnect`, `subscribe` | Read/write routing connection items only. | deployed `oerf-ws-handler` |
 | `oerf.platform.api.ws_authorizer` | `handler` | Mudita (OERF-302) | WebSocket `$connect` authorizer | `cognito-idp:GetUser`. Write the connection binding. | deployed `oerf-ws-authorizer` |
-| `oerf.platform.api.action_handler` | `handler` | Mudita (OERF-208) | HTTP API | Read token claims. Read incident for `GET`. No inbound-queue send. No `states:SendTaskSuccess`. | deployed `oerf-action-handler` |
+| `oerf.platform.api.action_handler` | `handler` | Mudita (OERF-208) | none | No routes. The function and its name export stay until F8 so the deployed observability stack can update. Incident reads are the REST dashboard query function. | deployed `oerf-action-handler`, removed in F8 |
 | `oerf.platform.evidence.vision` | `handler` | OERF-207 (behaviour, name pending). Ananda (OERF-310) for model and guardrail env. | EventBridge `Object Created` for `tenants/*/inbound/*/*/*.jpg`, `.png`, or `.webp` key patterns (five path segments) | Read evidence object. Write the evidence result on the incident. `bedrock:InvokeModel` on the approved model ARN. `bedrock:ApplyGuardrail` on the guardrail ARN and on `us.guardrail.v1:0` in us-east-1, us-east-2, and us-west-2. | deployed `oerf-evidence-analyzer` |
 | AgentCore runtime | `oerf/platform/agent/agentcore/app.py` | OERF-206 behaviour. Ananda (OERF-312) for the runtime. | Invoke from Interpret | Read incident and tenant tables. `bedrock:InvokeModel` on Nova Lite. `bedrock:ApplyGuardrail` on the guardrail ARN and on `us.guardrail.v1:0` in us-east-1, us-east-2, and us-west-2. Pull the CDK asset repository. No incident writes, no channel send, no task token. | synth when context `agentcore:enabled` is true; default false |
 
@@ -539,7 +541,7 @@ Current IAM that the target replaces:
 - Channel router: `ses:SendEmail` on the SES identity when `SES_SOURCE_EMAIL` is set, `sns:Publish`. `social-messaging:SendWhatsAppMessage` is the phone-number-id ARN when `whatsapp:phoneNumberId` is set, otherwise `*` on a mocked synth. `channels:live` requires the id.
 - Evidence analyzer: `bedrock:InvokeModel` on the approved foundation-model ARN. `bedrock:ApplyGuardrail` on the guardrail ARN and on `us.guardrail.v1:0` in us-east-1, us-east-2, and us-west-2.
 - Report generator: no `ses:SendEmail`. Writes the report bucket only. HTML is the published document (`REPORT_PDF_BACKEND=none`).
-- Action handler: no `states:SendTaskSuccess` or `states:SendTaskFailure`. The inbound role holds `states:SendTaskSuccess` (ADR-028). A decline or an unusable reply travels through the engagement decision branch (section 5). Dashboard actions are `POST /incidents/{id}/actions` on the REST dashboard handler, queued to SQS. `oerf-action-handler` does not send that queue.
+- `oerf-action-handler` has no routes and no alarm. The inbound role holds `states:SendTaskSuccess` (ADR-028). A decline or an unusable reply travels through the engagement decision branch (section 5). Dashboard actions are `POST /incidents/{id}/actions` on the REST dashboard handler, queued to SQS. Incident reads are the same REST API. F8 removes the function and its export.
 
 `states:SendTaskSuccess` is not resource-scopable. The wildcard resource stays, limited to the inbound role, and is recorded in `docs/security/iam-exceptions.md` when that file exists. `states:SendTaskFailure` is not granted to the inbound role.
 
@@ -563,7 +565,7 @@ This ticket does not rename variables on deployed functions. OERF-301 sets missi
 | `REPORT_BUCKET_NAME` | deployed on the report function | compute stack |
 | `EVENT_BUS_NAME` | value `oerf-events`. Required on ingest and any publisher. | OERF-301 |
 | `STATE_MACHINE_ARN` | Inbound and ingest. Ingest uses it for `StartExecution`. Inbound uses it to derive the execution ARN for `StopExecution`. | compute stack |
-| `INBOUND_QUEUE_URL` | Inbound queue URL. Set on the OerfApiStack dashboard action function, which sends the dashboard action. Not set on `oerf-action-handler`. | OERF-301 |
+| `INBOUND_QUEUE_URL` | Inbound queue URL. Set on the OerfApiStack dashboard action function, which sends the dashboard action. | OERF-301 |
 | `CONFIG_ROOT` | directory of domain packages inside the asset. Value `domains`. The config library currently resolves the installed `domains` package and does not read this variable. | OERF-301, when a function needs an explicit root |
 | `LOG_LEVEL` | logging level name. Default `INFO` when unset. | OERF-301 / OERF-303 |
 | `USER_POOL_ID` | deployed on the WebSocket authorizer | compute stack |

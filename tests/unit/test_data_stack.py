@@ -13,6 +13,7 @@ from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk.assertions import Template
 
 from infra.naming import Stage
+from infra.runtime_asset import LAMBDA_PYTHON
 from infra.stacks.data_stack import OerfDataStack
 from infra.step_functions import (
     ASL_ENGAGE_PLACEHOLDERS,
@@ -149,7 +150,7 @@ def test_cold_chain_workflow_has_a_stub_lambda(template: Template) -> None:
         {"Properties": {"Handler": "workflow_stub.handler"}},
     )
     assert len(functions) == 1
-    assert functions[next(iter(functions))]["Properties"]["Runtime"] == "python3.11"
+    assert functions[next(iter(functions))]["Properties"]["Runtime"] == f"python{LAMBDA_PYTHON}"
 
 
 def test_cold_chain_state_machine_wires_real_steps_and_keeps_the_stub(
