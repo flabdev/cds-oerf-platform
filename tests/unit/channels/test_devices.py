@@ -36,7 +36,9 @@ def test_demo_seed_registers_the_shipment_devices() -> None:
     resolver = DynamoDeviceResolver(client, "routing")
 
     assert "RF-7781" in written
+    assert "RF-7783" in written
     assert resolver.resolve("RF-7781") == ("t1", "PH-2841")
+    assert resolver.resolve("RF-7783") == ("t1", "PH-2842")
     assert resolver.resolve("RF-7782") == ("t2", "VX-3101")
     assert resolver.resolve("RF-SBX-0001") == ("sbx", "SBX-0001")
     assert resolver.resolve("RF-missing") is None
@@ -46,6 +48,7 @@ def test_demo_seed_registers_the_shipment_devices() -> None:
     assert stored["Item"]["shipment_id"]["S"] == "PH-2841"
     assert seed_demo_devices(client, "routing") == written
     assert expected_demo_devices()["RF-7781"] == ("t1", "PH-2841")
+    assert expected_demo_devices()["RF-7783"] == ("t1", "PH-2842")
     assert verify_demo_devices(client, "routing") == []
     empty = FakeDynamoClient()
     assert "RF-7781" in verify_demo_devices(empty, "routing")

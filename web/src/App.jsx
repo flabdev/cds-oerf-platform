@@ -8,6 +8,8 @@ import { buildDesk, heroNote } from "./deskView.js";
 import {
   actionNotice,
   actionRequest,
+  canReviewQa,
+  qaReviewRequest,
   allowanceDraft,
   applySampleAction,
   incidentListView,
@@ -139,6 +141,7 @@ const PENDING = {
   cancel: "Cancel requested. Waiting for the workflow.",
   confirm_transfer: "Transfer confirmation requested. Waiting for the workflow.",
   pick_option: "Option requested. Waiting for the workflow.",
+  review_qa: "QA review requested. Waiting for the workflow.",
 };
 
 const ICONS = {
@@ -348,6 +351,13 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
 
   const currentId = current?.incident_id || "";
   const currentState = current?.state || "";
+  const selectRef = useRef(onSelect);
+  selectRef.current = onSelect;
+  useEffect(() => {
+    if (currentId) {
+      selectRef.current?.(currentId);
+    }
+  }, [currentId]);
   useEffect(() => {
     if (!pendingAction || !currentId) {
       return undefined;
@@ -407,8 +417,13 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
       setActionError(actionNotice(action, { missingEngagement: true }));
       return;
     }
+    if (action === "review_qa" && !canReviewQa(session.role)) {
+      return;
+    }
     const actionId = globalThis.crypto?.randomUUID?.() || `${action}-${Date.now()}`;
-    const request = actionRequest(current.incident_id, action, optionId, actionId, engagement);
+    const request = action === "review_qa"
+      ? qaReviewRequest(current.incident_id, actionId, optionId)
+      : actionRequest(current.incident_id, action, optionId, actionId, engagement);
     setActionError("");
     setConfirming(false);
     if (!onSubmit) {
@@ -418,13 +433,13 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
         action,
         optionId,
       ));
-      say(queuedNote(action, action === "pick_option" ? pickedName : ""));
+      say(queuedNote(action, action === "pick_option" ? pickedName : reviewLabel(optionId)));
       return;
     }
     setPendingAction(action);
     try {
       await onSubmit(request);
-      say(queuedNote(action, action === "pick_option" ? pickedName : ""));
+      say(queuedNote(action, action === "pick_option" ? pickedName : reviewLabel(optionId)));
     } catch (error) {
       setPendingAction("");
       setActionError(error instanceof Error ? error.message : "Action failed");
@@ -471,7 +486,8 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
   const initial = session.displayName.slice(0, 1).toUpperCase();
   const kpiAllowance = view?.kpis.allowance;
   const showActions = view && !pendingAction && !view.terminalLabel;
-  const noActionYet = showActions && !view.actions.pick && !view.actions.confirm;
+  const noActionYet = showActions && !view.actions.pick && !view.actions.confirm && !view.actions.qa;
+  const showQa = showActions && view.actions.qa && canReviewQa(session.role);
 
   return (
     <div className={sidebarOpen ? "desk" : "desk rail-closed"}>
@@ -962,6 +978,7 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
               {actionError ? <p className="form-error" role="alert">{actionError}</p> : null}
               {pendingAction ? <p className="pending" role="status">{PENDING[pendingAction]}</p> : null}
               {!pendingAction && view.terminalLabel ? <p className="locked">{view.terminalLabel}. Actions are off.</p> : null}
+              {view.actions.qa ? <p className="pending">QA review pending</p> : null}
               {noActionYet ? <p className="locked">Pick and confirm appear when the workflow needs them.</p> : null}
               {showActions && view.actions.pick ? (
                 <button
@@ -977,6 +994,31 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
                 <button type="button" className="btn primary" onClick={() => submit("confirm_transfer")}>
                   Confirm transfer
                 </button>
+              ) : null}
+              {showQa ? (
+                <>
+                  <button
+                    type="button"
+                    className="btn primary"
+                    onClick={() => submit("review_qa", { approved: true, disposition: "release" })}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    className="btn danger"
+                    onClick={() => submit("review_qa", { approved: false, disposition: "quarantine" })}
+                  >
+                    Reject — quarantine
+                  </button>
+                  <button
+                    type="button"
+                    className="btn danger"
+                    onClick={() => submit("review_qa", { approved: false, disposition: "reject" })}
+                  >
+                    Reject
+                  </button>
+                </>
               ) : null}
               {showActions && view.actions.cancel ? (
                 <button type="button" className="btn danger" onClick={() => setConfirming(true)}>
@@ -1069,7 +1111,20 @@ function queuedNote(action, optionName) {
   if (action === "confirm_transfer") {
     return "Confirm transfer requested";
   }
+  if (action === "review_qa" && optionName) {
+    return `QA review requested: ${optionName}`;
+  }
   return "Action requested";
+}
+
+function reviewLabel(review) {
+  if (!review || typeof review !== "object") {
+    return "";
+  }
+  if (review.approved === true) {
+    return "release";
+  }
+  return typeof review.disposition === "string" ? review.disposition : "";
 }
 
 function roleLabel(role) {

@@ -283,6 +283,17 @@ def _ownership_item(
     }
 
 
+def contact_is_live(row: dict[str, Any]) -> bool:
+    """True unless the seed sets live_contacts false. The string false counts too."""
+
+    if "live_contacts" not in row:
+        return True
+    value = row.get("live_contacts")
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return value is True
+
+
 def seed_live_contacts(
     client: Any,
     routing_table: str,
@@ -320,7 +331,7 @@ def seed_live_contacts(
     counts: dict[str, int] = {}
     cache: dict[str, str | None] = {}
     for role, rows in grouped.items():
-        live_rows = [row for row in rows if row.get("live_contacts") is not False]
+        live_rows = [row for row in rows if contact_is_live(row)]
         changed = 0
         missing: list[str] = []
         for row in live_rows:

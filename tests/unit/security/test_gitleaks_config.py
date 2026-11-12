@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 # sha256 of .gitleaks.toml with newlines normalized to LF.
-_CHECKSUM = "ebcf1f3fda38ca1912f8ec7a6dcce979fa42741ce309a5a9776532091b8b7e37"
+_CHECKSUM = "ee559cfee8542ee7f633b50926977b9cba1ba78a7e9099d58282acf228850ef0"
 
 
 def test_gitleaks_config_checksum_matches() -> None:
@@ -12,5 +12,8 @@ def test_gitleaks_config_checksum_matches() -> None:
     digest = hashlib.sha256(raw).hexdigest()
     assert digest == _CHECKSUM
     text = raw.decode("utf-8")
-    assert "tests[/\\\\]" in text
+    assert "test_synth_secrets" in text
+    assert "pr-32\\.diff" in text
+    assert "sim[/\\\\]seed" not in text
+    assert "docs[/\\\\]" not in text
     assert ".jsii-cache" in text

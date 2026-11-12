@@ -12,6 +12,7 @@ from oerf.platform.sandbox.audience import (
     list_drivers,
     mask_number,
     public_driver_name,
+    shipment_pool,
 )
 from oerf.platform.storage.dynamo import key, s
 from tests.unit.support.fake_dynamo import FakeDynamoClient
@@ -28,6 +29,14 @@ def _message(message_id: str, sender: str, text: str = "JOIN DRIVER") -> Normali
         type="text",
         received_at="2026-11-10T09:00:00Z",
     )
+
+
+def test_the_audience_pool_is_twenty_shipments_and_leaves_the_stories() -> None:
+    pool = shipment_pool("t1")
+    assert len(pool) == 20
+    assert pool == tuple(f"PH-P{index:02d}" for index in range(1, 21))
+    assert "PH-2841" not in pool
+    assert "PH-2842" not in pool
 
 
 def test_names_and_links_do_not_carry_a_full_number() -> None:

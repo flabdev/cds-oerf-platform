@@ -552,6 +552,7 @@ def _detail_body(item: dict[str, Any]) -> dict[str, Any]:
         "options": options,
         "engagement_id": engagement if isinstance(engagement, str) and engagement.strip() else None,
         "engagement_status": status if isinstance(status, str) and status.strip() else None,
+        "qa_review_pending": item.get("qa_review_pending") is True,
         "timeline": item.get("timeline") if isinstance(item.get("timeline"), list) else [],
         "readings": item.get("readings") if isinstance(item.get("readings"), list) else [],
     }

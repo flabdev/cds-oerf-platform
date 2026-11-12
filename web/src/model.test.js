@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   actionNotice,
   actionRequest,
+  canReviewQa,
+  qaReviewRequest,
   applySampleAction,
   allowanceDraft,
   displayName,
@@ -82,6 +84,17 @@ test("an action is a post with the client ids and no task token", () => {
     option_id: "FACILITY_A",
   });
   assert.equal("task_token" in request.body, false);
+  const review = qaReviewRequest("INC-1", "act-2", { approved: false, disposition: "quarantine" });
+  assert.deepEqual(review.body, {
+    action: "review_qa",
+    action_id: "act-2",
+    approved: false,
+    disposition: "quarantine",
+  });
+  assert.equal("task_token" in review.body, false);
+  assert.equal(canReviewQa("tenant_admin"), true);
+  assert.equal(canReviewQa("platform_admin"), true);
+  assert.equal(canReviewQa("ops_user"), false);
 });
 
 test("sample pick routes the shipment to the chosen facility", () => {

@@ -4,6 +4,7 @@ import { App } from "./App.jsx";
 import {
   absorbDeskEvent,
   acceptDeskEvent,
+  deskSubscriptions,
   insertFetchedRow,
   mergeDeskRows,
   replaceIncidentRow,
@@ -38,7 +39,7 @@ export function LiveDesk({ config }) {
   const [expired, setExpired] = useState(false);
   const incidentsRef = useRef(incidents);
   const signingOut = useRef(false);
-  const socketRef = useRef(null);
+  const socketRef = useRef([]);
   incidentsRef.current = incidents;
   const redirectUri = window.location.origin;
 
@@ -144,43 +145,40 @@ export function LiveDesk({ config }) {
     })) {
       return undefined;
     }
-    const scope = watchId ? "incident" : "tenant";
     const pending = new Set();
     let cancel = false;
-    let opened = false;
-    const socket = new WebSocket(`${config.wsUrl}?token=${encodeURIComponent(accessToken)}`);
-    socketRef.current = socket;
-    socket.addEventListener("open", () => {
-      opened = true;
-      if (!cancel && !signingOut.current) {
-        setConnected(true);
-      }
-      if (signingOut.current) {
-        socket.close(1000);
-        return;
-      }
-      socket.send(JSON.stringify(subscribeBody(scope, watchId)));
-    });
-    socket.addEventListener("close", (event) => {
-      if (socketRef.current === socket) {
-        socketRef.current = null;
-      }
-      if (!cancel) {
-        setConnected(false);
-      }
-      if (socketAuthFailed({
-        opened,
-        code: event.code,
-        signingOut: signingOut.current || cancel,
-      })) {
-        expireSession();
-      }
-    });
-    socket.addEventListener("message", (message) => {
+    const sockets = deskSubscriptions(watchId).map((subscription) => {
+      let opened = false;
+      const socket = new WebSocket(`${config.wsUrl}?token=${encodeURIComponent(accessToken)}`);
+      socket.addEventListener("open", () => {
+        opened = true;
+        if (!cancel && !signingOut.current) {
+          setConnected(true);
+        }
+        if (signingOut.current) {
+          socket.close(1000);
+          return;
+        }
+        socket.send(JSON.stringify(subscribeBody(subscription.scope, subscription.incidentId)));
+      });
+      socket.addEventListener("close", (event) => {
+        socketRef.current = socketRef.current.filter((item) => item !== socket);
+        if (!cancel && socketRef.current.length === 0) {
+          setConnected(false);
+        }
+        if (socketAuthFailed({
+          opened,
+          code: event.code,
+          signingOut: signingOut.current || cancel,
+        })) {
+          expireSession();
+        }
+      });
+      socket.addEventListener("message", (message) => {
       const accepted = acceptDeskEvent(message.data, {
         tenantId: principal.tenantId,
-        scope,
-        incidentId: watchId,
+        scope: subscription.scope,
+        incidentId: subscription.incidentId,
       });
       if (!accepted) {
         return;
@@ -227,14 +225,17 @@ export function LiveDesk({ config }) {
           }
         })
         .finally(() => pending.delete(incidentId));
+      });
+      return socket;
     });
+    socketRef.current = sockets;
     return () => {
       cancel = true;
       setConnected(false);
-      if (socketRef.current === socket) {
-        socketRef.current = null;
+      socketRef.current = [];
+      for (const socket of sockets) {
+        socket.close(1000);
       }
-      socket.close(1000);
     };
   }, [
     accessToken,
@@ -257,10 +258,12 @@ export function LiveDesk({ config }) {
 
   function signOut() {
     signingOut.current = true;
-    const socket = socketRef.current;
-    socketRef.current = null;
-    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-      socket.close(1000);
+    const sockets = socketRef.current;
+    socketRef.current = [];
+    for (const socket of sockets) {
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close(1000);
+      }
     }
     clearStoredSession();
     setIncidents(null);

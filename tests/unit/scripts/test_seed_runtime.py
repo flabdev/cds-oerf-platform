@@ -45,7 +45,7 @@ def test_seed_round_trip_matches_the_workflow_readers() -> None:
 
     assert counts == {
         "meta": 1,
-        "shipments": 1,
+        "shipments": 22,
         "facilities": 2,
         "contacts": 7,
         "phones": 0,
@@ -71,7 +71,12 @@ def test_seed_round_trip_matches_the_workflow_readers() -> None:
     shipment = DynamoShipmentReader(client, TABLE).get("t1", "PH-2841")
     assert shipment is not None
     assert shipment["product_profile"] == "PP-2-8-45"
-    assert shipment["eta_min_at_excursion"] == 46
+    assert shipment["eta_min_at_excursion"] == 15
+    reroute_shipment = DynamoShipmentReader(client, TABLE).get("t1", "PH-2842")
+    assert reroute_shipment is not None
+    assert reroute_shipment["device"] == "RF-7783"
+    assert reroute_shipment["driver"] == "C-T1-DRV-ANANDA"
+    assert reroute_shipment["eta_min_at_excursion"] == 60
     assert isinstance(shipment["eta_min_at_excursion"], int)
     assert not isinstance(shipment["eta_min_at_excursion"], bool)
     assert shipment["value_usd"] == 180000
@@ -159,7 +164,7 @@ def test_dry_run_reads_and_does_not_write() -> None:
 
     assert counts == {
         "meta": 1,
-        "shipments": 1,
+        "shipments": 22,
         "facilities": 2,
         "contacts": 7,
         "phones": 7,
@@ -178,7 +183,7 @@ def test_main_dry_run_prints_counts(
 
     out = capsys.readouterr().out
     assert "would change t1 meta 1" in out
-    assert "would change t1 shipments 1" in out
+    assert "would change t1 shipments 22" in out
     assert "would change t1 facilities 2" in out
     assert "would change t1 contacts 7" in out
     assert "would change t1 phones 7" in out
@@ -304,6 +309,7 @@ def _session(client: _RejectWrites, *, ssm_raises: bool = False) -> type:
 
 _LIVE = {
     "/oerf/demo-numbers/t1/driver/C-T1-DRV": "+15550100901",
+    "/oerf/demo-numbers/t1/driver/C-T1-DRV-ANANDA": "+15550100921",
     "/oerf/demo-numbers/t1/ops_manager": "15550100902",
     "/oerf/demo-numbers/t1/qa": "+15550100904",
     "/oerf/demo-numbers/t1/facility": "+15550100903",
@@ -338,10 +344,11 @@ def test_live_contacts_point_the_ssm_number_at_the_seeded_contact() -> None:
 
     counts = seed_live_contacts(client, "routing", "t1", ssm, apply=True)
 
-    assert counts == {"driver": 1, "ops_manager": 1, "qa": 1, "facility": 2}
-    assert client.writes == written + 5
+    assert counts == {"driver": 2, "ops_manager": 1, "qa": 1, "facility": 2}
+    assert client.writes == written + 6
     assert ssm.calls == [
         ("/oerf/demo-numbers/t1/driver/C-T1-DRV", True),
+        ("/oerf/demo-numbers/t1/driver/C-T1-DRV-ANANDA", True),
         ("/oerf/demo-numbers/t1/ops_manager", True),
         ("/oerf/demo-numbers/t1/qa", True),
         ("/oerf/demo-numbers/t1/facility", True),
@@ -359,7 +366,7 @@ def test_live_contacts_point_the_ssm_number_at_the_seeded_contact() -> None:
     assert facilities == {"C-T1-FACA", "C-T1-FACB"}
     again = seed_live_contacts(client, "routing", "t1", ssm, apply=True)
     assert again == {"driver": 0, "ops_manager": 0, "qa": 0, "facility": 0}
-    assert client.writes == written + 5
+    assert client.writes == written + 6
 
 
 def test_live_contacts_excludes_seeded_opt_out_contacts(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -372,9 +379,12 @@ def test_live_contacts_excludes_seeded_opt_out_contacts(monkeypatch: pytest.Monk
 
     counts = seed_live_contacts(client, "routing", "t1", ssm, apply=True, roles=("driver",))
 
-    assert counts == {"driver": 1}
-    assert ssm.calls == [("/oerf/demo-numbers/t1/driver/C-T1-DRV", True)]
-    assert client.writes == 1
+    assert counts == {"driver": 2}
+    assert ssm.calls == [
+        ("/oerf/demo-numbers/t1/driver/C-T1-DRV", True),
+        ("/oerf/demo-numbers/t1/driver/C-T1-DRV-ANANDA", True),
+    ]
+    assert client.writes == 2
 
 
 def test_live_contacts_dry_run_reads_ssm_and_does_not_write() -> None:
@@ -382,7 +392,7 @@ def test_live_contacts_dry_run_reads_ssm_and_does_not_write() -> None:
 
     counts = seed_live_contacts(_RejectWrites(), "routing", "t1", ssm, apply=False)
 
-    assert counts["driver"] == 1
+    assert counts["driver"] == 2
     assert counts["facility"] == 2
     assert ssm.calls[0] == ("/oerf/demo-numbers/t1/driver/C-T1-DRV", True)
 
@@ -408,6 +418,7 @@ def test_live_contacts_point_each_driver_parameter_at_its_own_contact(
     client = FakeDynamoClient()
     numbers = {
         driver_demo_number_name("t1", "C-T1-DRV"): "+15550100901",
+        driver_demo_number_name("t1", "C-T1-DRV-ANANDA"): "+15550100921",
         driver_demo_number_name("t1", "C-T1-ANANDA"): "+15550100911",
         driver_demo_number_name("t1", "C-T1-MUDITA"): "+15550100912",
     }
@@ -415,7 +426,7 @@ def test_live_contacts_point_each_driver_parameter_at_its_own_contact(
 
     counts = seed_live_contacts(client, "routing", "t1", ssm, apply=True, roles=("driver",))
 
-    assert counts == {"driver": 3}
+    assert counts == {"driver": 4}
     assert [name for name, decrypted in ssm.calls] == list(numbers)
     registry = DynamoPhoneRegistry(client, "routing", TABLE)
     assert registry.resolve_sender("+15550100901").matches[0].contact_id == "C-T1-DRV"
@@ -435,7 +446,7 @@ def test_live_contacts_flag_prints_role_and_count_only(
 
     out = capsys.readouterr().out
     assert "would change t1 phones 7" in out
-    assert "would change t1 live-contacts driver 1" in out
+    assert "would change t1 live-contacts driver 2" in out
     assert "would change t1 live-contacts facility 2" in out
     assert client.writes == 0
     for value in _LIVE.values():
@@ -499,7 +510,8 @@ def test_missing_parameter_is_skipped(
     assert counts == {"driver": 1, "ops_manager": 1, "facility": 2}
     assert "qa" not in counts
     assert client.writes == 4
-    assert out == "skipped t1 live-contacts qa (no parameter)\n"
+    assert "skipped t1 live-contacts driver/C-T1-DRV-ANANDA (no parameter)" in out
+    assert "skipped t1 live-contacts qa (no parameter)" in out
     for value in present.values():
         assert value not in out
 
@@ -542,11 +554,12 @@ def test_roles_filter_reads_only_the_named_roles(
 
     assert [name for name, decrypted in ssm.calls] == [
         "/oerf/demo-numbers/t1/driver/C-T1-DRV",
+        "/oerf/demo-numbers/t1/driver/C-T1-DRV-ANANDA",
         "/oerf/demo-numbers/t1/ops_manager",
     ]
     assert all(decrypted for _, decrypted in ssm.calls)
     out = capsys.readouterr().out
-    assert "applied t1 live-contacts driver 1" in out
+    assert "applied t1 live-contacts driver 2" in out
     assert "applied t1 live-contacts ops_manager 1" in out
     assert "live-contacts qa" not in out
     assert "live-contacts facility" not in out

@@ -80,7 +80,7 @@ export function stageProgress(item) {
 export function visibleActions(item) {
   const name = incidentState(item?.state);
   if (name === "CLOSED" || name === "CANCELLED" || !name) {
-    return { pick: false, confirm: false, cancel: false };
+    return { pick: false, confirm: false, cancel: false, qa: false };
   }
   const engagement = typeof item?.engagement_id === "string" && item.engagement_id.trim()
     ? item.engagement_id.trim()
@@ -91,6 +91,7 @@ export function visibleActions(item) {
     pick: PICK_STATES.has(name),
     confirm: CONFIRM_STATES.has(name) && waiting,
     cancel: true,
+    qa: item?.qa_review_pending === true,
   };
 }
 
