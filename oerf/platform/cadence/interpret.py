@@ -7,12 +7,18 @@ import os
 from collections.abc import Callable
 from typing import Any
 
-#: Button labels and ids, after case and underscore folding.
+#: Button labels and ids, after case and underscore folding. The facility ladder
+#: (``partner_request``) reuses ``Accept``/``Decline``/``Call me``, so the same
+#: labels map here and the C13 ``EngageFacilityAccept`` wait classifies them.
 _REPLIES: dict[str, tuple[str, bool, dict[str, str]]] = {
     "running": ("unit_running", True, {"unit": "running"}),
     "stopped": ("unit_stopped", True, {"unit": "stopped"}),
     "not sure": ("unknown", False, {}),
     "call me": ("call_me", False, {}),
+    "accept": ("accept", True, {}),
+    "accepted": ("accept", True, {}),
+    "decline": ("decline", True, {}),
+    "declined": ("decline", True, {}),
 }
 
 Consult = Callable[[str, str], dict[str, Any] | None]

@@ -73,6 +73,9 @@ jobs:
       - name: Pytest
         run: pytest -q -m "not aws"
 
+      - name: Scenario demo check
+        run: make demo-check
+
       - name: Security tests
         run: pytest -q -m security
 

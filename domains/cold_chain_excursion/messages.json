@@ -34,7 +34,9 @@
     "voice_note_unsupported": {},
     "ops_escalation_options": {},
     "qa_prewarn": {},
-    "reopen_alert": {},
+    "reopen_alert": {
+      "whatsapp": "Shipment {shipment_id} has risen above its safe range again at {facility_name} ({temperature_c} C). The incident is reopened and the team is responding. Any earlier QA request is withdrawn, and an updated report will follow."
+    },
     "callback_request": {},
     "callback_ack": {},
     "transfer_escalation": {},

@@ -19,6 +19,8 @@ STAGE_BY_STEP = {
     "Assess": "ASSESSING",
     "Approval": "AWAITING_APPROVAL",
     "SecureFacility": "SECURING_FACILITY",
+    "SecureFacilityFallback": "SECURING_FACILITY",
+    "FacilityDecision": "SECURING_FACILITY",
     "Act": "IN_TRANSIT",
     "Verify": "VERIFYING",
     "RecordContainment": "CONTAINED",

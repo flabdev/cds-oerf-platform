@@ -96,7 +96,7 @@ def test_ph2841_reaches_act_on_the_recommended_option() -> None:
             "GatherContext",
             workflow={
                 "trigger": {
-                    "temperature_c": 8.1,
+                    "temperature_c": 8.6,
                     "timestamp": NOW.isoformat(),
                 },
                 "shipment": shipment,
@@ -157,8 +157,8 @@ def test_ph2841_reaches_act_on_the_recommended_option() -> None:
     recipient, body, template_id, parameters = probe.calls[0]
     assert recipient == PLACEHOLDER
     assert template_id == "driver_checkin"
-    assert parameters == ("PH-2841", "8.1")
-    assert "PH-2841" in body and "8.1" in body
+    assert parameters == ("PH-2841", "8.6")
+    assert "PH-2841" in body and "8.6" in body
     stored = engagements.get(TENANT, "INC-000001", diagnosis["engagement_id"])
     assert stored is not None and stored.status == "WAITING"
     assert stored.task_token == TOKEN
@@ -276,6 +276,22 @@ def test_ph2841_reaches_act_on_the_recommended_option() -> None:
     assert machine["CancelAfterNotifyContinue?"]["Default"] == "VerifyLoop"
 
 
+def test_eta_projection_recommends_facility_for_ph2842() -> None:
+    diagnosed, _shipment, _messages, dependencies, _facilities = _open("PH-2842")
+    assessed = _assess(
+        diagnosed,
+        dependencies,
+        {"status": "answered", "intent": "unit_running", "fields": {"unit": "running"}},
+    )
+
+    options = {item["id"]: item for item in assessed.workflow["assessment"]["options"]}
+    assert assessed.workflow["assessment"]["recommended_option"] == "FAC-A"
+    assert options["continue"]["drive_min"] == 60
+    assert options["continue"]["feasible"] is False
+    assert options["FAC-A"]["feasible"] is True
+
+
+
 def test_stopped_unit_recommends_facility_a_and_sends_the_reroute() -> None:
     diagnosed, shipment, messages, dependencies, facilities = _open()
     answered = {
@@ -331,7 +347,7 @@ def test_stopped_unit_recommends_facility_a_and_sends_the_reroute() -> None:
 
 
 def test_silent_driver_keeps_todays_ranking_and_sends_status_update() -> None:
-    diagnosed, shipment, messages, dependencies, _facilities = _open()
+    diagnosed, shipment, messages, dependencies, _facilities = _open(temperature_c=8.6)
     diagnosis = diagnosed.workflow["diagnosis"]
     planned = {
         "tenant_id": TENANT,
@@ -392,20 +408,23 @@ def test_silent_driver_keeps_todays_ranking_and_sends_status_update() -> None:
     )
 
 
-def _open():
+def _open(shipment_id: str = SHIPMENT, temperature_c: float = 8.1):
     facilities = json.loads((ROOT / "sim" / "seed" / "t1" / "facilities.json").read_text())
-    shipment = dict(json.loads((ROOT / "sim" / "seed" / "t1" / "shipments.json").read_text())[0])
+    shipments = json.loads((ROOT / "sim" / "seed" / "t1" / "shipments.json").read_text())
+    shipment = next(row for row in shipments if row["shipment_id"] == shipment_id)
     shipment["product_profile_id"] = shipment["product_profile"]
     messages = json.loads((ROOT / "domains" / "cold_chain_excursion" / "messages.json").read_text())
-    dependencies = _dependencies(facilities, get_config(TENANT, "cold_chain_excursion"))
+    dependencies = _dependencies(
+        facilities, get_config(TENANT, "cold_chain_excursion"), shipment_id
+    )
     gathered = HANDLERS["GatherContext"](
         _envelope(
             "GatherContext",
             workflow={
-                "trigger": {"temperature_c": 8.1, "timestamp": NOW.isoformat()},
+                "trigger": {"temperature_c": temperature_c, "timestamp": NOW.isoformat()},
                 "shipment": shipment,
             },
-        ),
+        ).model_copy(update={"shipment_id": shipment_id}),
         dependencies,
     )
     diagnosed = HANDLERS["Diagnose"](
@@ -444,11 +463,11 @@ def _sender(shipment, messages, facilities):
     return probe, ports
 
 
-def _dependencies(facilities: list[dict], config) -> StepDependencies:
+def _dependencies(facilities: list[dict], config, shipment_id: str = SHIPMENT) -> StepDependencies:
     incidents = IncidentRepository(clock=lambda: NOW)
     incidents.create(
         tenant_id=TENANT,
-        shipment_id=SHIPMENT,
+        shipment_id=shipment_id,
         reason="temperature excursion",
         config_version=config.version,
         config_snapshot=config.model_dump(),
@@ -462,11 +481,12 @@ def _dependencies(facilities: list[dict], config) -> StepDependencies:
 
 
 def _envelope(step: str, **values) -> StepEnvelope:
+    shipment_id = values.pop("shipment_id", SHIPMENT)
     return StepEnvelope(
         step=step,
         tenant_id=TENANT,
         incident_id="INC-000001",
-        shipment_id=SHIPMENT,
+        shipment_id=shipment_id,
         **values,
     )
 

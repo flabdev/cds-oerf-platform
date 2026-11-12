@@ -211,10 +211,12 @@ def apply(
     )
     if not remember:
         return output
+    cycle = envelope.workflow.get("reopen_cycle", 0)
+    key_step = step.step if cycle == 0 else f"{step.step}#{cycle}"
     dependencies.results.put(
         tenant_id=envelope.tenant_id,
         incident_id=envelope.incident_id,
-        step=step.step,
+        step=key_step,
         decision=deepcopy(step.decision),
         result=deepcopy({"transition": moved, **step.result}),
         step_output=deepcopy(output.to_event()),

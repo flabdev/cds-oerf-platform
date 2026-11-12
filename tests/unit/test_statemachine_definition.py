@@ -43,6 +43,7 @@ REAL_PLACEHOLDERS = {
     "Approval": "__STEP_APPROVAL_ARN__",
     "SecureFacility": "__STEP_SECURE_FACILITY_ARN__",
     "SecureFacilityFallback": "__STEP_SECURE_FACILITY_ARN__",
+    "FacilityDecision": "__STEP_SECURE_FACILITY_ARN__",
     "Act": "__STEP_ACT_ARN__",
     "VerifyLoop": "__STEP_VERIFY_ARN__",
     "RecordContainment": "__STEP_RECORD_CONTAINMENT_ARN__",
@@ -61,7 +62,9 @@ REAL_PLACEHOLDERS = {
 #: simulator, not by the deployed definition.
 STUB_COLD_CHAIN_TASKS = frozenset()
 STUB_ENGAGEMENT_TASKS = frozenset()
-NOTICE_TASKS = frozenset({"NotifyContinue", "NotifyDivert"})
+NOTICE_TASKS = frozenset({"NotifyContinue", "NotifyDivert", "NotifyReopenDriver", "NotifyReopenQA"})
+#: Cold-chain states that start a nested state machine instead of a Lambda.
+NESTED_TASKS = frozenset({"EngageDriverDiagnosis", "EngageFacilityAccept"})
 
 
 def load_definition() -> dict:
@@ -80,11 +83,19 @@ def transition_targets(state: dict) -> list[str]:
 
 
 def task_states() -> dict:
-    return {
-        name: state
-        for name, state in load_definition()["States"].items()
-        if state["Type"] == "Task"
-    }
+    """Return task states from the parent graph and all nested branches."""
+
+    tasks: dict[str, dict] = {}
+
+    def visit(machine: dict) -> None:
+        for name, state in machine.get("States", {}).items():
+            if state["Type"] == "Task":
+                tasks[name] = state
+            for _, nested in _nested_state_machines(name, state):
+                visit(nested)
+
+    visit(load_definition())
+    return tasks
 
 
 def test_real_and_stub_tasks_are_listed() -> None:
@@ -140,9 +151,18 @@ def test_wired_tasks_resolve_to_their_function_arns() -> None:
     text = text.replace("__STUB_ARN__", "arn:aws:lambda:us-east-1:000000000000:function:stub")
     states = json.loads(text)["States"]
 
+    def find_state(name: str) -> dict:
+        if name in states:
+            return states[name]
+        branches = states.get("StartQAAndMonitor", {}).get("Branches", [])
+        for machine in branches:
+            if name in machine.get("States", {}):
+                return machine["States"][name]
+        raise AssertionError(f"state not found: {name}")
+
     for state, phase in WIRED_STATES.items():
         expected = function_arn("us-east-1", "000000000000", STEP_FUNCTION_NAMES[phase])
-        assert states[state]["Parameters"]["FunctionName"] == expected, state
+        assert find_state(state)["Parameters"]["FunctionName"] == expected, state
     for name in STUB_COLD_CHAIN_TASKS:
         assert states[name]["Parameters"]["FunctionName"].endswith(":function:stub"), name
 
@@ -162,7 +182,7 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
 
     assert tasks
     for name, state in tasks.items():
-        if name == "EngageDriverDiagnosis":
+        if name in NESTED_TASKS:
             assert state["Resource"] == "arn:aws:states:::states:startExecution.sync:2"
             assert state["Parameters"]["StateMachineArn"] == "__ENGAGE_PARTY_ARN__"
             continue
@@ -170,17 +190,21 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
             assert state["Resource"] == "arn:aws:states:::lambda:invoke"
             assert state["Parameters"]["FunctionName"] == "__CHANNEL_ROUTER_ARN__"
             assert state["Parameters"]["Payload"]["step_name"] == "EngagementSendOneWay"
-            # Notices are best-effort side effects; discard their result so the
-            # strict workflow envelope stays unchanged for the next task.
             assert state["ResultPath"] is None
             assert state["Catch"][0]["ResultPath"] is None
             assert "OutputPath" not in state
             assert "task_token" not in json.dumps(state["Parameters"])
-            assert state["Catch"][0]["Next"].startswith("CancelAfterNotify")
+            expected_next = {
+                "NotifyContinue": "CancelAfterNotifyContinue?",
+                "NotifyDivert": "CancelAfterNotifyDivert?",
+                "NotifyReopenDriver": "NotifyReopenQA",
+                "NotifyReopenQA": "VerifyLoop",
+            }[name]
+            assert state["Catch"][0]["Next"] == expected_next
             continue
-        if name == "SecureFacilityFallback":
+        if name in {"SecureFacilityFallback", "FacilityDecision"}:
             assert state["Parameters"]["FunctionName"] == REAL_PLACEHOLDERS["SecureFacility"]
-            assert state["Parameters"]["Payload"]["step_name"] == "SecureFacilityFallback"
+            assert state["Parameters"]["Payload"]["step_name"] == name
             assert state["Retry"][0]["MaxAttempts"] == 3
             assert state["Catch"][-1]["Next"] == "RecordFailure"
             continue
@@ -192,6 +216,19 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
             assert "OutputPath" not in state
             assert state["TimeoutSeconds"] == 604800
             continue
+        if name in {"QA", "MonitorVerify"}:
+            expected_placeholder = REAL_PLACEHOLDERS["QA" if name == "QA" else "VerifyLoop"]
+            assert state["Parameters"]["FunctionName"] == expected_placeholder
+            assert state["Resource"] == "arn:aws:states:::lambda:invoke"
+            assert state["Retry"][0]["MaxAttempts"] == 3
+            if name == "QA":
+                assert state["TimeoutSeconds"] == 60
+                assert state["Catch"][-1]["Next"] == "QAReviewFailed"
+            else:
+                assert "Catch" not in state
+                assert state["Next"] == "MonitorVerdict"
+            continue
+
         expected_resource = (
             "arn:aws:states:::lambda:invoke.waitForTaskToken"
             if name == "Approval"
@@ -203,7 +240,6 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
         assert state["Retry"][0]["MaxAttempts"] == 3, name
         assert state["TimeoutSeconds"] == (1800 if name == "Approval" else 60), name
         if name in {"Escalate", "Cancel", "Close"}:
-            # Terminal outcomes must not loop after persistent failure.
             if name == "Close":
                 assert state["Catch"][0]["Next"] == "TerminalFailure"
             else:
@@ -618,7 +654,6 @@ def test_cancellation_is_checked_after_work_steps_and_infeasible_assessment_esca
         "RecordContainment",
         "BeginDisposition",
         "GenerateReport",
-        "QA",
     )
 
     for step in work_steps:
@@ -642,7 +677,10 @@ def test_human_approval_and_cancellation_decisions_are_explicit() -> None:
         _string_equals(choice) == "cancelled" and choice["Next"] == "Cancel"
         for choice in states["ApprovalDecision"]["Choices"]
     )
-    assert states["QADecision"]["Default"] == "FailureRoute"
+    qa_branch = states["StartQAAndMonitor"]["Branches"][0]["States"]
+    assert qa_branch["QA"]["Catch"][-1]["Next"] == "QAReviewFailed"
+    assert qa_branch["CancelAfterQA?"]["Default"] == "QADecision"
+    assert qa_branch["QADecision"]["Default"] == "QAReviewFailed"
 
 
 def test_primary_flow_prefix_is_intact() -> None:
@@ -683,9 +721,10 @@ def test_contained_branch_reaches_success() -> None:
         if current.startswith("CancelAfter"):
             current = state["Default"]
         elif state["Type"] == "Choice":
-            # The first choice in each decision is the happy-path branch:
-            # containment.status == contained, then qa.disposition == approved.
-            current = state["Choices"][0]["Next"]
+            if current == "QAParallelDecision":
+                current = state["Choices"][1]["Next"]
+            else:
+                current = state["Choices"][0]["Next"]
         elif "Next" in state:
             current = state["Next"]
         else:
@@ -697,9 +736,13 @@ def test_contained_branch_reaches_success() -> None:
     assert states["RecordContainment"]["Next"] == "CancelAfterRecordContainment?"
     assert states["CancelAfterRecordContainment?"]["Default"] == "BeginDisposition"
     assert states["BeginDisposition"]["Next"] == "CancelAfterBeginDisposition?"
-    assert states["CancelAfterGenerateReport?"]["Default"] == "QAReviewWait"
-    assert states["QAReviewWait"]["Next"] == "QA"
-    assert states["QAReviewWait"]["Catch"][-1]["Next"] == "RecordFailure"
+    assert states["CancelAfterGenerateReport?"]["Default"] == "StartQAAndMonitor"
+    qa_states = states["StartQAAndMonitor"]["Branches"][0]["States"]
+    assert qa_states["QAReviewWait"]["Next"] == "QA"
+    assert qa_states["QA"]["Next"] == "CancelAfterQA?"
+    assert qa_states["QAReviewWait"]["Catch"][-1]["Next"] == "QAReviewFailed"
+    assert states["StartQAAndMonitor"]["Catch"][0]["Next"] == "HandleReopen"
+    assert states["StartQAAndMonitor"]["Catch"][1]["Next"] == "Escalate"
     assert states["CancelAfterBeginDisposition?"]["Default"] == "GenerateReport"
     assert chain == [
         "ContainmentDecision",
@@ -709,10 +752,9 @@ def test_contained_branch_reaches_success() -> None:
         "CancelAfterBeginDisposition?",
         "GenerateReport",
         "CancelAfterGenerateReport?",
-        "QAReviewWait",
-        "QA",
-        "CancelAfterQA?",
-        "QADecision",
+        "StartQAAndMonitor",
+        "QAParallelDecision",
+        "UseApprovedQAResult",
         "Close",
         "WorkflowComplete",
     ]
@@ -726,7 +768,12 @@ def test_failure_path_records_then_escalates_and_terminates() -> None:
     assert states["Escalate"]["End"] is True
     assert states["FailureRoute"]["Default"] == "Cancel"
     assert states["HandleReopen"]["Next"] == "CancelAfterHandleReopen?"
-    assert states["CancelAfterHandleReopen?"]["Default"] == "VerifyLoop"
+    assert states["StartQAAndMonitor"]["Next"] == "QAParallelDecision"
+    assert states["QAParallelDecision"]["Choices"][1]["Next"] == "UseApprovedQAResult"
+    assert states["QAParallelDecision"]["Choices"][2]["Next"] == "UseQAResult"
+    assert states["UseQAResult"]["Next"] == "HandleReopen"
+    assert states["NotifyReopenDriver"]["Next"] == "NotifyReopenQA"
+    assert states["NotifyReopenQA"]["Next"] == "VerifyLoop"
 
 
 def test_terminal_states_have_no_next_transition() -> None:
@@ -740,7 +787,10 @@ def test_definition_guards_against_orphaned_executions() -> None:
     # so the execution timeout lives in the ASL top level instead.
     definition = load_definition()
     assert definition["TimeoutSeconds"] == 8 * 24 * 60 * 60
-    assert definition["States"]["QAReviewWait"]["TimeoutSeconds"] == 7 * 24 * 60 * 60
+    qa_timeout = definition["States"]["StartQAAndMonitor"]["Branches"][0]["States"][
+        "QAReviewWait"
+    ]["TimeoutSeconds"]
+    assert qa_timeout == 7 * 24 * 60 * 60
 
     # Walk Next, Default, Choices[].Next, and Catch[].Next from StartAt.
     # Nested Parallel branches and Map ItemProcessor/Iterator are separate
@@ -775,9 +825,18 @@ class StatesRuntime(Exception):
     """
 
 
+def _json_path_parts(path: str) -> list[str]:
+    """Split the small JSONPath subset used by the ASL (including array indexes)."""
+
+    return [part for part in re.sub(r"\[(\d+)\]", r".\1", path.lstrip("$.")).split(".") if part]
+
+
 def _path_present(data: dict, path: str) -> bool:
     node: object = data
-    for part in path.lstrip("$.").split("."):
+    for part in _json_path_parts(path):
+        if isinstance(node, list) and part.isdigit() and int(part) < len(node):
+            node = node[int(part)]
+            continue
         if not isinstance(node, dict) or part not in node:
             return False
         node = node[part]
@@ -800,7 +859,10 @@ def _assign(data: dict, path: str, value: object) -> None:
 
 def _path_value(data: dict, path: str) -> object:
     node: object = data
-    for part in path.lstrip("$.").split("."):
+    for part in _json_path_parts(path):
+        if isinstance(node, list) and part.isdigit() and int(part) < len(node):
+            node = node[int(part)]
+            continue
         if not isinstance(node, dict) or part not in node:
             raise StatesRuntime(
                 f"Invalid path '{path}': The choice state's condition path "
@@ -873,7 +935,35 @@ def simulate(event: dict, handler_fn=handler, max_steps: int = 48) -> tuple:
         state = states[current]
         if state["Type"] == "Succeed":
             return "WorkflowComplete", data
-        if state["Type"] == "Task":
+        if state["Type"] == "Parallel":
+            # Deterministic offline contract for the two ADR-031 branches: the
+            # QA callback resolves and the monitor observes its completion.
+            qa_result = dict(data)
+            self_qa = state["Branches"][0]["States"]
+            if self_qa["QAReviewWait"]["Type"] != "Task":
+                raise AssertionError("QA branch must begin with the callback wait")
+            qa_result = handler_fn({"step_name": "QA", "workflow": qa_result}, None)
+
+            monitor_result = dict(data)
+            monitor_result["workflow"] = dict(monitor_result.get("workflow", {}))
+            monitor_result["workflow"]["qa_monitor_mode"] = True
+            monitor_result = handler_fn(
+                {"step_name": "Verify", "workflow": monitor_result}, None
+            )
+            if monitor_result.get("containment", {}).get("status") == "reopened":
+                current = state["Catch"][0]["Next"]
+                continue
+            monitor_result.setdefault("workflow", {})["qa_monitor_done"] = True
+            data["qa_parallel"] = [qa_result, monitor_result]
+            current = state["Next"]
+        elif state["Type"] == "Pass":
+            if "InputPath" in state:
+                selected = _path_value(data, state["InputPath"])
+                data = dict(selected) if isinstance(selected, dict) else selected
+            elif "ResultPath" in state:
+                _assign(data, state["ResultPath"], state.get("Result"))
+            current = state["Next"]
+        elif state["Type"] == "Task":
             if state["Resource"] == "arn:aws:states:::states:startExecution.sync:2":
                 data["diagnosis"] = {"engagement_id": "ENG-1", "policy_id": "critical_field"}
                 data["engagement_result"] = {"status": "answered", "intent": "unit_status"}
@@ -1280,6 +1370,33 @@ def test_rejected_approval_escalates_and_keeps_identity() -> None:
 def test_facility_decline_loops_once_to_the_next_facility() -> None:
     """C6: a decline with a ranked fallback goes through a distinct task identity."""
     states = load_definition()["States"]
+    assert states["CancelAfterSecureFacility?"]["Default"] == "FacilityContact?"
+    assert states["FacilityContact?"]["Choices"] == [
+        {
+            "Variable": "$.workflow.facility_request",
+            "IsPresent": True,
+            "Next": "EngageFacilityAccept",
+        }
+    ]
+    assert states["FacilityContact?"]["Default"] == "FacilityAccepted?"
+    assert evaluate_choice(states["FacilityContact?"], {}) == "FacilityAccepted?"
+    assert evaluate_choice(
+        states["FacilityContact?"], {"workflow": {"facility_request": {}}}
+    ) == "EngageFacilityAccept"
+    engage_facility = states["EngageFacilityAccept"]
+    assert engage_facility["Parameters"]["Input"] == {
+        "tenant_id.$": "$.tenant_id",
+        "incident_id.$": "$.incident_id",
+        "engagement_id.$": "$.workflow.facility_request.engagement_id",
+        "role.$": "$.workflow.facility_request.role",
+        "ask.$": "$.workflow.facility_request.ask",
+        "policy_id.$": "$.workflow.facility_request.policy_id",
+        "facts.$": "$.context",
+    }
+    assert engage_facility["ResultPath"] == "$.workflow.facility_engagement"
+    assert states["EngageFacilityAccept"]["Next"] == "CancelAfterEngageFacility?"
+    assert states["CancelAfterEngageFacility?"]["Default"] == "FacilityDecision"
+    assert states["FacilityDecision"]["Next"] == "FacilityAccepted?"
     assert states["FacilityAccepted?"]["Choices"][1] == {
         "And": [
             {"Variable": "$.facility.accepted", "IsPresent": True},
@@ -1358,6 +1475,6 @@ def test_reopened_containment_loops_through_reopen_then_closes() -> None:
 
     outcome, final = simulate(dict(INITIAL_EVENT), flapping_handler)
 
-    assert seen == ["reopened", "contained"]
+    assert seen == ["reopened", "contained", "contained"]
     assert outcome == "WorkflowComplete"
     assert final["incident_state"] == "CLOSED"

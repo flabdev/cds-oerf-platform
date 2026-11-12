@@ -90,6 +90,7 @@ PHASES: dict[str, str] = {
     "approval": "Approval",
     "secure_facility": "SecureFacility",
     "secure_facility_fallback": "SecureFacilityFallback",
+    "facility_decision": "FacilityDecision",
     "act": "Act",
     "verify": "Verify",
     "record_containment": "RecordContainment",
@@ -108,6 +109,7 @@ PHASES: dict[str, str] = {
 MODULES: dict[str, str] = {
     **{phase: f"domains.cold_chain_excursion.steps.{phase}" for phase in PHASES},
     "secure_facility_fallback": "domains.cold_chain_excursion.steps.secure_facility",
+    "facility_decision": "domains.cold_chain_excursion.steps.secure_facility",
 }
 
 

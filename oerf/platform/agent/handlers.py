@@ -111,6 +111,14 @@ def _required_mapping(source: Mapping[str, Any] | None, key: str, step: str) -> 
     return found
 
 
+def _cycle_step(envelope: StepEnvelope) -> str:
+    """Use a separate idempotency key for each post-reopen workflow cycle."""
+    cycle = envelope.workflow.get("reopen_cycle", 0)
+    if not isinstance(cycle, int) or isinstance(cycle, bool) or cycle < 0:
+        raise StepError("workflow reopen_cycle must be a non-negative integer")
+    return envelope.step if cycle == 0 else f"{envelope.step}#{cycle}"
+
+
 def _replay(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope | None:
     """The response this step already produced, when it ran before.
 
@@ -120,7 +128,9 @@ def _replay(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvel
     return _replayed(
         envelope,
         dependencies.results.get(
-            tenant_id=envelope.tenant_id, incident_id=envelope.incident_id, step=envelope.step
+            tenant_id=envelope.tenant_id,
+            incident_id=envelope.incident_id,
+            step=_cycle_step(envelope),
         ),
     )
 
@@ -361,7 +371,9 @@ def _ship_time(workflow: Mapping[str, Any], context: Mapping[str, Any] | None) -
     )
 
 
-def _recovery_options(context: Mapping[str, Any], include_continue: bool) -> list[RecoveryOption]:
+def _recovery_options(
+    context: Mapping[str, Any], include_continue: bool, used_minutes: float = 0.0
+) -> list[RecoveryOption]:
     """Build rule inputs from the gathered context, rejecting junk candidates."""
     candidates = field(context, "facilities")
     if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
@@ -378,7 +390,12 @@ def _recovery_options(context: Mapping[str, Any], include_continue: bool) -> lis
             )
         )
     if include_continue:
-        options.append(RecoveryOption(id="continue", drive_min=0.0, kind="continue"))
+        shipment = mapping(context, "shipment")
+        eta = field(shipment, "eta_min_at_excursion")
+        continue_drive_min = max(0.0, float(eta) - used_minutes) if eta is not None else 0.0
+        options.append(
+            RecoveryOption(id="continue", drive_min=continue_drive_min, kind="continue")
+        )
     return options
 
 
@@ -457,7 +474,9 @@ def assess(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
             cooldown_rate_c_per_min=float(assessment.cooldown_rate_c_per_min),
             min_spare_allowance_min=float(assessment.min_spare_allowance_min),
         )
-        options = _recovery_options(context, assessment.include_continue_option)
+        options = _recovery_options(
+            context, assessment.include_continue_option, used_minutes=elapsed
+        )
     except (TypeError, ValueError, ValidationError) as exc:
         raise MissingStepInput(f"the gathered context cannot be assessed: {exc}") from exc
 
@@ -528,6 +547,10 @@ _APPROVAL_CANCEL = frozenset({"cancel", "cancelled", "canceled"})
 #: Partner-confirmation answers a facility reply may carry.
 _FACILITY_ACCEPT = frozenset({"accept", "accepted", "confirm", "confirmed", "yes", "answer"})
 _FACILITY_DECLINE = frozenset({"decline", "declined", "reject", "rejected", "no", "busy"})
+
+#: The facility engagement SecureFacility contacts and the ask it makes (C13).
+_FACILITY_ROLE = "facility"
+_FACILITY_ASK = "accept"
 
 
 def _approval_sources(
@@ -934,12 +957,137 @@ def secure_facility(envelope: StepEnvelope, dependencies: StepDependencies) -> S
         next_option_id=record["next_option_id"],
     )
     workflow["facility"] = record
+    # C13: record the engagement the facility contact/wait will use. The nested
+    # ``EngageFacilityAccept`` state starts ``engage_party_v1`` with this request,
+    # which stores the task token on ``ENG#`` and sends ``facility_request`` to the
+    # chosen facility. ``FacilityDecision`` turns the answer into the gate below.
+    if record["kind"] == "facility" and record["contact_id"]:
+        workflow["facility_request"] = {
+            "engagement_id": f"ENG-{envelope.incident_id}-{_FACILITY_ROLE}-{_FACILITY_ASK}",
+            "policy_id": "partner_request",
+            "role": _FACILITY_ROLE,
+            "ask": _FACILITY_ASK,
+            "facility_id": facility_id,
+            "contact_id": record["contact_id"],
+            "next_option_id": record["next_option_id"],
+        }
     return apply(
         WorkflowStep(
             step=envelope.step,
             workflow=workflow,
             decision=outcome,
             result={"accepted": record["accepted"], "facility_id": facility_id},
+            incident_state="SECURING_FACILITY",
+            current_stage="SECURING_FACILITY",
+        ),
+        envelope,
+        dependencies,
+    )
+
+
+def _child_result(workflow: Mapping[str, Any], key: str) -> dict[str, Any]:
+    """The inner result of a nested ``startExecution.sync:2`` child, or ``{}``.
+
+    ``.sync:2`` returns ``{"ExecutionArn", "Status", "Output": {...}}`` on AWS,
+    while the offline simulator flattens the child output to the state root, so
+    both shapes are read here and a missing child stays empty.
+    """
+
+    engagement = mapping(workflow, key) or {}
+    inner = mapping(engagement, "engagement_result")
+    if inner:
+        return inner
+    output = field(engagement, "Output")
+    if isinstance(output, Mapping):
+        return dict(output)
+    # The offline simulator may place the child's terminal payload directly
+    # under the facility_engagement key instead of retaining the .sync:2 wrapper.
+    if "status" in engagement or "response" in engagement:
+        return dict(engagement)
+    return {}
+
+
+@handles("FacilityDecision")
+def facility_decision(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
+    """Turn the facility engagement's answer into the ``$.facility`` gate.
+
+    ``EngageFacilityAccept`` runs ``engage_party_v1`` for the facility role, which
+    contacts the chosen facility and waits for Accept or Decline (the
+    ``partner_request`` ladder, bounded by its own ``exhaust_after``). This step
+    maps the child's terminal output onto ``FacilityAccepted?``:
+
+    * ``answered`` with ``accept`` -> ``accepted`` true, so the run advances to ``Act``.
+    * ``answered`` with ``decline`` -> ``accepted`` false and the next feasible
+      option is preserved, so ``SecureFacilityFallback`` requests ``FAC-B`` (#66).
+    * ``exhausted`` (no answer within the ladder), a timeout, or an unusable
+      reply -> ``accepted`` false with no next option, so the definition escalates.
+
+    The request the facility was contacted on is ``workflow.facility_request``; the
+    facility gate ``SecureFacility`` wrote carries ``facility_id`` and
+    ``next_option_id``.
+    """
+
+    replay = _replay(envelope, dependencies)
+    if replay is not None:
+        return replay
+
+    workflow = dict(envelope.workflow)
+    request = mapping(workflow, "facility_request") or {}
+    if not request:
+        raise MissingStepInput("FacilityDecision needs the facility engagement request")
+    carried = dict(mapping(workflow, "facility") or {})
+    facility_id = text(carried, "facility_id") or text(request, "facility_id")
+    next_option_id = text(carried, "next_option_id") or text(request, "next_option_id")
+    result = _child_result(workflow, "facility_engagement")
+    status = text(result, "status")
+    response = mapping(result, "response") or {}
+    intent = text(result, "intent") or text(response, "intent")
+
+    if status == "answered" and intent == "accept":
+        accepted = True
+        outcome_reason = "answered"
+    elif status == "answered" and intent == "decline":
+        accepted = False
+        outcome_reason = "declined"
+    else:
+        # No answer within the ladder, a timeout, or an unusable reply escalates.
+        accepted = False
+        next_option_id = None
+        outcome_reason = status or "no_answer"
+
+    facility_response = {"status": status or "no_answer", "reason": outcome_reason}
+    if intent is not None:
+        facility_response["intent"] = intent
+    record = {
+        **carried,
+        "accepted": accepted,
+        "facility_id": facility_id,
+        "kind": text(carried, "kind") or "facility",
+        "next_option_id": next_option_id,
+        "response": facility_response,
+        "decided_at": dependencies.stamp(),
+    }
+    workflow["facility"] = record
+    workflow["facility_response"] = facility_response
+    config = pinned_config(incident_for(envelope, dependencies), dependencies)
+    outcome = decision(
+        "facility.accept",
+        config=config,
+        inputs={
+            "facility_id": facility_id,
+            "status": facility_response["status"],
+            "accepted": accepted,
+        },
+        accepted=accepted,
+        facility_id=facility_id,
+        next_option_id=next_option_id,
+    )
+    return apply(
+        WorkflowStep(
+            step=envelope.step,
+            workflow=workflow,
+            decision=outcome,
+            result={"accepted": accepted, "facility_id": facility_id},
             incident_state="SECURING_FACILITY",
             current_stage="SECURING_FACILITY",
         ),
@@ -1217,6 +1365,20 @@ def verify(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
         reopened=status == REOPENED,
     )
     workflow["containment"] = containment
+    monitor_done = workflow.get("qa_monitor_mode") is True and status == CONTAINED
+    if monitor_done:
+        workflow["qa_monitor_done"] = True
+        # A QA monitor is observational: it must not advance the incident state
+        # while the QA branch owns the pending disposition transition.
+        return envelope.model_copy(
+            update={
+                "workflow": workflow,
+                "containment": containment,
+                "decision": outcome,
+                "current_stage": "AWAITING_DISPOSITION",
+                "incident_state": "AWAITING_DISPOSITION",
+            }
+        )
     return apply(
         WorkflowStep(
             step=envelope.step,
@@ -1225,6 +1387,7 @@ def verify(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
             result={"status": status, "temperature_c": reading, "attempt": attempt},
             incident_state="VERIFYING",
             current_stage="VERIFYING",
+            hold=status == REOPENED,
         ),
         envelope,
         dependencies,
@@ -1389,11 +1552,19 @@ def handle_reopen(envelope: StepEnvelope, dependencies: StepDependencies) -> Ste
     containment = _gate(envelope, workflow, "containment") or {}
     if text(containment, "status") not in {"reopened", "contained"}:
         raise MissingStepInput("HandleReopen needs a reopened containment verdict")
+    workflow["reopen_cycle"] = int(workflow.get("reopen_cycle", 0)) + 1
     workflow["containment"] = {
         **containment,
         "status": "reopened",
         "reopened_at": dependencies.stamp(),
     }
+    # A pending QA callback belongs to the containment version that was just
+    # invalidated. Removing its private token makes a late verdict a no-op.
+    if dependencies.qa_reviews is not None:
+        dependencies.qa_reviews.delete(
+            tenant_id=envelope.tenant_id,
+            incident_id=envelope.incident_id,
+        )
     return apply(
         WorkflowStep(
             step=envelope.step,

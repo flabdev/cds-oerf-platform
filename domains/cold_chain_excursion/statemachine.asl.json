@@ -332,6 +332,89 @@
       ],
       "Next": "CancelAfterSecureFacility?"
     },
+    "EngageFacilityAccept": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn": "__ENGAGE_PARTY_ARN__",
+        "Input": {
+          "tenant_id.$": "$.tenant_id",
+          "incident_id.$": "$.incident_id",
+          "engagement_id.$": "$.workflow.facility_request.engagement_id",
+          "role.$": "$.workflow.facility_request.role",
+          "ask.$": "$.workflow.facility_request.ask",
+          "policy_id.$": "$.workflow.facility_request.policy_id",
+          "facts.$": "$.context"
+        }
+      },
+      "ResultPath": "$.workflow.facility_engagement",
+      "TimeoutSeconds": 86400,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterEngageFacility?"
+    },
+    "CancelAfterEngageFacility?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "FacilityDecision"
+    },
+    "FacilityDecision": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STEP_SECURE_FACILITY_ARN__",
+        "Payload": {
+          "step_name": "FacilityDecision",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "FacilityAccepted?"
+    },
     "FacilityAccepted?": {
       "Type": "Choice",
       "Choices": [
@@ -395,7 +478,9 @@
       ],
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.failure",
           "Next": "RecordFailure"
         }
@@ -407,8 +492,14 @@
       "Choices": [
         {
           "And": [
-            {"Variable": "$.cancel_requested", "IsPresent": true},
-            {"Variable": "$.cancel_requested", "BooleanEquals": true}
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
           ],
           "Next": "Cancel"
         }
@@ -420,8 +511,14 @@
       "Choices": [
         {
           "And": [
-            {"Variable": "$.facility.accepted", "IsPresent": true},
-            {"Variable": "$.facility.accepted", "BooleanEquals": true}
+            {
+              "Variable": "$.facility.accepted",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.facility.accepted",
+              "BooleanEquals": true
+            }
           ],
           "Next": "Act"
         }
@@ -746,101 +843,6 @@
         }
       ],
       "Next": "CancelAfterGenerateReport?"
-    },
-    "QAReviewWait": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
-      "Parameters": {
-        "FunctionName": "__STEP_QA_ARN__",
-        "Payload": {
-          "step_name": "QA",
-          "workflow.$": "$",
-          "task_token.$": "$$.Task.Token"
-        }
-      },
-      "ResultPath": "$.qa_review",
-      "TimeoutSeconds": 604800,
-      "Retry": [
-        {
-          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {"ErrorEquals": ["States.Timeout"], "ResultPath": "$.failure", "Next": "RecordFailure"},
-        {"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "RecordFailure"}
-      ],
-      "Next": "QA"
-    },
-    "QA": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {
-        "FunctionName": "__STEP_QA_ARN__",
-        "Payload": {
-          "step_name": "QA",
-          "workflow.$": "$"
-        }
-      },
-      "OutputPath": "$.Payload",
-      "TimeoutSeconds": 60,
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException",
-            "Lambda.TooManyRequestsException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.failure",
-          "Next": "RecordFailure"
-        }
-      ],
-      "Next": "CancelAfterQA?"
-    },
-    "QADecision": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "And": [
-            {
-              "Variable": "$.qa.disposition",
-              "IsPresent": true
-            },
-            {
-              "Variable": "$.qa.disposition",
-              "StringEquals": "approved"
-            }
-          ],
-          "Next": "Close"
-        },
-        {
-          "And": [
-            {
-              "Variable": "$.qa.disposition",
-              "IsPresent": true
-            },
-            {
-              "Variable": "$.qa.disposition",
-              "StringEquals": "rejected"
-            }
-          ],
-          "Next": "HandleReopen"
-        }
-      ],
-      "Default": "FailureRoute"
     },
     "Close": {
       "Type": "Task",
@@ -1286,6 +1288,17 @@
           "Next": "Cancel"
         }
       ],
+      "Default": "FacilityContact?"
+    },
+    "FacilityContact?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.workflow.facility_request",
+          "IsPresent": true,
+          "Next": "EngageFacilityAccept"
+        }
+      ],
       "Default": "FacilityAccepted?"
     },
     "CancelAfterAct?": {
@@ -1381,7 +1394,7 @@
           "Next": "Cancel"
         }
       ],
-      "Default": "VerifyLoop"
+      "Default": "NotifyReopenDriver"
     },
     "CancelAfterRecordContainment?": {
       "Type": "Choice",
@@ -1438,26 +1451,7 @@
           "Next": "Cancel"
         }
       ],
-      "Default": "QAReviewWait"
-    },
-    "CancelAfterQA?": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "And": [
-            {
-              "Variable": "$.cancel_requested",
-              "IsPresent": true
-            },
-            {
-              "Variable": "$.cancel_requested",
-              "BooleanEquals": true
-            }
-          ],
-          "Next": "Cancel"
-        }
-      ],
-      "Default": "QADecision"
+      "Default": "StartQAAndMonitor"
     },
     "CancelAfterEngageDriverDiagnosis?": {
       "Type": "Choice",
@@ -1477,6 +1471,465 @@
         }
       ],
       "Default": "Assess"
+    },
+    "StartQAAndMonitor": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "QAReviewWait",
+          "States": {
+            "QAReviewWait": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+              "Parameters": {
+                "FunctionName": "__STEP_QA_ARN__",
+                "Payload": {
+                  "step_name": "QA",
+                  "workflow.$": "$",
+                  "task_token.$": "$$.Task.Token"
+                }
+              },
+              "ResultPath": "$.qa_review",
+              "TimeoutSeconds": 604800,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.Timeout"
+                  ],
+                  "ResultPath": "$.failure",
+                  "Next": "QAReviewFailed"
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.failure",
+                  "Next": "QAReviewFailed"
+                }
+              ],
+              "Next": "QA"
+            },
+            "QA": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "__STEP_QA_ARN__",
+                "Payload": {
+                  "step_name": "QA",
+                  "workflow.$": "$"
+                }
+              },
+              "OutputPath": "$.Payload",
+              "TimeoutSeconds": 60,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.failure",
+                  "Next": "QAReviewFailed"
+                }
+              ],
+              "Next": "CancelAfterQA?"
+            },
+            "CancelAfterQA?": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.cancel_requested",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.cancel_requested",
+                      "BooleanEquals": true
+                    }
+                  ],
+                  "Next": "QACancelled"
+                }
+              ],
+              "Default": "QADecision"
+            },
+            "QADecision": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.qa.disposition",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.qa.disposition",
+                      "StringEquals": "approved"
+                    }
+                  ],
+                  "Next": "QAApproved"
+                },
+                {
+                  "And": [
+                    {
+                      "Variable": "$.qa.disposition",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.qa.disposition",
+                      "StringEquals": "rejected"
+                    }
+                  ],
+                  "Next": "QARejected"
+                }
+              ],
+              "Default": "QAReviewFailed"
+            },
+            "QAApproved": {
+              "Type": "Pass",
+              "End": true
+            },
+            "QARejected": {
+              "Type": "Pass",
+              "End": true
+            },
+            "QACancelled": {
+              "Type": "Pass",
+              "End": true
+            },
+            "QAReviewFailed": {
+              "Type": "Fail",
+              "Error": "ColdChain.QAReviewFailed",
+              "Cause": "QA review failed."
+            }
+          }
+        },
+        {
+          "StartAt": "MarkQAMonitor",
+          "States": {
+            "MarkQAMonitor": {
+              "Type": "Pass",
+              "Result": true,
+              "ResultPath": "$.workflow.qa_monitor_mode",
+              "Next": "WaitForMonitoringPoll"
+            },
+            "WaitForMonitoringPoll": {
+              "Type": "Wait",
+              "Seconds": 30,
+              "Next": "MonitorVerify"
+            },
+            "MonitorVerify": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "__STEP_VERIFY_ARN__",
+                "Payload": {
+                  "step_name": "Verify",
+                  "workflow.$": "$"
+                }
+              },
+              "OutputPath": "$.Payload",
+              "TimeoutSeconds": 60,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "MonitorVerdict"
+            },
+            "MonitorVerdict": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.workflow.qa_monitor_done",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.workflow.qa_monitor_done",
+                      "BooleanEquals": true
+                    }
+                  ],
+                  "Next": "MonitoringComplete"
+                },
+                {
+                  "And": [
+                    {
+                      "Variable": "$.containment.status",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.containment.status",
+                      "StringEquals": "reopened"
+                    }
+                  ],
+                  "Next": "RaiseReopened"
+                },
+                {
+                  "And": [
+                    {
+                      "Variable": "$.containment.status",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.containment.status",
+                      "StringEquals": "escalate"
+                    }
+                  ],
+                  "Next": "MonitoringFailed"
+                }
+              ],
+              "Default": "WaitForMonitoringPoll"
+            },
+            "RaiseReopened": {
+              "Type": "Fail",
+              "Error": "Reopened",
+              "Cause": "Temperature rose during QA; cancel the pending review and restart verification."
+            },
+            "MonitoringFailed": {
+              "Type": "Fail",
+              "Error": "ColdChain.MonitoringFailed",
+              "Cause": "The verification monitor failed."
+            },
+            "MonitoringComplete": {
+              "Type": "Succeed"
+            }
+          }
+        }
+      ],
+      "ResultSelector": {
+        "qa.$": "$[0]"
+      },
+      "ResultPath": "$.qa_parallel",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "Reopened"
+          ],
+          "ResultPath": "$.reopen_failure",
+          "Next": "HandleReopen"
+        },
+        {
+          "ErrorEquals": [
+            "ColdChain.MonitoringFailed"
+          ],
+          "ResultPath": "$.monitoring_failure",
+          "Next": "Escalate"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "QAParallelDecision"
+    },
+    "QAParallelDecision": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.cancel_requested",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.cancel_requested",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "Cancel"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.qa_parallel[0].qa.disposition",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.qa_parallel[0].qa.disposition",
+              "StringEquals": "approved"
+            }
+          ],
+          "Next": "UseApprovedQAResult"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.qa_parallel[0].qa.disposition",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.qa_parallel[0].qa.disposition",
+              "StringEquals": "rejected"
+            }
+          ],
+          "Next": "UseQAResult"
+        }
+      ],
+      "Default": "FailureRoute"
+    },
+    "UseApprovedQAResult": {
+      "Type": "Pass",
+      "Parameters": {
+        "qa.$": "$.qa_parallel[0].qa",
+        "tenant_id.$": "$.tenant_id",
+        "incident_id.$": "$.incident_id",
+        "shipment_id.$": "$.shipment_id",
+        "workflow.$": "$.qa_parallel[0].workflow",
+        "context.$": "$.qa_parallel[0].context",
+        "incident_state.$": "$.qa_parallel[0].incident_state",
+        "current_stage.$": "$.qa_parallel[0].current_stage",
+        "containment.$": "$.qa_parallel[0].containment",
+        "report.$": "$.qa_parallel[0].report"
+      },
+      "Next": "Close"
+    },
+    "UseQAResult": {
+      "Type": "Pass",
+      "Parameters": {
+        "qa.$": "$.qa_parallel[0].qa",
+        "tenant_id.$": "$.tenant_id",
+        "incident_id.$": "$.incident_id",
+        "shipment_id.$": "$.shipment_id",
+        "workflow.$": "$.qa_parallel[0].workflow",
+        "context.$": "$.qa_parallel[0].context",
+        "incident_state.$": "$.qa_parallel[0].incident_state",
+        "current_stage.$": "$.qa_parallel[0].current_stage",
+        "containment.$": "$.qa_parallel[0].containment",
+        "report.$": "$.qa_parallel[0].report"
+      },
+      "Next": "HandleReopen"
+    },
+    "NotifyReopenDriver": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CHANNEL_ROUTER_ARN__",
+        "Payload": {
+          "step_name": "EngagementSendOneWay",
+          "tenant_id.$": "$.tenant_id",
+          "incident_id.$": "$.incident_id",
+          "role": "driver",
+          "message": "reopen_alert",
+          "channel": "whatsapp",
+          "facts": {
+            "shipment_id.$": "$.shipment_id",
+            "containment.$": "$.workflow.containment",
+            "action.$": "$.workflow.action",
+            "facilities.$": "$.workflow.context.facilities",
+            "shipment.$": "$.workflow.context.shipment"
+          },
+          "dedupe_key.$": "States.Format('{}:reopen:{}:driver', $.incident_id, $.workflow.reopen_cycle)"
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 30,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
+          "Next": "NotifyReopenQA"
+        }
+      ],
+      "Next": "NotifyReopenQA"
+    },
+    "NotifyReopenQA": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CHANNEL_ROUTER_ARN__",
+        "Payload": {
+          "step_name": "EngagementSendOneWay",
+          "tenant_id.$": "$.tenant_id",
+          "incident_id.$": "$.incident_id",
+          "role": "qa",
+          "message": "reopen_alert",
+          "channel": "whatsapp",
+          "facts": {
+            "shipment_id.$": "$.shipment_id",
+            "containment.$": "$.workflow.containment",
+            "action.$": "$.workflow.action",
+            "facilities.$": "$.workflow.context.facilities"
+          },
+          "dedupe_key.$": "States.Format('{}:reopen:{}:qa', $.incident_id, $.workflow.reopen_cycle)"
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 30,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
+          "Next": "VerifyLoop"
+        }
+      ],
+      "Next": "VerifyLoop"
     }
   }
 }

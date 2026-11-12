@@ -65,6 +65,7 @@ def test_phase_map_covers_the_frozen_modules() -> None:
         "approval": "Approval",
         "secure_facility": "SecureFacility",
         "secure_facility_fallback": "SecureFacilityFallback",
+        "facility_decision": "FacilityDecision",
         "act": "Act",
         "verify": "Verify",
         "record_containment": "RecordContainment",
@@ -79,6 +80,11 @@ def test_phase_map_covers_the_frozen_modules() -> None:
         "cancel": "Cancel",
     }
     assert runtime.MODULES["secure_facility_fallback"] == runtime.MODULES["secure_facility"]
+    assert runtime.MODULES["facility_decision"] == runtime.MODULES["secure_facility"]
+    assert runtime.phase_for("FacilityDecision") == "facility_decision"
+    assert runtime.module_for("FacilityDecision") == (
+        "domains.cold_chain_excursion.steps.secure_facility"
+    )
     assert set(runtime.PHASES.values()) <= set(HANDLERS)
 
 
