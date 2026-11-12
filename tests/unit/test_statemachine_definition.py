@@ -154,7 +154,8 @@ def test_wired_tasks_resolve_to_their_function_arns() -> None:
     def find_state(name: str) -> dict:
         if name in states:
             return states[name]
-        for machine in (states["StartQAAndMonitor"].get("Branches", []) if "StartQAAndMonitor" in states else []):
+        branches = states.get("StartQAAndMonitor", {}).get("Branches", [])
+        for machine in branches:
             if name in machine.get("States", {}):
                 return machine["States"][name]
         raise AssertionError(f"state not found: {name}")
@@ -786,7 +787,10 @@ def test_definition_guards_against_orphaned_executions() -> None:
     # so the execution timeout lives in the ASL top level instead.
     definition = load_definition()
     assert definition["TimeoutSeconds"] == 8 * 24 * 60 * 60
-    assert definition["States"]["StartQAAndMonitor"]["Branches"][0]["States"]["QAReviewWait"]["TimeoutSeconds"] == 7 * 24 * 60 * 60
+    qa_timeout = definition["States"]["StartQAAndMonitor"]["Branches"][0]["States"][
+        "QAReviewWait"
+    ]["TimeoutSeconds"]
+    assert qa_timeout == 7 * 24 * 60 * 60
 
     # Walk Next, Default, Choices[].Next, and Catch[].Next from StartAt.
     # Nested Parallel branches and Map ItemProcessor/Iterator are separate
@@ -941,7 +945,6 @@ def simulate(event: dict, handler_fn=handler, max_steps: int = 48) -> tuple:
             qa_result = handler_fn({"step_name": "QA", "workflow": qa_result}, None)
 
             monitor_result = dict(data)
-            monitor_states = state["Branches"][1]["States"]
             monitor_result["workflow"] = dict(monitor_result.get("workflow", {}))
             monitor_result["workflow"]["qa_monitor_mode"] = True
             monitor_result = handler_fn(

@@ -414,7 +414,9 @@ def _open(shipment_id: str = SHIPMENT, temperature_c: float = 8.1):
     shipment = next(row for row in shipments if row["shipment_id"] == shipment_id)
     shipment["product_profile_id"] = shipment["product_profile"]
     messages = json.loads((ROOT / "domains" / "cold_chain_excursion" / "messages.json").read_text())
-    dependencies = _dependencies(facilities, get_config(TENANT, "cold_chain_excursion"), shipment_id)
+    dependencies = _dependencies(
+        facilities, get_config(TENANT, "cold_chain_excursion"), shipment_id
+    )
     gathered = HANDLERS["GatherContext"](
         _envelope(
             "GatherContext",
