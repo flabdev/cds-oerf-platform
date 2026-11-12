@@ -219,7 +219,7 @@ class OerfObservabilityStack(Stack):
         if ingest is not None:
             ingest_p95 = ingest.metric_duration(statistic="p95", period=_PERIOD)
             ingest_alarm = self._alarm(
-                "IngestReadingToIncidentP95",
+                "IngestDurationP95",
                 ingest_p95,
                 threshold=3000,
             )

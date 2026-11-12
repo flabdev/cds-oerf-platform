@@ -93,7 +93,7 @@ Expect a line like `applied t1 live-contacts driver 2`. A missing parameter prin
 | Driver | Contact | Shipment | Device |
 | --- | --- | --- | --- |
 | Mudita | `C-T1-DRV` | `PH-2841` | `RF-7781` |
-| Ananda | `C-T1-DRV-ANANDA` | `<fill in from sim/seed/t1>` | `<fill in>` |
+| Ananda | `C-T1-DRV-ANANDA` | `PH-3102` | `RF-9102` |
 | Vivek | `C-T1-DRV-VIVEK` | `<fill in from sim/seed/t1>` | `<fill in>` |
 
 The commands below use `PH-2841` / `RF-7781`. For a walk on Ananda's or Vivek's phone, use their shipment and device instead. The three-driver rehearsal needs all three rows seeded and all three driver parameters present.
@@ -145,7 +145,7 @@ The child sends one session message, `Thanks, noted: Running. We're checking the
 
 Verify reads the stored readings. The in-range series above is already long enough, so the first Verify can contain the excursion. The loop waits 60 seconds and tries again, up to 20 times, while the latest reading is still hot or the in-range run is shorter than 5 minutes.
 
-After the report is generated, the run waits at `QAReviewWait` for a reviewer's verdict (up to 7 days). The desk has no QA button yet, so the verdict is given from the terminal:
+After the report is generated, the run waits at `QAReviewWait` for a reviewer's verdict (up to 7 days). On the desk, a tenant admin or platform admin sees **QA review pending**, then **Approve** (release), **Reject — quarantine**, or **Reject**. An ops user sees the pending line and no verdict buttons. Re-open the incident if the buttons are not there yet: the callback row is not broadcast. The same verdict can still be given from the terminal:
 
 1. In the browser window signed in as the tenant admin (`admin-t1-dev@example.com`), open the developer tools and copy the session storage value `oerf.idToken`.
 2. Run:

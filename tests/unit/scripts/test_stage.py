@@ -109,7 +109,8 @@ def test_demo_numbers_share_one_prefix_per_stage(capsys: pytest.CaptureFixture[s
 def test_live_driver_names_follow_the_stage_prefix() -> None:
     names = live_driver_parameter_names("/oerf/dev/demo-numbers")
     assert "/oerf/dev/demo-numbers/t1/driver/C-T1-DRV" in names
-    assert "/oerf/dev/demo-numbers/t1/driver/C-T1-DRV-ANANDA" not in names
+    assert "/oerf/dev/demo-numbers/t1/driver/C-T1-DRV-ANANDA" in names
+    assert "/oerf/dev/demo-numbers/t1/driver/C-T1-DRV-VIVEK" not in names
     assert all(name.startswith("/oerf/dev/demo-numbers/") for name in names)
     assert all("/driver/" in name for name in names)
 

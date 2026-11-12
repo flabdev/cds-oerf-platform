@@ -4,11 +4,11 @@ title = "cds-oerf-platform"
 useDefault = true
 
 [allowlist]
-description = "Fixtures, seed tokens, IAM docs, and generated caches"
+description = "Generated caches and seed phone tokens"
 paths = [
-  '''tests[/\\]''',
-  '''sim[/\\]seed[/\\]''',
-  '''docs[/\\]''',
+  '''tests[/\\]unit[/\\]security[/\\]test_synth_secrets\.py$''',
+  '''(?:^|[/\\])pr-32\.diff$''',
+  '''(?:^|[/\\])my-pr-32\.diff$''',
   '''(?:^|[/\\])\.jsii-cache(?:-ssm)?(?:[/\\]|$)''',
   '''(?:^|[/\\])\.venv(?:[/\\]|$)''',
   '''(?:^|[/\\])venv(?:[/\\]|$)''',

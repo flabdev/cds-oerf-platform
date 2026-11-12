@@ -228,6 +228,20 @@ def test_preflight_live_checks_the_driver_parameter_without_printing_it(
             "WithDecryption": True,
         },
     )
+    ssm_stub.add_response(
+        "get_parameter",
+        {
+            "Parameter": {
+                "Name": "/oerf/demo-numbers/t1/driver/C-T1-DRV-ANANDA",
+                "Value": PHONE,
+                "Type": "SecureString",
+            }
+        },
+        {
+            "Name": "/oerf/demo-numbers/t1/driver/C-T1-DRV-ANANDA",
+            "WithDecryption": True,
+        },
+    )
     session.clients["ssm"] = ssm
 
     code = main(

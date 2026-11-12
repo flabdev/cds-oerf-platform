@@ -40,7 +40,11 @@ test("actions follow the state, and escalation freezes on the timeline", () => {
     pick: true,
     confirm: false,
     cancel: true,
+    qa: false,
   });
+  assert.equal(visibleActions({ state: "AWAITING_DISPOSITION", qa_review_pending: true }).qa, true);
+  assert.equal(visibleActions({ state: "CLOSED", qa_review_pending: true }).qa, false);
+  assert.equal(visibleActions({ state: "AWAITING_DISPOSITION" }).qa, false);
   assert.equal(visibleActions({ state: "IN_TRANSIT", engagement_id: "ENG-1", engagement_status: "WAITING" }).confirm, true);
   assert.equal(visibleActions({ state: "IN_TRANSIT", engagement_id: "ENG-1", engagement_status: "ANSWERED" }).confirm, false);
   assert.equal(visibleActions({ state: "VERIFYING" }).confirm, false);

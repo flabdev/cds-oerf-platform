@@ -362,6 +362,7 @@ class InboundDependencies:
     sandbox: SandboxStore | None = None
     audience: AudienceStore | None = None
     sandbox_join_enabled: bool = True
+    audience_join_enabled: bool = True
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
 
 
@@ -373,6 +374,12 @@ def sandbox_join_enabled() -> bool:
     """True only when the stage sets ``SANDBOX_JOIN_ENABLED=true``. Main leaves it off."""
 
     return os.environ.get("SANDBOX_JOIN_ENABLED", "").strip().lower() == "true"
+
+
+def audience_join_enabled() -> bool:
+    """True only when the stage sets ``AUDIENCE_JOIN_ENABLED=true``. The default is off."""
+
+    return os.environ.get("AUDIENCE_JOIN_ENABLED", "").strip().lower() == "true"
 
 
 def build_dependencies(*, clock: Callable[[], datetime] | None = None) -> InboundDependencies:
@@ -395,6 +402,7 @@ def build_dependencies(*, clock: Callable[[], datetime] | None = None) -> Inboun
     moment = clock or (lambda: datetime.now(UTC))
     stepfunctions = boto3.client("stepfunctions")
     join_enabled = sandbox_join_enabled()
+    audience_enabled = audience_join_enabled()
     return InboundDependencies(
         dedupe=DynamoMessageDedupe(_client, ROUTING_TABLE_NAME),
         engagements=DynamoEngagementStore(_client, INCIDENT_TABLE_NAME, ROUTING_TABLE_NAME),
@@ -414,9 +422,10 @@ def build_dependencies(*, clock: Callable[[], datetime] | None = None) -> Inboun
             ROUTING_TABLE_NAME,
             shipment_pool(),
         )
-        if join_enabled
+        if audience_enabled
         else None,
         sandbox_join_enabled=join_enabled,
+        audience_join_enabled=audience_enabled,
         clock=moment,
     )
 
@@ -530,7 +539,7 @@ def process_message(body: dict[str, Any], dependencies: InboundDependencies) -> 
             return f"sandbox_{joined.outcome}"
     if (
         dependencies.audience is not None
-        and dependencies.sandbox_join_enabled
+        and dependencies.audience_join_enabled
         and is_audience_join(message.text)
     ):
         audience = handle_audience_message(
@@ -1070,7 +1079,7 @@ def _unowned_kind(
 
     if is_join(message.text):
         return None
-    if is_audience_join(message.text) and dependencies.sandbox_join_enabled:
+    if is_audience_join(message.text) and dependencies.audience_join_enabled:
         return None
     if is_opt_out(message.text):
         if dependencies.registry is None:

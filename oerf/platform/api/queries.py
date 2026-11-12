@@ -103,6 +103,7 @@ class DynamoIncidentQuery:
             "options": recommendation["options"] if recommendation else [],
             "engagement_id": engagement_id,
             "engagement_status": engagement_status,
+            "qa_review_pending": self._qa_review_pending(pk),
             "timeline": timeline,
             "readings": readings,
         }
@@ -151,6 +152,16 @@ class DynamoIncidentQuery:
         if recommended is None and not public:
             return None
         return {"recommended_option": recommended, "options": public}
+
+    def _qa_review_pending(self, pk: str) -> bool:
+        """True when a callback row exists. The token is not read."""
+
+        loaded = self._client.get_item(
+            TableName=self._table,
+            Key=key(pk, "QA_REVIEW"),
+            ProjectionExpression="pk",
+        )
+        return bool(loaded.get("Item"))
 
     def _engagement(self, pk: str) -> tuple[str | None, str | None]:
         waiting: tuple[str | None, str | None] | None = None

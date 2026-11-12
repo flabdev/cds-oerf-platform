@@ -17,7 +17,7 @@ from typing import Any
 
 from oerf.platform.channels.address import driver_demo_number_name
 from scripts._stage import remember_stage, resolve_stage
-from scripts.seed_runtime import DEMO_TENANTS
+from scripts.seed_runtime import DEMO_TENANTS, contact_is_live
 from sim.seed.load import load_seed
 
 
@@ -81,7 +81,7 @@ def live_driver_parameter_names(prefix: str) -> list[str]:
         for contact in load_seed(tenant_id)["contacts"]:
             if contact.get("party_role") != "driver":
                 continue
-            if contact.get("live_contacts") is False:
+            if not contact_is_live(contact):
                 continue
             names.append(
                 driver_demo_number_name(tenant_id, str(contact["contact_id"]), prefix=prefix)

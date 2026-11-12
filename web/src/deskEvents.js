@@ -32,6 +32,15 @@ export function subscribeBody(scope, incidentId) {
   return { scope: "tenant" };
 }
 
+/** One connection is one scope. The list stays subscribed while an incident is open. */
+export function deskSubscriptions(watchId) {
+  const subscriptions = [{ scope: "tenant", incidentId: "" }];
+  if (typeof watchId === "string" && watchId.trim()) {
+    subscriptions.push({ scope: "incident", incidentId: watchId.trim() });
+  }
+  return subscriptions;
+}
+
 export function acceptDeskEvent(raw, binding) {
   const message = parse(raw);
   if (!message || message.tenant_id !== binding.tenantId) {

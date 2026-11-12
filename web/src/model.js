@@ -103,7 +103,12 @@ const ACTION_NAMES = {
   cancel: "Cancel",
   confirm_transfer: "Confirm transfer",
   pick_option: "Pick option",
+  review_qa: "QA review",
 };
+
+export function canReviewQa(role) {
+  return role === "tenant_admin" || role === "platform_admin";
+}
 
 export function needsWaitingEngagement(action) {
   return action === "confirm_transfer" || action === "pick_option";
@@ -136,6 +141,18 @@ export function applySampleAction(incidents, incidentId, action, optionId, at = 
     if (action === "cancel") {
       timeline.push({ at: stamp, from_state: item.state, to_state: "CANCELLED" });
       return { ...item, state: "CANCELLED", stage: "CANCELLED", timeline };
+    }
+    if (action === "review_qa") {
+      const approved = optionId?.approved === true || optionId === "release";
+      const next = approved ? "CLOSED" : item.state;
+      timeline.push({ at: stamp, from_state: item.state, to_state: next });
+      return {
+        ...item,
+        qa_review_pending: false,
+        state: next,
+        stage: next,
+        timeline,
+      };
     }
     return item;
   });
@@ -315,6 +332,20 @@ function round(value) {
 
 function trimNumber(value) {
   return String(Math.round(value * 10) / 10);
+}
+
+export function qaReviewRequest(incidentId, actionId, review) {
+  return {
+    method: "POST",
+    path: `/incidents/${incidentId}/actions`,
+    idempotencyKey: actionId,
+    body: {
+      action: "review_qa",
+      action_id: actionId,
+      approved: review.approved === true,
+      disposition: review.disposition,
+    },
+  };
 }
 
 export function actionRequest(incidentId, action, optionId, actionId, engagementId) {
