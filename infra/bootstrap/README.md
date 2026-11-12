@@ -84,6 +84,8 @@ Every `aws` command below repeats `--profile Fission-OERF --region us-east-1` so
 
 Do not pass `whatsapp:wabaId` for dev. Dev does not create the WABA event destination. Dev receives the same inbound events by subscribing its queue to main's inbound topic.
 
+`whatsapp:stageUrlTemplates` defaults to false. The dev workflow passes it from the environment variable `STAGE_URL_TEMPLATES` (default false). When it is true and the stage is dev, the channel router gets `WHATSAPP_STAGE_URL_TEMPLATES=true` and sends `oerf_dev_ops_escalation_options` and `oerf_dev_qa_report_ready`. Main ignores the flag. Leave it false until both copies are APPROVED. `make dev-provider-check` is the read-only check.
+
 Find that topic ARN with a read-only call. The logical id starts with `InboundTopic`. The physical id is the topic ARN. Do not print it into a ticket.
 
 ```bash
@@ -113,7 +115,7 @@ make dev-diff      PROFILE=<aws-profile> ACCOUNT=<account-id>
 make dev-deploy    PROFILE=<aws-profile> ACCOUNT=<account-id>
 ```
 
-`dev-diff` and `dev-deploy` are the laptop form of the develop workflow. They resolve `WA_PHONE_NUMBER_ID`, `ALARM_EMAIL`, `SHARED_INBOUND_TOPIC_ARN`, and `CHANNELS_LIVE` in the workflow order: an environment variable, then `gh variable get <NAME> --env dev`, then the repository variable. The phone id then falls back to `/oerf/dev/whatsapp/phone-number-id`. A context key is omitted only when that value is empty. The phone id is required only when `channels:live` is true. A deployed router phone id, alarm email subscription, or dev subscription to main's inbound topic refuses an empty resolution unless `DEV_DEPLOY_ALLOW_OMIT=1`. They build `web/` and pass `stage=dev`, `account`, `agentcore:enabled=true`, `dashboard:enabled=true`, `desk:publish=true`, `auth:managedLogin=true`, and `channels:live`, plus `whatsapp:phoneNumberId`, `whatsapp:sharedInboundTopicArn`, and `alarms:email` when those values resolve. They do not pass `whatsapp:wabaId`. Normal dev deploys happen by merging to `develop`. These two targets are for a laptop.
+`dev-diff` and `dev-deploy` are the laptop form of the develop workflow. They resolve `WA_PHONE_NUMBER_ID`, `ALARM_EMAIL`, `SHARED_INBOUND_TOPIC_ARN`, `CHANNELS_LIVE`, and `STAGE_URL_TEMPLATES` in the workflow order: an environment variable, then `gh variable get <NAME> --env dev`, then the repository variable. The phone id then falls back to `/oerf/dev/whatsapp/phone-number-id`. Phone, topic, and email context keys are omitted only when that value is empty. `STAGE_URL_TEMPLATES` is always passed and defaults to false. The phone id is required only when `channels:live` is true. A deployed router phone id, alarm email subscription, or dev subscription to main's inbound topic refuses an empty resolution unless `DEV_DEPLOY_ALLOW_OMIT=1`. They build `web/` and pass `stage=dev`, `account`, `agentcore:enabled=true`, `dashboard:enabled=true`, `desk:publish=true`, `auth:managedLogin=true`, `channels:live`, and `whatsapp:stageUrlTemplates`, plus `whatsapp:phoneNumberId`, `whatsapp:sharedInboundTopicArn`, and `alarms:email` when those values resolve. They do not pass `whatsapp:wabaId`. Normal dev deploys happen by merging to `develop`. These two targets are for a laptop.
 
 A live rehearsal also needs: a demo-number parameter for each driver contact with `live_contacts` true (`make dev-preflight` prints the names, not the values), the dev desk user from `make dev-users` (the password is typed, not passed), `CHANNELS_LIVE=true` on the dev environment when channels should be live, and Bedrock model access for the dev runtime. See [run-the-demo.md](../../docs/run-the-demo.md).
 
@@ -446,7 +448,7 @@ aws cloudformation describe-stacks \
 
 GitHub dev deploys run automatically when a merge lands on `develop` (`.github/workflows/deploy.yml` runs CI first, then deploy). Pushes that change only Markdown under `docs/` or `*.md` files do not start a deploy. Manual runs use **Actions → Deploy OERF → Run workflow** with **Use workflow from: develop** only. After this PR merges, set the GitHub **dev** environment branch rule to **develop** only (remove any temporary feature branch).
 
-Each run uses `OerfGitHubDeployRole-dev`, assumes the oerfdev bootstrap roles, and targets the `*-dev` stacks. A push deploy uses `mode=deploy`, AgentCore and the dashboard on, `desk:publish=true`, `demo:seedDevices` off, and `channels:live` from the dev environment variable `CHANNELS_LIVE` (false when unset). A manual run keeps the workflow inputs (default `mode=diff`). When the dashboard flag is true, the workflow builds `web/` and passes `desk:publish=true`.
+Each run uses `OerfGitHubDeployRole-dev`, assumes the oerfdev bootstrap roles, and targets the `*-dev` stacks. A push deploy uses `mode=deploy`, AgentCore and the dashboard on, `desk:publish=true`, `demo:seedDevices` off, `channels:live` from the dev environment variable `CHANNELS_LIVE` (false when unset), and `whatsapp:stageUrlTemplates` from `STAGE_URL_TEMPLATES` (false when unset). A manual run keeps the workflow inputs (default `mode=diff`). When the dashboard flag is true, the workflow builds `web/` and passes `desk:publish=true`.
 
 ### 4. IAM simulation (dev deploy role)
 

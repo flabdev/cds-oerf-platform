@@ -74,6 +74,8 @@ jobs:
       AGENTCORE: ${{ github.event_name == 'push' && 'true' || ((inputs.agentcore == true || inputs.agentcore == 'true') && 'true' || 'false') }}
       DASHBOARD: ${{ github.event_name == 'push' && 'true' || ((inputs.dashboard == true || inputs.dashboard == 'true') && 'true' || 'false') }}
       CHANNELS_LIVE: ${{ github.event_name == 'push' && (vars.CHANNELS_LIVE == 'true' && 'true' || 'false') || ((inputs.channels_live == true || inputs.channels_live == 'true') && 'true' || 'false') }}
+      # Dev environment variable. Default false until both dev URL-button copies are APPROVED.
+      STAGE_URL_TEMPLATES: ${{ vars.STAGE_URL_TEMPLATES == 'true' && 'true' || 'false' }}
       SEED_DEMO_DEVICES: ${{ github.event_name == 'push' && 'false' || ((inputs.seed_demo_devices == true || inputs.seed_demo_devices == 'true') && 'true' || 'false') }}
 
     steps:
@@ -185,6 +187,9 @@ jobs:
               printf '%s\n' "desk:publish=true"
             fi
             printf '%s\n' "channels:live=${CHANNELS_LIVE}"
+            # False omits the dev URL-template names. Set STAGE_URL_TEMPLATES=true
+            # on the dev environment only after both dev copies are APPROVED.
+            printf '%s\n' "whatsapp:stageUrlTemplates=${STAGE_URL_TEMPLATES}"
             if [[ "${SEED_DEMO_DEVICES}" == "true" ]]; then
               printf '%s\n' "demo:seedDevices=true"
             fi

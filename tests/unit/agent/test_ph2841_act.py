@@ -44,7 +44,11 @@ class _Probe:
         body: str,
         template_id: str,
         parameters: tuple[str, ...] = (),
+        *,
+        incident_id: str | None = None,
+        report_id: str | None = None,
     ) -> ProviderResult:
+        del incident_id, report_id
         current = self.engagements.get(TENANT, "INC-000001", self._engagement_id(template_id))
         self.token_at_send = None if current is None else current.task_token
         self.calls.append((recipient, body, template_id, parameters))

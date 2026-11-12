@@ -25,5 +25,8 @@ class MessageProvider(Protocol):
         body: str,
         template_id: str,
         parameters: tuple[str, ...] = (),
+        *,
+        incident_id: str | None = None,
+        report_id: str | None = None,
     ) -> ProviderResult:
         """Deliver one already-rendered body. The router chooses the channel."""

@@ -236,6 +236,23 @@ class OerfComputeStack(Stack):
                 "social-messaging:SendWhatsAppMessage and "
                 "GetWhatsAppMessageMedia are scoped to that phone-number-id ARN"
             )
+        router_environment = {
+            "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
+            "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
+            "TENANT_TABLE_NAME": data_stack.tenant_table.table_name,
+            "USE_MOCK_WHATSAPP": channel_mock,
+            "USE_MOCK_SMS": channel_mock,
+            "WHATSAPP_PHONE_NUMBER_ID": whatsapp_phone_number_id,
+            "WA_PHONE_NUMBER_ID_PARAM": phone_param,
+            "SES_SOURCE_EMAIL": ses_source_email,
+            "USE_MOCK_EMAIL": channel_mock,
+        }
+        # Absent means today's template names. Set only for dev, and only
+        # after the dev URL-button copies are approved (context flag).
+        if not stage.is_main and _context_enabled(
+            self, "whatsapp:stageUrlTemplates", default=False
+        ):
+            router_environment["WHATSAPP_STAGE_URL_TEMPLATES"] = "true"
         self.channel_router_fn = self._function(
             "ChannelRouterFunction",
             function_name=stage.res("channel-router"),
@@ -244,17 +261,7 @@ class OerfComputeStack(Stack):
             timeout=Duration.seconds(30),
             environment=_with_dev_name(
                 stage,
-                {
-                    "ROUTING_TABLE_NAME": data_stack.routing_table.table_name,
-                    "INCIDENT_TABLE_NAME": data_stack.incident_table.table_name,
-                    "TENANT_TABLE_NAME": data_stack.tenant_table.table_name,
-                    "USE_MOCK_WHATSAPP": channel_mock,
-                    "USE_MOCK_SMS": channel_mock,
-                    "WHATSAPP_PHONE_NUMBER_ID": whatsapp_phone_number_id,
-                    "WA_PHONE_NUMBER_ID_PARAM": phone_param,
-                    "SES_SOURCE_EMAIL": ses_source_email,
-                    "USE_MOCK_EMAIL": channel_mock,
-                },
+                router_environment,
                 "DEMO_NUMBERS_PREFIX",
                 stage.ssm("demo-numbers"),
             ),

@@ -55,7 +55,11 @@ class _Probe:
         body: str,
         template_id: str,
         parameters: tuple[str, ...] = (),
+        *,
+        incident_id: str | None = None,
+        report_id: str | None = None,
     ) -> ProviderResult:
+        del incident_id, report_id
         self.calls.append((recipient, body, template_id, parameters))
         if self.simulated:
             return ProviderResult(
@@ -70,8 +74,17 @@ class _Probe:
 
 
 class _Boom:
-    def send(self, recipient: str, body: str, template_id: str, parameters: tuple = ()) -> None:
-        del recipient, body, template_id, parameters
+    def send(
+        self,
+        recipient: str,
+        body: str,
+        template_id: str,
+        parameters: tuple = (),
+        *,
+        incident_id: str | None = None,
+        report_id: str | None = None,
+    ) -> None:
+        del recipient, body, template_id, parameters, incident_id, report_id
         raise RuntimeError("provider down +910000000101")
 
 

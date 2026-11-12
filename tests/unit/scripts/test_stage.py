@@ -279,8 +279,9 @@ def test_url_button_proposal_names_the_dev_copies() -> None:
     assert "oerf_qa_report_ready" in text
     assert "oerf_dev_ops_escalation_options" in text
     assert "oerf_dev_qa_report_ready" in text
-    assert "dev desk URL" in text
-    assert "does not submit" in text or "do not submit" in text
+    assert "DashboardUrl" in text
+    assert "only the copies" in text
+    assert "not submitted from dev" in text
 
 
 def _gh(*rows: tuple[str, str | None, str]):
@@ -303,6 +304,7 @@ def test_mock_deploy_on_a_fresh_stack_omits_empty_values(
     )
     err = capsys.readouterr().err
     assert context["channels:live"] == "false"
+    assert context["whatsapp:stageUrlTemplates"] == "false"
     assert "whatsapp:phoneNumberId" not in context
     assert "whatsapp:sharedInboundTopicArn" not in context
     assert "alarms:email" not in context
@@ -451,12 +453,13 @@ def test_dev_deploy_resolution_order(capsys: pytest.CaptureFixture[str]) -> None
     overridden = resolve_inputs(
         _Recording(phone=phone_ssm),
         account=ACCOUNT,
-        environ={
-            "WA_PHONE_NUMBER_ID": phone_env,
-            "ALARM_EMAIL": "override@example.com",
-            "SHARED_INBOUND_TOPIC_ARN": topic,
-            "CHANNELS_LIVE": "false",
-        },
+            environ={
+                "WA_PHONE_NUMBER_ID": phone_env,
+                "ALARM_EMAIL": "override@example.com",
+                "SHARED_INBOUND_TOPIC_ARN": topic,
+                "CHANNELS_LIVE": "false",
+                "STAGE_URL_TEMPLATES": "false",
+            },
         gh_get=refuse_gh,
     )
     err = capsys.readouterr().err
@@ -464,10 +467,12 @@ def test_dev_deploy_resolution_order(capsys: pytest.CaptureFixture[str]) -> None
     assert overridden["alarms:email"] == "override@example.com"
     assert overridden["whatsapp:sharedInboundTopicArn"] == topic
     assert overridden["channels:live"] == "false"
+    assert overridden["whatsapp:stageUrlTemplates"] == "false"
     assert "WA_PHONE_NUMBER_ID override set" in err
     assert "ALARM_EMAIL override set" in err
     assert "SHARED_INBOUND_TOPIC_ARN override set" in err
     assert "CHANNELS_LIVE override set" in err
+    assert "STAGE_URL_TEMPLATES override set" in err
     assert phone_env not in err
     assert topic not in err
     assert list(overridden) == [key for key in CONTEXT_KEYS if key in overridden]
@@ -509,6 +514,7 @@ def test_dev_deploy_context_matches_the_workflow() -> None:
     assert context["desk:publish"] == "true"
     assert context["auth:managedLogin"] == "true"
     assert context["channels:live"] == "false"
+    assert context["whatsapp:stageUrlTemplates"] == "false"
     assert "whatsapp:wabaId" not in context
 
 
