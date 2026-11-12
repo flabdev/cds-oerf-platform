@@ -361,7 +361,9 @@ def _ship_time(workflow: Mapping[str, Any], context: Mapping[str, Any] | None) -
     )
 
 
-def _recovery_options(context: Mapping[str, Any], include_continue: bool) -> list[RecoveryOption]:
+def _recovery_options(
+    context: Mapping[str, Any], include_continue: bool, used_minutes: float = 0.0
+) -> list[RecoveryOption]:
     """Build rule inputs from the gathered context, rejecting junk candidates."""
     candidates = field(context, "facilities")
     if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
@@ -378,7 +380,12 @@ def _recovery_options(context: Mapping[str, Any], include_continue: bool) -> lis
             )
         )
     if include_continue:
-        options.append(RecoveryOption(id="continue", drive_min=0.0, kind="continue"))
+        shipment = mapping(context, "shipment")
+        eta = field(shipment, "eta_min_at_excursion")
+        continue_drive_min = max(0.0, float(eta) - used_minutes) if eta is not None else 0.0
+        options.append(
+            RecoveryOption(id="continue", drive_min=continue_drive_min, kind="continue")
+        )
     return options
 
 
@@ -457,7 +464,9 @@ def assess(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
             cooldown_rate_c_per_min=float(assessment.cooldown_rate_c_per_min),
             min_spare_allowance_min=float(assessment.min_spare_allowance_min),
         )
-        options = _recovery_options(context, assessment.include_continue_option)
+        options = _recovery_options(
+            context, assessment.include_continue_option, used_minutes=elapsed
+        )
     except (TypeError, ValueError, ValidationError) as exc:
         raise MissingStepInput(f"the gathered context cannot be assessed: {exc}") from exc
 

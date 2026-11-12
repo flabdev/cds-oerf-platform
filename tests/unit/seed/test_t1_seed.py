@@ -76,7 +76,12 @@ def test_t1_seed_contains_shipment_roles_and_facilities() -> None:
     shipment = seed["shipments"][0]
     assert shipment["shipment_id"] == "PH-2841"
     assert shipment["product_profile"] == "PP-2-8-45"
-    assert shipment["eta_min_at_excursion"] == 46
+    assert shipment["eta_min_at_excursion"] == 15
+    reroute_shipment = seed["shipments"][1]
+    assert reroute_shipment["shipment_id"] == "PH-2842"
+    assert reroute_shipment["device"] == "RF-7783"
+    assert reroute_shipment["driver"] == "C-T1-DRV-ANANDA"
+    assert reroute_shipment["eta_min_at_excursion"] == 60
     roles = {contact["party_role"] for contact in seed["contacts"]}
     assert {"driver", "ops_manager", "qa", "facility"} <= roles
     drivers = [contact for contact in seed["contacts"] if contact["party_role"] == "driver"]

@@ -45,7 +45,7 @@ def test_seed_round_trip_matches_the_workflow_readers() -> None:
 
     assert counts == {
         "meta": 1,
-        "shipments": 1,
+        "shipments": 2,
         "facilities": 2,
         "contacts": 7,
         "phones": 0,
@@ -71,7 +71,12 @@ def test_seed_round_trip_matches_the_workflow_readers() -> None:
     shipment = DynamoShipmentReader(client, TABLE).get("t1", "PH-2841")
     assert shipment is not None
     assert shipment["product_profile"] == "PP-2-8-45"
-    assert shipment["eta_min_at_excursion"] == 46
+    assert shipment["eta_min_at_excursion"] == 15
+    reroute_shipment = DynamoShipmentReader(client, TABLE).get("t1", "PH-2842")
+    assert reroute_shipment is not None
+    assert reroute_shipment["device"] == "RF-7783"
+    assert reroute_shipment["driver"] == "C-T1-DRV-ANANDA"
+    assert reroute_shipment["eta_min_at_excursion"] == 60
     assert isinstance(shipment["eta_min_at_excursion"], int)
     assert not isinstance(shipment["eta_min_at_excursion"], bool)
     assert shipment["value_usd"] == 180000
@@ -159,7 +164,7 @@ def test_dry_run_reads_and_does_not_write() -> None:
 
     assert counts == {
         "meta": 1,
-        "shipments": 1,
+        "shipments": 2,
         "facilities": 2,
         "contacts": 7,
         "phones": 7,
@@ -178,7 +183,7 @@ def test_main_dry_run_prints_counts(
 
     out = capsys.readouterr().out
     assert "would change t1 meta 1" in out
-    assert "would change t1 shipments 1" in out
+    assert "would change t1 shipments 2" in out
     assert "would change t1 facilities 2" in out
     assert "would change t1 contacts 7" in out
     assert "would change t1 phones 7" in out

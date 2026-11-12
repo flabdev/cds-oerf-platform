@@ -9,8 +9,22 @@
     "device": "RF-7781",
     "driver": "C-T1-DRV",
     "destination": "Sample receiving depot",
-    "eta_min_at_excursion": 46,
+    "eta_min_at_excursion": 15,
     "value_usd": 180000,
+    "storage_phase": false
+  },
+  {
+    "tenant_id": "t1",
+    "PK": "TENANT#t1",
+    "SK": "SHIPMENT#PH-2842",
+    "shipment_id": "PH-2842",
+    "product_profile": "PP-2-8-45",
+    "truck": "TRK-02",
+    "device": "RF-7783",
+    "driver": "C-T1-DRV-ANANDA",
+    "destination": "Sample receiving depot 2",
+    "eta_min_at_excursion": 60,
+    "value_usd": 240000,
     "storage_phase": false
   }
 ]
