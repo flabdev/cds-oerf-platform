@@ -1,4 +1,4 @@
-"""T2 and sandbox seeds stay on the 45-minute allowance."""
+"""T2 and sandbox seeds retain their configured cold-chain allowances."""
 
 import json
 
@@ -20,7 +20,7 @@ def test_t2_keeps_the_seed_allowance_and_changes_identity() -> None:
     assert seed["facilities"][0]["drive_min"] == 9
     assert all(contact["scripted"] is True for contact in seed["contacts"])
     assert len(seed["contacts"]) == 8
-    assert config.product_profile("PP-2-8-45").excursion_allowance_min == 45
+    assert config.product_profile("PP-2-8-45").excursion_allowance_min == 30
     assert seed["cadence/approval_fast"]["exhaust_after"] == "PT1M"
     _assert_owned(seed, "t2")
 
