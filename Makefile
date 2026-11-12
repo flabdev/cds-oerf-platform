@@ -1,4 +1,4 @@
-.PHONY: test reset-test reset-demo \
+.PHONY: test demo-check reset-test reset-demo \
 	demo-preflight demo-prep demo-sensor demo-reply demo-status demo-cleanup demo-run \
 	dev-preflight dev-seed dev-users dev-sensor dev-reply dev-reset dev-check \
 	dev-diff dev-deploy dev-provider-check
@@ -10,6 +10,10 @@ DEVICE ?= RF-7781
 
 test:
 	pytest -q -m "not aws"
+
+# Credential-free, deterministic scenario and integration gate; no deployed AWS required.
+demo-check:
+	pytest -q tests/e2e tests/integration
 
 RESETS = reset-test reset-demo
 DEMOS = demo-preflight demo-prep demo-sensor demo-reply demo-review-qa demo-status demo-cleanup demo-run

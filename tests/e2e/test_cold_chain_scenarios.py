@@ -53,17 +53,24 @@ class _Clock:
 
 class _Devices:
     def resolve(self, device_id: str) -> tuple[str, str] | None:
-        return {"RF-7781": ("t1", "PH-2841")}.get(device_id)
+        return {
+            "RF-7781": ("t1", "PH-2841"),
+            "RF-7782": ("t2", "VX-3101"),
+        }.get(device_id)
 
 
 class _Shipments:
-    def __init__(self) -> None:
-        self.rows = json.loads((SEED / "shipments.json").read_text(encoding="utf-8"))
-
     def get(self, tenant_id: str, shipment_id: str) -> dict[str, Any] | None:
-        if tenant_id != "t1":
+        if tenant_id not in {"t1", "t2"}:
             return None
-        return next((dict(row) for row in self.rows if row["shipment_id"] == shipment_id), None)
+        rows = json.loads(
+            (ROOT / "sim" / "seed" / tenant_id / "shipments.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        return next(
+            (dict(row) for row in rows if row["shipment_id"] == shipment_id), None
+        )
 
 
 class _Configs:
@@ -113,7 +120,15 @@ class _Reports:
 
 
 class _Scenario:
-    def __init__(self) -> None:
+    """Run the cold-chain workflow with tenant-specific checked-in demo data."""
+
+    def __init__(self, tenant_id: str = "t1") -> None:
+        self.tenant_id = tenant_id
+        self.seed = ROOT / "sim" / "seed" / tenant_id
+        self.shipment_id, self.device_id = {
+            "t1": ("PH-2841", "RF-7781"),
+            "t2": ("VX-3101", "RF-7782"),
+        }[tenant_id]
         self.clock = _Clock()
         self.incidents = IncidentRepository(clock=self.clock)
         self.executions = _Executions()
@@ -129,12 +144,12 @@ class _Scenario:
             clock=self.clock,
         )
         self.reporter = _Reports()
-        config = get_config("t1", "cold_chain_excursion")
+        config = get_config(tenant_id, "cold_chain_excursion")
         self.steps = StepDependencies(
             incidents=self.incidents,
             results=MemoryStepResultStore(clock=self.clock),
             facilities=MemoryFacilityCatalog(
-                json.loads((SEED / "facilities.json").read_text(encoding="utf-8"))
+                json.loads((self.seed / "facilities.json").read_text(encoding="utf-8"))
             ),
             reports=self.reporter,
             qa_reviews=MemoryQAReviewStore(),
@@ -154,9 +169,9 @@ class _Scenario:
             "source": "sim.reefer",
             "detail-type": "TemperatureReading",
             "detail": {
-                "tenant_id": "t1",
-                "shipment_id": "PH-2841",
-                "device_id": "RF-7781",
+                "tenant_id": self.tenant_id,
+                "shipment_id": self.shipment_id,
+                "device_id": self.device_id,
                 "ts": moment.isoformat().replace("+00:00", "Z"),
                 "temperature_c": temperature,
                 "lat": 17.44,
@@ -166,10 +181,14 @@ class _Scenario:
         }
         return ingest(event, None, dependencies=self.ingest_dependencies)
 
+    """Process the same EventBridge reading burst through real handlers."""
+
     def begin(self) -> dict[str, Any]:
-        first = self.publish("hot-first", 1, START - timedelta(minutes=1), 8.1)
+        first = self.publish(
+            f"{self.tenant_id}-hot-first", 1, START - timedelta(minutes=1), 8.1
+        )
         assert first["status"] == "accepted"
-        second = self.publish("hot-second", 2, START, 8.6)
+        second = self.publish(f"{self.tenant_id}-hot-second", 2, START, 8.6)
         assert second["status"] == "triggered"
         assert len(self.executions.calls) == 1
         return self.executions.calls[0]["input"]
@@ -184,7 +203,9 @@ class _Scenario:
     def record_temperature(self, offset: int, temperature: float) -> None:
         moment = START + timedelta(minutes=offset, seconds=offset + 1)
         self.clock.current = moment
-        result = self.publish(f"recovery-{offset}", offset + 3, moment, temperature)
+        result = self.publish(
+            f"{self.tenant_id}-recovery-{offset}", offset + 3, moment, temperature
+        )
         assert result["status"] == "accepted"
 
 
@@ -338,8 +359,12 @@ def _engage(
     raise AssertionError("nested engagement state machine did not terminate")
 
 
-def _parent_walk(start: dict[str, Any], scenario: _Scenario, driver_reply: str | None,
-                 facility_replies: list[str | None]) -> tuple[str, dict[str, Any]]:
+def _parent_walk(
+    start: dict[str, Any],
+    scenario: _Scenario,
+    driver_reply: str | None,
+    facility_replies: list[str | None],
+) -> tuple[str, dict[str, Any]]:
     states = ASL["States"]
     current = ASL["StartAt"]
     data = start
@@ -398,6 +423,10 @@ def _parent_walk(start: dict[str, Any], scenario: _Scenario, driver_reply: str |
             current = state["Next"]
             continue
 
+        if current == "Approval":
+            raise AssertionError(
+                "the configured T2 within-limits path must not wait for approver input"
+            )
         if current == "QAReviewWait":
             _assign(
                 data,
@@ -409,8 +438,12 @@ def _parent_walk(start: dict[str, Any], scenario: _Scenario, driver_reply: str |
 
         step_name = state["Parameters"]["Payload"]["step_name"]
         if step_name == "EngagementSendOneWay":
-            scenario.one_way.append((data.get("workflow", {}).get("action", {}).get("kind", ""),
-                                     data.get("workflow", {}).get("action", {}).get("facility_id")))
+            scenario.one_way.append(
+                (
+                    data.get("workflow", {}).get("action", {}).get("kind", ""),
+                    data.get("workflow", {}).get("action", {}).get("facility_id"),
+                )
+            )
             result = {"status": "simulated"}
         else:
             event = {"step_name": step_name, "workflow": data}
@@ -429,8 +462,12 @@ def _parent_walk(start: dict[str, Any], scenario: _Scenario, driver_reply: str |
     raise AssertionError(f"cold-chain parent state machine did not terminate: {scenario.events}")
 
 
-def _walk(scenario: _Scenario, *, driver_reply: str | None,
-          facility_replies: list[str | None] | None = None) -> tuple[str, dict[str, Any]]:
+def _walk(
+    scenario: _Scenario,
+    *,
+    driver_reply: str | None,
+    facility_replies: list[str | None] | None = None,
+) -> tuple[str, dict[str, Any]]:
     start = scenario.begin()
     return _parent_walk(start, scenario, driver_reply, list(facility_replies or []))
 
@@ -499,3 +536,49 @@ def test_silent_driver_exhausts_real_cadence_then_continue_path_closes() -> None
     assert final["workflow"]["action"]["kind"] == "continue"
     assert final["workflow"]["containment"]["status"] == "contained"
     assert scenario.incidents.get("t1", final["incident_id"]).state == "CLOSED"
+
+
+@pytest.mark.e2e
+def test_t2_s3_facility_a_decline_escalates_when_no_fallback_is_feasible() -> None:
+    scenario = _Scenario(tenant_id="t2")
+    outcome, final = _walk(
+        scenario,
+        driver_reply="Stopped",
+        facility_replies=["Decline"],
+    )
+
+    assert outcome == "Escalate", (scenario.events, final)
+    assert final["workflow"]["assessment"]["recommended_option"] == "FAC-A"
+    assert not next(
+        option
+        for option in final["workflow"]["assessment"]["options"]
+        if option["id"] == "FAC-B"
+    )["feasible"]
+    assert final["workflow"]["facility"]["facility_id"] == "FAC-A"
+    assert final["workflow"]["facility"]["next_option_id"] is None
+    assert [child.get("intent") for child in scenario.child_outputs] == [
+        "unit_stopped",
+        "decline",
+    ]
+    assert scenario.events.count("EngageFacilityAccept") == 1
+    assert scenario.events[-1] == "Escalate"
+    assert scenario.incidents.get("t2", final["incident_id"]).state == "ESCALATED"
+
+
+@pytest.mark.e2e
+def test_t2_s5_within_limits_route_skips_approver_gate() -> None:
+    """T2's limits skip the approval gate; no approver response is required."""
+    scenario = _Scenario(tenant_id="t2")
+    outcome, final = _walk(
+        scenario,
+        driver_reply="Stopped",
+        facility_replies=["Accept"],
+    )
+
+    assert outcome == "WorkflowComplete", (scenario.events, final)
+    assert final["workflow"]["assessment"]["route"] == "auto_proceed"
+    assert final["workflow"]["assessment"]["recommended_option"] == "FAC-A"
+    assert "Approval" not in scenario.events
+    assert "approval" not in final["workflow"]
+    assert final["workflow"]["facility"]["facility_id"] == "FAC-A"
+    assert scenario.incidents.get("t2", final["incident_id"]).state == "CLOSED"
