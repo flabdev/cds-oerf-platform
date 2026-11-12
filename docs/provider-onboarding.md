@@ -24,7 +24,7 @@ reads environment flags and returns one of `simulated`, `not_configured`, or
 
 | Channel | Secret name | Status today | External owner | What is still open |
 | --- | --- | --- | --- | --- |
-| WhatsApp | `oerf/whatsapp/phone_number_id` | external approval | AWS account owner | Business registration, approved templates, webhook |
+| WhatsApp | `oerf/whatsapp/phone_number_id` | external approval | AWS account owner | Dev URL-button copies still need Meta `APPROVED` before `STAGE_URL_TEMPLATES=true` |
 | SMS | `oerf/pinpoint/origination_number` | external approval | AWS account owner | Pinpoint origination number |
 | Email, outbound | `oerf/ses/source_identity` | external approval | AWS account owner | SPF, DKIM, production sending access |
 | Email, inbound QA | `oerf/ses/inbound_rule` and `oerf/ses/qa_allowlist` | external approval | AWS account owner | Receipt rule, spam and virus checks |
@@ -60,10 +60,19 @@ to approve are `scripts/whatsapp/templates.json`. Bodies that exist in
 Other template ids fail that channel with `no_template` and the router tries
 the next channel.
 
-Approval still open: WhatsApp Business registration, template approval for the
-names above, and the inbound webhook. Set repository variables `WA_PHONE_NUMBER_ID`
-and `WABA_ID` before ticking `channels_live` on **Deploy CDK Infrastructure**. Rate limits are whatever the approved account allows.
-They are not recorded here because they are not known yet.
+Two templates carry a desk URL button: `oerf_ops_escalation_options` and
+`oerf_qa_report_ready`. Those names point at main's desk. Dev sends copies
+`oerf_dev_ops_escalation_options` and `oerf_dev_qa_report_ready` only when
+`WHATSAPP_STAGE_URL_TEMPLATES` is true. Submit and list them with
+`python -m scripts.whatsapp.templates`, then `make dev-provider-check`. Leave
+the GitHub dev variable `STAGE_URL_TEMPLATES` unset until both copies are
+`APPROVED`. The commands are in [run-the-demo.md](run-the-demo.md).
+
+Approval still open: WhatsApp Business registration, Meta approval of those
+two dev copies, template approval for the names above, and the inbound webhook.
+Set repository variables `WA_PHONE_NUMBER_ID` and `WABA_ID` before ticking
+`channels_live` on **Deploy CDK Infrastructure**. Rate limits are whatever the
+approved account allows. They are not recorded here because they are not known yet.
 
 The inbound webhook is the compute stack's standard SNS topic. It is not
 encrypted with a customer-managed KMS key, so no key policy is granted to

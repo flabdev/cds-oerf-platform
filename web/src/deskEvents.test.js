@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { absorbDeskEvent, acceptDeskEvent, mergeDeskRows, replaceIncidentRow, subscribeBody } from "./deskEvents.js";
+import { absorbDeskEvent, acceptDeskEvent, deskSubscriptions, mergeDeskRows, replaceIncidentRow, subscribeBody } from "./deskEvents.js";
 import { shipmentMark } from "./model.js";
 
 const summary = {
@@ -34,6 +34,11 @@ test("subscribe bodies are the two frozen scopes", () => {
     scope: "incident",
     incident_id: "INC-1",
   });
+  assert.deepEqual(deskSubscriptions(""), [{ scope: "tenant", incidentId: "" }]);
+  assert.deepEqual(deskSubscriptions("INC-1"), [
+    { scope: "tenant", incidentId: "" },
+    { scope: "incident", incidentId: "INC-1" },
+  ]);
 });
 
 test("a tenant socket accepts only that tenant's summary", () => {

@@ -122,7 +122,7 @@ def audience_join_link(e164: str) -> str:
 
 
 def shipment_pool(tenant_id: str = AUDIENCE_TENANT) -> tuple[str, ...]:
-    """Seeded shipment ids for this tenant, in seed order."""
+    """Audience-pool shipment ids for this tenant, in seed order."""
 
     from sim.seed.load import load_seed
 
@@ -130,6 +130,8 @@ def shipment_pool(tenant_id: str = AUDIENCE_TENANT) -> tuple[str, ...]:
     found: list[str] = []
     for row in rows:
         if not isinstance(row, dict):
+            continue
+        if row.get("audience_pool") is not True:
             continue
         shipment_id = str(row.get("shipment_id") or "").strip()
         if shipment_id:

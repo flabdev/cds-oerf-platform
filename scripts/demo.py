@@ -54,7 +54,7 @@ from scripts.demo_reply import (
     main as post_reply,
 )
 from scripts.reset import REGION, clients_from_session, reset_tenant
-from scripts.seed_runtime import seed_runtime, tenants_for
+from scripts.seed_runtime import contact_is_live, seed_runtime, tenants_for
 from sim.seed.load import load_seed
 
 EVENT_GAP = timedelta(seconds=30)
@@ -730,7 +730,7 @@ def driver_parameter_exists(ssm: Any, tenant_id: str) -> bool:
     drivers = [
         str(contact["contact_id"])
         for contact in load_seed(tenant_id)["contacts"]
-        if contact.get("party_role") == "driver" and contact.get("live_contacts") is not False
+        if contact.get("party_role") == "driver" and contact_is_live(contact)
     ]
     if not drivers:
         return False

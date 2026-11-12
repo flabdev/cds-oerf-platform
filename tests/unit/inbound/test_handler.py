@@ -878,3 +878,31 @@ def test_join_driver_registers_one_shipment_and_hides_the_number(
     assert "155500019001" not in logged
     assert "155500019002" not in logged
 
+
+def test_join_driver_is_ignored_when_the_stage_disables_audience() -> None:
+    audience = MemoryAudienceStore(pool=("PH-P01",))
+    deps = InboundDependencies(
+        InboundDedupe(clock=lambda: NOW),
+        MemoryEngagementStore(clock=lambda: NOW),
+        CallbackClient(),
+        MemoryPhoneRegistry(),
+        audience=audience,
+        sandbox_join_enabled=True,
+        audience_join_enabled=False,
+        clock=lambda: NOW,
+    )
+
+    result = process_message(
+        {
+            "provider": "whatsapp",
+            "message_id": "aud-off",
+            "from": "+155500019001",
+            "timestamp": "2026-10-20T10:20:00Z",
+            "text": "JOIN DRIVER",
+        },
+        deps,
+    )
+
+    assert result == "ignored"
+    assert audience.sessions() == []
+

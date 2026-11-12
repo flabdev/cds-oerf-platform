@@ -670,6 +670,7 @@ class OerfComputeStack(Stack):
                 "WHATSAPP_PHONE_NUMBER_ID": whatsapp_phone_number_id,
                 "INBOUND_MEDIA_MAX_BYTES": str(10 * 1024 * 1024),
                 "SANDBOX_JOIN_ENABLED": "false" if stage.is_main else "true",
+                "AUDIENCE_JOIN_ENABLED": "false",
                 "LOG_LEVEL": "INFO",
             },
         )

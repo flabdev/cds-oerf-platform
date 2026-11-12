@@ -12,7 +12,7 @@ Show & Tell needs any number of drivers on t1, not one SSM parameter per phone. 
 
 On dev, `JOIN DRIVER` registers the sender as a t1 driver for 24 hours. The contact id is `AUD-` plus a hash, the display name is `Audience` plus the last four characters of that id, and the row carries consent time and an expiry. One seeded shipment is assigned from the tenant pool. The daily cap is 20. At expiry, reset, or an explicit remove, the contact, the phone index, and the audience row are deleted. The three seeded team phones are not audience rows and are not deleted by that path.
 
-Main sets `SANDBOX_JOIN_ENABLED` to false, so neither `JOIN` nor `JOIN DRIVER` creates a contact there.
+Main sets `SANDBOX_JOIN_ENABLED` to false, so `JOIN` creates no contact there. `JOIN DRIVER` runs only when `AUDIENCE_JOIN_ENABLED` is true. That flag is false on main and on dev until it is turned on.
 
 The desk shows `driver_label` and a masked number. It does not show the E.164.
 

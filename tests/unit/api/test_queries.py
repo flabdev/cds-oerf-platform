@@ -110,6 +110,8 @@ def test_qa_review_row_stays_off_list_detail_and_timeline() -> None:
         assert "QA_REVIEW" not in text
         assert "task_token" not in text
         assert "secret-token" not in text
+    assert detail[1]["qa_review_pending"] is True
+    assert "qa_review_pending" not in listed[1]["incidents"][0]
 
 
 def test_detail_returns_timeline_readings_assessment_and_hides_the_token() -> None:
