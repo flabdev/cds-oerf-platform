@@ -59,8 +59,13 @@ class PhoneRegistry(Protocol):
     def get_contact(self, tenant_id: str, contact_id: str) -> ContactMatch | None:
         """Return one contact, or None when this tenant has no such contact."""
 
+    def get_unique_contact_for_role(
+        self, tenant_id: str, role: str
+    ) -> ContactMatch | None:
+        """Return the sole contact for this tenant and role, if unambiguous."""
+
     def remove_contact(self, tenant_id: str, contact_id: str) -> None:
-        """Delete one tenant contact and its phone-index row."""
+        """Delete one tenant-scoped contact and its phone index row."""
 
 
 class MemoryPhoneRegistry:
@@ -107,6 +112,16 @@ class MemoryPhoneRegistry:
     def get_contact(self, tenant_id: str, contact_id: str) -> ContactMatch | None:
         context = TenantContext(tenant_id=tenant_id)
         return self._contacts.get((context.tenant_id, required_text(contact_id, "contact_id")))
+
+    def get_unique_contact_for_role(self, tenant_id: str, role: str) -> ContactMatch | None:
+        """Return one opted-in contact for this tenant and role if unambiguous."""
+        tenant = TenantContext(tenant_id=tenant_id).tenant_id
+        matches = [
+            contact
+            for (contact_tenant, _), contact in self._contacts.items()
+            if contact_tenant == tenant and contact.role == role and contact.opt_in
+        ]
+        return matches[0] if len(matches) == 1 else None
 
     def remove_contact(self, tenant_id: str, contact_id: str) -> None:
         current = self.get_contact(tenant_id, contact_id)
@@ -180,6 +195,35 @@ class DynamoPhoneRegistry:
         if not item:
             return None
         return _match_from_item(item)
+
+    def get_unique_contact_for_role(self, tenant_id: str, role: str) -> ContactMatch | None:
+        """Resolve a sole opted-in role contact without guessing among duplicates."""
+        context = TenantContext(tenant_id=tenant_id)
+        matches: list[ContactMatch] = []
+        start: dict[str, Any] | None = None
+        while True:
+            kwargs: dict[str, Any] = {
+                "TableName": self._tenant,
+                "KeyConditionExpression": "#pk = :pk AND begins_with(#sk, :prefix)",
+                "ExpressionAttributeNames": {"#pk": "pk", "#sk": "sk"},
+                "ExpressionAttributeValues": {
+                    ":pk": s(f"TENANT#{context.tenant_id}"),
+                    ":prefix": s("CONTACT#"),
+                },
+            }
+            if start is not None:
+                kwargs["ExclusiveStartKey"] = start
+            response = self._client.query(**kwargs)
+            matches.extend(
+                match
+                for match in (_match_from_item(item) for item in response.get("Items", []))
+                if match.role == role and match.opt_in
+            )
+            if len(matches) > 1:
+                return None
+            start = response.get("LastEvaluatedKey")
+            if not start:
+                return matches[0] if matches else None
 
     def remove_contact(self, tenant_id: str, contact_id: str) -> None:
         current = self.get_contact(tenant_id, contact_id)

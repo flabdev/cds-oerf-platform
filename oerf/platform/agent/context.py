@@ -102,7 +102,7 @@ STEP_POSITIONS: dict[str, StepPosition] = {
         frozenset({"ASSESSING", "AWAITING_APPROVAL", "SECURING_FACILITY"}), "IN_TRANSIT"
     ),
     "Verify": StepPosition(
-        frozenset({"IN_TRANSIT", "VERIFYING", "REOPENED"}), "VERIFYING"
+        frozenset({"IN_TRANSIT", "VERIFYING", "REOPENED", "AWAITING_DISPOSITION"}), "VERIFYING"
     ),
     "RecordContainment": StepPosition(frozenset({"VERIFYING"}), "CONTAINED"),
     "BeginDisposition": StepPosition(frozenset({"CONTAINED"}), "AWAITING_DISPOSITION"),

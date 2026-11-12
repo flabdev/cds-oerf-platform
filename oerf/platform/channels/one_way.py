@@ -209,6 +209,10 @@ def _send(event: dict[str, Any], ports: Any) -> dict[str, Any]:
         stored = existing.get("provider_msg_id")
         return _outcome("skipped", stored if isinstance(stored, str) else None)
     contact_id = _contact_id(facts, role)
+    if contact_id is None and message == "reopen_alert":
+        resolver = getattr(ports.registry, "get_unique_contact_for_role", None)
+        contact = resolver(tenant_id, role) if callable(resolver) else None
+        contact_id = contact.contact_id if contact is not None else None
     if contact_id is None:
         return _outcome("failed", None)
     try:
@@ -285,6 +289,18 @@ def _template_facts(
         }
     if message == "driver_reroute":
         return _reroute_facts(facts, tenant_id, ports, shipment_id)
+    if message == "reopen_alert":
+        if shipment_id is None:
+            return None
+        containment = facts.get("containment") if isinstance(facts.get("containment"), dict) else {}
+        reading = containment.get("temperature_c", facts.get("temperature_c"))
+        if isinstance(reading, bool) or not isinstance(reading, (int, float)):
+            return None
+        row = _facility_row(facts, tenant_id, ports)
+        name = _plain(row.get("name")) or _plain(row.get("facility_id"))
+        action = facts.get("action") if isinstance(facts.get("action"), dict) else {}
+        name = name or _plain(action.get("facility_id")) or "current route"
+        return {"shipment_id": shipment_id, "facility_name": name, "temperature_c": reading}
     rendered = dict(facts)
     shipment = facts.get("shipment") if isinstance(facts.get("shipment"), dict) else {}
     trigger = facts.get("trigger") if isinstance(facts.get("trigger"), dict) else {}

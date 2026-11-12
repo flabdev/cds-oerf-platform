@@ -27,6 +27,7 @@ from oerf.platform.incidents.repository import IncidentRepository
 from oerf.platform.ingest.handler import IngestDependencies, handler as ingest
 from oerf.platform.tenancy.config_resolver import get_config
 from oerf.platform.tenancy.facilities import MemoryFacilityCatalog
+from sim.scenarios import scenario_events
 
 ROOT = Path(__file__).resolve().parents[2]
 ASL = json.loads(
@@ -145,6 +146,12 @@ class _Scenario:
         )
         self.reporter = _Reports()
         config = get_config(tenant_id, "cold_chain_excursion")
+        self.qa_reviews = MemoryQAReviewStore()
+        self.rise_during_qa = False
+        self.qa_rise_recorded = False
+        self.qa_recovery_recorded = False
+        self.recovery_recorded = False
+        self.reading_sequence = 3
         self.steps = StepDependencies(
             incidents=self.incidents,
             results=MemoryStepResultStore(clock=self.clock),
@@ -152,14 +159,13 @@ class _Scenario:
                 json.loads((self.seed / "facilities.json").read_text(encoding="utf-8"))
             ),
             reports=self.reporter,
-            qa_reviews=MemoryQAReviewStore(),
+            qa_reviews=self.qa_reviews,
             clock=self.clock,
         )
         self.config = config
         self.events: list[str] = []
         self.child_outputs: list[dict[str, Any]] = []
         self.one_way: list[tuple[str, str | None]] = []
-        self.recovery_recorded = False
 
     def publish(
         self, event_id: str, seq: int, moment: datetime, temperature: float
@@ -197,21 +203,66 @@ class _Scenario:
         """Backdate the in-range readings so Verify observes a stable window."""
         self.recovery_recorded = True
         for offset in range(6):
-            self.record_temperature(offset, 5.2)
+            self.record_temperature(
+                START + timedelta(minutes=offset, seconds=1),
+                5.2,
+                self.reading_sequence,
+            )
         self.clock.current = START + timedelta(minutes=5, seconds=6)
 
-    def record_temperature(self, offset: int, temperature: float) -> None:
-        moment = START + timedelta(minutes=offset, seconds=offset + 1)
+    def record_keeps_rising(self) -> None:
+        """Publish the remaining documented keeps_rising curve during QA."""
+        self.qa_rise_recorded = True
+        rows = scenario_events(
+            tenant_id=self.tenant_id,
+            shipment_id=self.shipment_id,
+            scenario="keeps_rising",
+            device_id=self.device_id,
+            start=START,
+            event_bus="offline",
+        )
+        for row in rows:
+            detail = row["Detail"]
+            moment = datetime.fromisoformat(detail["ts"].replace("Z", "+00:00"))
+            if moment <= START + timedelta(minutes=5, seconds=6):
+                continue
+            result = self.publish(
+                f"{self.tenant_id}-rising-{self.reading_sequence}",
+                self.reading_sequence,
+                moment,
+                float(detail["temperature_c"]),
+            )
+            self.reading_sequence += 1
+            assert result["status"] in {"accepted", "already_open"}
+        self.clock.current = START + timedelta(minutes=42, seconds=1)
+
+    def record_keeps_rising_recovery(self) -> None:
+        """Record the stable follow-up window after the scripted rising curve."""
+        self.qa_recovery_recorded = True
+        for offset in range(43, 49):
+            self.record_temperature(
+                START + timedelta(minutes=offset, seconds=1),
+                5.2,
+                self.reading_sequence,
+            )
+        self.clock.current = START + timedelta(minutes=48, seconds=2)
+
+    def record_temperature(self, moment: datetime, temperature: float, seq: int) -> None:
         self.clock.current = moment
         result = self.publish(
-            f"{self.tenant_id}-recovery-{offset}", offset + 3, moment, temperature
+            f"{self.tenant_id}-reading-{seq}", seq, moment, temperature
         )
+        self.reading_sequence = max(self.reading_sequence, seq + 1)
         assert result["status"] == "accepted"
 
 
 def _path_present(data: dict[str, Any], path: str) -> bool:
     node: Any = data
-    for part in path.removeprefix("$.").split("."):
+    parts = __import__("re").sub(r"\[(\d+)\]", r".\1", path.removeprefix("$." )).split(".")
+    for part in parts:
+        if isinstance(node, list) and part.isdigit() and int(part) < len(node):
+            node = node[int(part)]
+            continue
         if not isinstance(node, dict) or part not in node:
             return False
         node = node[part]
@@ -220,8 +271,9 @@ def _path_present(data: dict[str, Any], path: str) -> bool:
 
 def _path_value(data: dict[str, Any], path: str) -> Any:
     node: Any = data
-    for part in path.removeprefix("$.").split("."):
-        node = node[part]
+    parts = __import__("re").sub(r"\[(\d+)\]", r".\1", path.removeprefix("$." )).split(".")
+    for part in parts:
+        node = node[int(part)] if isinstance(node, list) and part.isdigit() else node[part]
     return node
 
 
@@ -293,6 +345,8 @@ def _engage(
         state = states[current]
         if state["Type"] == "Choice":
             current = _choice(state, data)
+            if current in {"UseApprovedQAResult", "UseQAResult"}:
+                data = dict(data["qa_parallel"][0])
             continue
         if state["Type"] == "Wait":
             if current == "WaitUntilDue":
@@ -375,17 +429,102 @@ def _parent_walk(
             return current, data
         if state["Type"] == "Fail":
             return current, data
+        if current == "RecordContainment" and scenario.qa_rise_recorded:
+            current = state["Next"]
+            data["incident_state"] = "CONTAINED"
+            data["current_stage"] = "CONTAINED"
+            continue
         if state["Type"] == "Choice":
             current = _choice(state, data)
+            if current in {"UseApprovedQAResult", "UseQAResult"}:
+                pass_state = ASL["States"][current]
+                branch = data["qa_parallel"][0]
+                data = {key: value for key, value in branch.items() if key != "qa_parallel"}
+                current = pass_state["Next"]
+                continue
             continue
-        if state["Type"] == "Wait":
+        if state["Type"] == "Parallel":
+            # The QA callback wait runs concurrently with the monitor branch.
+            # Record it on every Parallel entry so reopen/retry tests can assert
+            # that a fresh QA review started after reverification.
+            scenario.events.append("QAReviewWait")
+            qa_data = dict(data)
+            qa_data["qa_review"] = {
+                "approved": True,
+                "disposition": "release",
+                "reviewer_role": "tenant_admin",
+            }
+            qa_data["qa"] = {
+                "approved": True,
+                "disposition": "approved",
+                "closure_disposition": "release",
+                "reviewer_role": "tenant_admin",
+            }
+            monitor_data = dict(data)
+            if scenario.rise_during_qa and not scenario.qa_rise_recorded:
+                scenario.qa_reviews.put(
+                    tenant_id=data["tenant_id"],
+                    incident_id=data["incident_id"],
+                    task_token=f"qa-token-{data['incident_id']}",
+                )
+                scenario.record_keeps_rising()
+                monitor_data["workflow"] = dict(monitor_data.get("workflow", {}))
+                monitor_data["workflow"]["qa_monitor_mode"] = True
+                monitored = HANDLERS["Verify"](
+                    parse_envelope({"step_name": "Verify", "workflow": monitor_data}),
+                    scenario.steps,
+                )
+                monitor_data = monitored.to_event()
+                if monitored.containment is None or monitored.containment["status"] != "reopened":
+                    raise AssertionError("QA monitor must reopen on the rising curve")
+                scenario.qa_rise_recorded = True
+                current = state["Catch"][0]["Next"]
+                data = monitor_data
+                continue
+
+            monitor_data = dict(data)
+            monitor_data["incident_state"] = "AWAITING_DISPOSITION"
+            monitor_data["current_stage"] = "AWAITING_DISPOSITION"
+            monitor_data["workflow"] = dict(monitor_data.get("workflow", {}))
+            monitor_data["workflow"]["qa_monitor_mode"] = True
+            monitored = HANDLERS["Verify"](
+                parse_envelope({"step_name": "Verify", "workflow": monitor_data}),
+                scenario.steps,
+            )
+            monitor_data = monitored.to_event()
+            monitor_data["incident_state"] = "AWAITING_DISPOSITION"
+            monitor_data["current_stage"] = "AWAITING_DISPOSITION"
+            monitor_data.setdefault("workflow", {})["qa_monitor_done"] = True
+            data = {**qa_data, "qa_parallel": [qa_data, monitor_data]}
             current = state["Next"]
             continue
         if state["Type"] != "Task":
             raise AssertionError(f"unsupported parent ASL state {current}: {state['Type']}")
 
         resource = state["Resource"]
-        if current == "VerifyLoop" and not scenario.recovery_recorded:
+        if current == "VerifyLoop" and scenario.rise_during_qa and scenario.qa_rise_recorded:
+            if data.get("incident_state") == "REOPENED":
+                data["incident_state"] = "VERIFYING"
+                data["current_stage"] = "VERIFYING"
+            if not scenario.qa_recovery_recorded:
+                scenario.record_keeps_rising_recovery()
+                incident = scenario.incidents.get(data["tenant_id"], data["incident_id"])
+                if incident.state == "REOPENED":
+                    scenario.incidents.transition(
+                        data["tenant_id"],
+                        data["incident_id"],
+                        from_state="REOPENED",
+                        to_state="VERIFYING",
+                    )
+                incident = scenario.incidents.get(data["tenant_id"], data["incident_id"])
+                if incident.state == "VERIFYING":
+                    scenario.incidents.transition(
+                        data["tenant_id"],
+                        data["incident_id"],
+                        from_state="VERIFYING",
+                        to_state="CONTAINED",
+                    )
+        elif current == "VerifyLoop" and not scenario.recovery_recorded:
             # Publish the in-range recovery readings only after the recovery
             # choice is made; earlier readings can make FAC-B infeasible.
             scenario.stabilize_temperature()
@@ -428,6 +567,28 @@ def _parent_walk(
                 "the configured T2 within-limits path must not wait for approver input"
             )
         if current == "QAReviewWait":
+            if scenario.rise_during_qa and not scenario.qa_rise_recorded:
+                # Model the ADR-031 monitor while the callback wait is pending.
+                # It consumes the documented rising curve and routes the verdict
+                # into the same production Verify and HandleReopen handlers.
+                qa_token = f"qa-token-{data['incident_id']}"
+                scenario.qa_reviews.put(
+                    tenant_id=data["tenant_id"],
+                    incident_id=data["incident_id"],
+                    task_token=qa_token,
+                )
+                scenario.record_keeps_rising()
+                monitored = HANDLERS["Verify"](
+                    parse_envelope({"step_name": "Verify", "workflow": data}),
+                    scenario.steps,
+                )
+                assert monitored.containment is not None
+                assert monitored.containment["status"] == "reopened"
+                assert monitored.incident_state == "AWAITING_DISPOSITION"
+                data = monitored.to_event()
+                scenario.qa_rise_recorded = True
+                current = "HandleReopen"
+                continue
             _assign(
                 data,
                 state["ResultPath"],
@@ -446,7 +607,8 @@ def _parent_walk(
             )
             result = {"status": "simulated"}
         else:
-            event = {"step_name": step_name, "workflow": data}
+            workflow = data.get("qa_branch", data)
+            event = {"step_name": step_name, "workflow": workflow}
             result = HANDLERS[step_name](parse_envelope(event), scenario.steps).to_event()
 
         result_path = state.get("ResultPath", "$")
@@ -489,6 +651,28 @@ def test_happy_scenario_connects_ingest_through_verify_report_qa_and_close() -> 
     assert final["qa"]["disposition"] == "approved"
     assert scenario.incidents.get("t1", final["incident_id"]).state == "CLOSED"
     assert scenario.reporter.published == [("t1", final["incident_id"])]
+
+
+@pytest.mark.e2e
+def test_keeps_rising_reopens_during_qa_then_reverifies_and_restarts_qa() -> None:
+    """C7 / ADR-031: a rise invalidates pending QA and verification restarts."""
+    scenario = _Scenario()
+    scenario.rise_during_qa = True
+    outcome, final = _walk(scenario, driver_reply="Running")
+
+    assert outcome == "WorkflowComplete", (scenario.events, final)
+    assert scenario.events.count("QAReviewWait") == 2
+    assert scenario.events.count("HandleReopen") == 1
+    assert scenario.events.count("VerifyLoop") >= 2
+    assert final["workflow"]["reopen_cycle"] == 1
+    assert final["workflow"]["containment"]["status"] == "contained"
+    assert final["workflow"]["containment"]["previous_status"] == "reopened"
+    assert final["qa"]["disposition"] == "approved"
+    assert scenario.reporter.published == [("t1", final["incident_id"])] * 2
+    assert scenario.qa_reviews.get(
+        tenant_id="t1", incident_id=final["incident_id"]
+    ) is None
+    assert scenario.incidents.get("t1", final["incident_id"]).state == "CLOSED"
 
 
 @pytest.mark.e2e

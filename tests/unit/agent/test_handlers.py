@@ -855,6 +855,16 @@ def test_open_refuses_an_incident_that_already_moved() -> None:
 
 def test_handle_reopen_marks_the_containment_reopened_and_replays() -> None:
     dependencies = _dependencies("AWAITING_DISPOSITION")
+    from oerf.platform.agent.qa_review import MemoryQAReviewStore
+
+    qa_reviews = MemoryQAReviewStore()
+    qa_reviews.put(tenant_id=TENANT, incident_id=INCIDENT_ID, task_token="old-qa-token")
+    dependencies = StepDependencies(
+        incidents=dependencies.incidents,
+        results=dependencies.results,
+        qa_reviews=qa_reviews,
+        clock=lambda: NOW,
+    )
     containment = {"status": "reopened", "temperature_c": 9.1, "attempt": 3}
     envelope = _envelope("HandleReopen", workflow={"containment": containment})
 
@@ -863,9 +873,11 @@ def test_handle_reopen_marks_the_containment_reopened_and_replays() -> None:
 
     assert result.incident_state == "REOPENED"
     assert result.containment is not None
+    assert result.workflow["reopen_cycle"] == 1
     assert result.containment["status"] == "reopened"
     assert result.containment["reopened_at"] == "2026-10-20T10:16:00Z"
     assert retry == result
+    assert qa_reviews.get(tenant_id=TENANT, incident_id=INCIDENT_ID) is None
     assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "REOPENED"
 
 

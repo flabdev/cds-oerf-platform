@@ -111,6 +111,14 @@ def _required_mapping(source: Mapping[str, Any] | None, key: str, step: str) -> 
     return found
 
 
+def _cycle_step(envelope: StepEnvelope) -> str:
+    """Use a separate idempotency key for each post-reopen workflow cycle."""
+    cycle = envelope.workflow.get("reopen_cycle", 0)
+    if not isinstance(cycle, int) or isinstance(cycle, bool) or cycle < 0:
+        raise StepError("workflow reopen_cycle must be a non-negative integer")
+    return envelope.step if cycle == 0 else f"{envelope.step}#{cycle}"
+
+
 def _replay(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope | None:
     """The response this step already produced, when it ran before.
 
@@ -120,7 +128,9 @@ def _replay(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvel
     return _replayed(
         envelope,
         dependencies.results.get(
-            tenant_id=envelope.tenant_id, incident_id=envelope.incident_id, step=envelope.step
+            tenant_id=envelope.tenant_id,
+            incident_id=envelope.incident_id,
+            step=_cycle_step(envelope),
         ),
     )
 
@@ -1355,6 +1365,20 @@ def verify(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
         reopened=status == REOPENED,
     )
     workflow["containment"] = containment
+    monitor_done = workflow.get("qa_monitor_mode") is True and status == CONTAINED
+    if monitor_done:
+        workflow["qa_monitor_done"] = True
+        # A QA monitor is observational: it must not advance the incident state
+        # while the QA branch owns the pending disposition transition.
+        return envelope.model_copy(
+            update={
+                "workflow": workflow,
+                "containment": containment,
+                "decision": outcome,
+                "current_stage": "AWAITING_DISPOSITION",
+                "incident_state": "AWAITING_DISPOSITION",
+            }
+        )
     return apply(
         WorkflowStep(
             step=envelope.step,
@@ -1363,6 +1387,7 @@ def verify(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
             result={"status": status, "temperature_c": reading, "attempt": attempt},
             incident_state="VERIFYING",
             current_stage="VERIFYING",
+            hold=status == REOPENED,
         ),
         envelope,
         dependencies,
@@ -1527,11 +1552,19 @@ def handle_reopen(envelope: StepEnvelope, dependencies: StepDependencies) -> Ste
     containment = _gate(envelope, workflow, "containment") or {}
     if text(containment, "status") not in {"reopened", "contained"}:
         raise MissingStepInput("HandleReopen needs a reopened containment verdict")
+    workflow["reopen_cycle"] = int(workflow.get("reopen_cycle", 0)) + 1
     workflow["containment"] = {
         **containment,
         "status": "reopened",
         "reopened_at": dependencies.stamp(),
     }
+    # A pending QA callback belongs to the containment version that was just
+    # invalidated. Removing its private token makes a late verdict a no-op.
+    if dependencies.qa_reviews is not None:
+        dependencies.qa_reviews.delete(
+            tenant_id=envelope.tenant_id,
+            incident_id=envelope.incident_id,
+        )
     return apply(
         WorkflowStep(
             step=envelope.step,

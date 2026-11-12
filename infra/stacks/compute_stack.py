@@ -269,6 +269,9 @@ class OerfComputeStack(Stack):
         data_stack.routing_table.grant_read_write_data(self.channel_router_fn)
         incident_arn = data_stack.incident_table.table_arn
         tenant_arn = data_stack.tenant_table.table_arn
+        self.channel_router_fn.add_to_role_policy(
+            iam.PolicyStatement(actions=["dynamodb:Query"], resources=[tenant_arn])
+        )
         # ENG# lives on the incident table. CONTACTENG# is written in the same
         # transaction as the engagement row. The transaction is authorised by
         # the item-level actions.
