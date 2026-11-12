@@ -1,7 +1,7 @@
 .PHONY: test reset-test reset-demo \
 	demo-preflight demo-prep demo-sensor demo-reply demo-status demo-cleanup demo-run \
 	dev-preflight dev-seed dev-users dev-sensor dev-reply dev-reset dev-check \
-	dev-diff dev-deploy
+	dev-diff dev-deploy dev-provider-check
 
 BUTTON ?= running
 PYTHON ?= python
@@ -120,6 +120,10 @@ dev-check:
 	@test -n "$(PROFILE)" || { echo "PROFILE is required"; exit 1; }
 	@test -n "$(TENANT)" || { echo "TENANT is required"; exit 1; }
 	STAGE=dev $(PYTHON) -m scripts.verify_seed --stage dev --profile $(PROFILE) --tenant $(TENANT)
+
+dev-provider-check:
+	@test -n "$(PROFILE)" || { echo "PROFILE is required"; exit 1; }
+	STAGE=dev $(PYTHON) -m scripts.dev_provider_check --stage dev --profile $(PROFILE)
 
 dev-diff dev-deploy:
 	@test -n "$(PROFILE)" || { echo "PROFILE is required"; exit 1; }

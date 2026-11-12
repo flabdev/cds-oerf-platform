@@ -21,7 +21,11 @@ class FakeProvider:
         body: str,
         template_id: str,
         parameters: tuple[str, ...] = (),
+        *,
+        incident_id: str | None = None,
+        report_id: str | None = None,
     ) -> ProviderResult:
+        del incident_id, report_id
         self.calls.append((recipient, body, template_id))
         self._count += 1
         if self.simulated:

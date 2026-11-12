@@ -193,8 +193,17 @@ def test_a_live_send_stores_the_api_id_and_the_wamid() -> None:
     from oerf.platform.channels.providers.base import ProviderResult
 
     class _Both:
-        def send(self, recipient, body, template_id, parameters=()):
-            del recipient, body, template_id, parameters
+        def send(
+            self,
+            recipient,
+            body,
+            template_id,
+            parameters=(),
+            *,
+            incident_id=None,
+            report_id=None,
+        ):
+            del recipient, body, template_id, parameters, incident_id, report_id
             return ProviderResult(
                 delivered=True,
                 provider_msg_id="aws-mid-1",
@@ -252,6 +261,174 @@ def test_live_whatsapp_template_keeps_parameter_order() -> None:
     prefixed = _whatsapp_payload("+910000000101", "rendered", "oerf_driver_checkin", ())
     assert prefixed["template"]["name"] == "oerf_driver_checkin"
     assert "components" not in prefixed["template"]
+    assert all(item["type"] != "button" for item in payload["template"]["components"])
+
+
+def test_dev_url_templates_use_dev_names_only_when_the_flag_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from oerf.platform.channels.router import _whatsapp_payload
+
+    monkeypatch.setenv("WHATSAPP_STAGE_URL_TEMPLATES", "true")
+    escalation = _whatsapp_payload(
+        "+910000000101",
+        "rendered",
+        "ops_escalation_options",
+        ("PH-2841", "no facility"),
+        incident_id="INC-000001",
+    )
+    report = _whatsapp_payload(
+        "+910000000101",
+        "rendered",
+        "qa_report_ready",
+        ("PH-2841",),
+        report_id="RPT-000001",
+    )
+    other = _whatsapp_payload("+910000000101", "rendered", "driver_checkin", ("PH-2841",))
+    assert escalation["template"]["name"] == "oerf_dev_ops_escalation_options"
+    assert report["template"]["name"] == "oerf_dev_qa_report_ready"
+    assert other["template"]["name"] == "oerf_driver_checkin"
+
+
+def test_url_templates_keep_todays_names_when_the_flag_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from oerf.platform.channels.router import _whatsapp_payload
+
+    monkeypatch.delenv("WHATSAPP_STAGE_URL_TEMPLATES", raising=False)
+    for logical, deployed in (
+        ("ops_escalation_options", "oerf_ops_escalation_options"),
+        ("qa_report_ready", "oerf_qa_report_ready"),
+        ("driver_checkin", "oerf_driver_checkin"),
+    ):
+        payload = _whatsapp_payload(
+            "+910000000101",
+            "rendered",
+            logical,
+            ("PH-2841",),
+            incident_id="INC-000001",
+            report_id="RPT-000001",
+        )
+        assert payload["template"]["name"] == deployed
+    monkeypatch.setenv("WHATSAPP_STAGE_URL_TEMPLATES", "false")
+    main = _whatsapp_payload(
+        "+910000000101",
+        "rendered",
+        "ops_escalation_options",
+        (),
+        incident_id="INC-000001",
+    )
+    assert main["template"]["name"] == "oerf_ops_escalation_options"
+
+
+def test_url_button_component_carries_only_the_safe_id() -> None:
+    from oerf.platform.channels.router import _whatsapp_payload
+
+    escalation = _whatsapp_payload(
+        "+910000000101",
+        "body-do-not-log",
+        "ops_escalation_options",
+        ("PH-2841", "reason"),
+        incident_id="INC-000001",
+    )
+    report = _whatsapp_payload(
+        "+910000000101",
+        "body-do-not-log",
+        "qa_report_ready",
+        ("PH-2841",),
+        report_id="RPT-000001",
+    )
+    checkin = _whatsapp_payload(
+        "+910000000101",
+        "body-do-not-log",
+        "driver_checkin",
+        ("PH-2841",),
+        incident_id="INC-000001",
+    )
+    assert _button(escalation) == {
+        "type": "button",
+        "sub_type": "url",
+        "index": "1",
+        "parameters": [{"type": "text", "text": "INC-000001"}],
+    }
+    assert _button(report)["index"] == "3"
+    assert _button(report)["parameters"] == [{"type": "text", "text": "RPT-000001"}]
+    assert _button(checkin) is None
+    for unsafe in ("INC 1", "t1/secret", "+910000000101", "id#frag", ""):
+        with pytest.raises(ValueError, match="url-safe"):
+            _whatsapp_payload(
+                "+910000000101",
+                "body-do-not-log",
+                "ops_escalation_options",
+                (),
+                incident_id=unsafe,
+            )
+
+
+def test_template_send_logs_the_name_and_stage_only(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    from oerf.platform.channels.router import _whatsapp_payload
+
+    monkeypatch.setenv("WHATSAPP_STAGE_URL_TEMPLATES", "true")
+    _whatsapp_payload(
+        "+910000000101",
+        "body-do-not-log",
+        "ops_escalation_options",
+        ("PH-2841",),
+        incident_id="INC-000001",
+    )
+    text = capsys.readouterr().out
+    lines = [json.loads(line) for line in text.splitlines() if line.startswith("{")]
+    logged = next(line for line in lines if line["msg"] == "whatsapp_template")
+    assert logged["template"] == "oerf_dev_ops_escalation_options"
+    assert logged["stage"] == "dev"
+    assert "+910000000101" not in text
+    assert "body-do-not-log" not in text
+    assert "PH-2841" not in json.dumps(logged)
+
+
+def test_route_outbound_passes_the_incident_and_report_ids() -> None:
+    from oerf.platform.channels.providers.base import ProviderResult
+
+    seen: dict[str, tuple[str | None, str | None, str]] = {}
+
+    class _Probe:
+        def send(
+            self,
+            recipient: str,
+            body: str,
+            template_id: str,
+            parameters: tuple[str, ...] = (),
+            *,
+            incident_id: str | None = None,
+            report_id: str | None = None,
+        ) -> ProviderResult:
+            del recipient, body, parameters
+            seen["ids"] = (incident_id, report_id, template_id)
+            return ProviderResult(delivered=True, provider_msg_id="wa-1")
+
+    registry, engagements = _open()
+    request = _request().model_copy(
+        update={"facts": {"shipment_id": "PH-2841", "report_id": "RPT-000001"}}
+    )
+    route_outbound(
+        request,
+        registry=registry,
+        engagements=engagements,
+        providers={"whatsapp": _Probe()},
+        messages=MESSAGES,
+    )
+    assert seen["ids"] == ("INC-000001", "RPT-000001", "driver_checkin")
+
+
+def _button(payload: dict) -> dict | None:
+    components = payload["template"].get("components", [])
+    found = [item for item in components if item["type"] == "button"]
+    assert len(found) <= 1
+    return found[0] if found else None
 
 
 def test_an_engagement_send_does_not_use_the_legacy_correlation(monkeypatch) -> None:

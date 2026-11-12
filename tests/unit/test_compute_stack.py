@@ -1066,6 +1066,34 @@ def _statements_with_action(statements: list[dict], action_name: str) -> list[di
     return matched
 
 
+def test_main_sets_omit_stage_url_templates_and_dev_opts_in() -> None:
+    """Set A is the default main router. Set B is live main with the flag in context."""
+
+    _stack, set_a = synthesize()
+    assert "WHATSAPP_STAGE_URL_TEMPLATES" not in _router_variables(set_a)
+    phone_id = "phone-number-id-00000000000000000000000000000000"
+    _stack, set_b = synthesize(
+        context={
+            "channels:live": "true",
+            "whatsapp:phoneNumberId": phone_id,
+            "whatsapp:stageUrlTemplates": "true",
+        }
+    )
+    assert "WHATSAPP_STAGE_URL_TEMPLATES" not in _router_variables(set_b)
+    dev_off = _synthesize_stage("dev")
+    dev_off_name = "oerf-dev-channel-router"
+    assert "WHATSAPP_STAGE_URL_TEMPLATES" not in (
+        functions_by_name(dev_off)[dev_off_name]["Environment"]["Variables"]
+    )
+    dev_on = _synthesize_stage("dev", {"whatsapp:stageUrlTemplates": "true"})
+    assert (
+        functions_by_name(dev_on)[dev_off_name]["Environment"]["Variables"][
+            "WHATSAPP_STAGE_URL_TEMPLATES"
+        ]
+        == "true"
+    )
+
+
 def test_channel_mocks_default_true_and_whatsapp_is_unscoped_without_a_phone_id(
     template: Template,
 ) -> None:

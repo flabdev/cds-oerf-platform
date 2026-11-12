@@ -45,11 +45,21 @@ class WhatsAppProvider:
         body: str,
         template_id: str,
         parameters: tuple[str, ...] = (),
+        *,
+        incident_id: str | None = None,
+        report_id: str | None = None,
     ) -> ProviderResult:
         from oerf.platform.channels.router import send_whatsapp
 
         return _from_legacy(
-            send_whatsapp(recipient, body, template_id=template_id, parameters=parameters)
+            send_whatsapp(
+                recipient,
+                body,
+                template_id=template_id,
+                parameters=parameters,
+                incident_id=incident_id,
+                report_id=report_id,
+            )
         )
 
 
@@ -60,10 +70,13 @@ class SmsProvider:
         body: str,
         template_id: str,
         parameters: tuple[str, ...] = (),
+        *,
+        incident_id: str | None = None,
+        report_id: str | None = None,
     ) -> ProviderResult:
         from oerf.platform.channels.router import send_sms
 
-        del parameters
+        del parameters, incident_id, report_id
         return _from_legacy(send_sms(recipient, body))
 
 
@@ -74,10 +87,13 @@ class EmailProvider:
         body: str,
         template_id: str,
         parameters: tuple[str, ...] = (),
+        *,
+        incident_id: str | None = None,
+        report_id: str | None = None,
     ) -> ProviderResult:
         from oerf.platform.channels.router import send_email
 
-        del parameters
+        del parameters, incident_id, report_id
         return _from_legacy(send_email(recipient, template_id, body))
 
 
@@ -90,6 +106,9 @@ class VoiceProvider:
         body: str,
         template_id: str,
         parameters: tuple[str, ...] = (),
+        *,
+        incident_id: str | None = None,
+        report_id: str | None = None,
     ) -> ProviderResult:
-        del recipient, body, template_id, parameters
+        del recipient, body, template_id, parameters, incident_id, report_id
         return ProviderResult(delivered=False, reason="voice_provider_not_configured")

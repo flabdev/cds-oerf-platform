@@ -1,6 +1,8 @@
 # OERF interface contract
 
-**FROZEN v1.46** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.47** — authored 2026-10-18 by OERF-304 (Ananda).
+
+- v1.47 (2026-11-12) Live WhatsApp sends `oerf_<logical_name>` on main and on dev until `WHATSAPP_STAGE_URL_TEMPLATES` is `true`. That variable is set only for `stage=dev` when context `whatsapp:stageUrlTemplates` is true (dev environment variable `STAGE_URL_TEMPLATES`, default false). While it is true, `ops_escalation_options` is sent as `oerf_dev_ops_escalation_options` and `qa_report_ready` as `oerf_dev_qa_report_ready`. Every other template keeps `oerf_<logical_name>`. Those two templates also send a URL button component: `sub_type` `url`, `index` `"1"` for the escalation template and `"3"` for the report template (the URL button's position after the quick replies), and one `text` parameter. The escalation suffix is the incident id. The report suffix is `facts.report_id`. The suffix is letters, digits, `-`, and `_`. The send log keeps `template` and `stage` (`dev` or `default`) and does not keep the number or the body. No step sends these two templates yet; `route_outbound` passes `incident_id` and `facts.report_id` when a caller does.
 
 - v1.46 (2026-11-11) `oerf-http-api` no longer serves `GET /incidents` or `GET /incidents/{id}`, and it has no other routes. Those reads are on the OerfApiStack REST API (`RestApiUrl`, `oerf.platform.api.dashboard.handler`). `oerf-action-handler` stays deployed with no routes so its name export survives until F8. Observability no longer alarms it. The desk `config.json` `apiUrl` and `scripts.demo` already use `RestApiUrl`.
 
@@ -611,7 +613,7 @@ Synth: [infra/app.py](../infra/app.py) takes the account from context `account`,
 
 Owner: OERF-303. Module: [oerf/platform/observability/logging.py](../oerf/platform/observability/logging.py). `get_logger(name)` returns a stdlib logger with a redaction filter. `log(logger, level, msg, **fields)` writes one JSON object to stdout with `sys.stdout.write` and a flush. The filter does not pass the record to a logging handler, so the CloudWatch log event is that object. A failed channel-router line sets `channel` to `none` when the route has no channel.
 
-`ts` is UTC `YYYY-MM-DDTHH:MM:SSZ`. `level` and `msg` are always present. `tenant_id`, `incident_id`, and `engagement_id` are omitted when the caller does not pass them. `channel`, `outcome`, and `count` are the only other fields kept.
+`ts` is UTC `YYYY-MM-DDTHH:MM:SSZ`. `level` and `msg` are always present. `tenant_id`, `incident_id`, and `engagement_id` are omitted when the caller does not pass them. `channel`, `outcome`, and `count` are the other outcome fields. A WhatsApp template send may also keep `template` (`oerf_[a-z0-9_]+`, not masked as a task token) and `stage` (`dev`, `default`, or `main`).
 
 The filter drops `task_token`, `body`, `text`, `message`, `phone`, `to`, `recipient`, `e164`, `email`, `name`, `address`, and `authorization`. It masks an E.164 number, an email address, or a task-token-shaped value inside `msg` and the fields that remain. A caller that passes a prompt, an image, raw model output, or a raw DynamoDB image gets the same treatment: the key is dropped, and the value is not written.
 
@@ -638,7 +640,9 @@ The mapping has exactly `model_id`, `latency_ms`, `input_tokens`, `output_tokens
 
 Owner: Ananda (WhatsApp channel infrastructure) for [scripts/whatsapp/templates.json](../scripts/whatsapp/templates.json). Logical names live in [domains/cold_chain_excursion/messages.json](../domains/cold_chain_excursion/messages.json).
 
-WhatsApp template name: `oerf_<logical_name>`. The twenty names in `templates.json` are the Utility templates. Category `UTILITY`, language `en`.
+WhatsApp template name: `oerf_<logical_name>` on main, and on dev while `WHATSAPP_STAGE_URL_TEMPLATES` is unset or not `true`. When that variable is `true`, the two URL-button templates are `oerf_dev_ops_escalation_options` and `oerf_dev_qa_report_ready`. The router learns this from the variable, which `OerfComputeStack` sets only for `stage=dev` and context `whatsapp:stageUrlTemplates=true`. The twenty names in `templates.json` are the Utility templates. Category `UTILITY`, language `en`.
+
+The two URL-button templates send a `button` component after the body parameters: `type` `button`, `sub_type` `url`, one `text` parameter. `index` is `"1"` for `ops_escalation_options` (quick reply, then the dashboard URL) and `"3"` for `qa_report_ready` (three quick replies, then the report URL). The text is the incident id or `facts.report_id`. It must match `^[A-Za-z0-9_-]+$`. A missing or unsafe value raises and the message is not sent. `templates submit --stage dev` creates only the two `oerf_dev_*` copies. Their button host is `DashboardUrl` from `OerfApiStack-dev` at submit time. `templates status --stage dev` lists those copies and the shared names. A dev run does not create or change main's templates.
 
 Notion page 20 sections 3 and 4 (free-form in-session replies, voice script, SMS and email text) do not get a WhatsApp template. Catalog names in that bucket:
 

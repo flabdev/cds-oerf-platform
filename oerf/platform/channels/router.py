@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from typing import Any
@@ -43,6 +44,16 @@ WA_PHONE_NUMBER_ID_PARAM = os.environ.get("WA_PHONE_NUMBER_ID_PARAM", "").strip(
 USE_MOCK_WHATSAPP = os.environ.get("USE_MOCK_WHATSAPP", "false").lower() == "true"
 USE_MOCK_SMS = os.environ.get("USE_MOCK_SMS", "false").lower() == "true"
 USE_MOCK_EMAIL = os.environ.get("USE_MOCK_EMAIL", "false").lower() == "true"
+
+# URL-button templates. The index is the button's position in the approved
+# template: a quick reply occupies index 0, so the URL button is not 0.
+# ``ops_escalation_options`` is Call me, then Open dashboard (index 1).
+# ``qa_report_ready`` is Release, Quarantine, Reject, then View report (index 3).
+_URL_BUTTON_INDEX = {
+    "ops_escalation_options": "1",
+    "qa_report_ready": "3",
+}
+_URL_SAFE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 # Lazy-loaded AWS clients
 _dynamodb = None
@@ -114,17 +125,78 @@ def record_outbound_message(
     )
 
 
+def _stage_url_templates() -> bool:
+    """True only when the compute stack set the dev URL-template flag.
+
+    Absent or any value other than ``true`` keeps today's template names.
+    The variable is set only for ``stage=dev`` with ``whatsapp:stageUrlTemplates``.
+    """
+
+    return os.environ.get("WHATSAPP_STAGE_URL_TEMPLATES", "").strip().lower() == "true"
+
+
+def _logical_template(template_id: str) -> str:
+    name = template_id.strip()
+    if name.startswith("oerf_dev_"):
+        return name[len("oerf_dev_") :]
+    if name.startswith("oerf_"):
+        return name[len("oerf_") :]
+    return name
+
+
+def deployed_template_name(template_id: str) -> str:
+    """The WABA template name for this logical name and the stage flag.
+
+    The two URL-button templates use ``oerf_dev_<logical>`` only when
+    ``WHATSAPP_STAGE_URL_TEMPLATES`` is true. Every other name stays
+    ``oerf_<logical>``. A caller that already passed ``oerf_<logical>``
+    keeps that spelling.
+    """
+
+    logical = _logical_template(template_id)
+    if logical in _URL_BUTTON_INDEX and _stage_url_templates():
+        return f"oerf_dev_{logical}"
+    if logical in _URL_BUTTON_INDEX or not template_id.startswith("oerf_"):
+        return f"oerf_{logical}"
+    return template_id
+
+
+def _url_button_text(
+    logical: str,
+    incident_id: str | None,
+    report_id: str | None,
+) -> str | None:
+    """The URL suffix, or None when this template has no URL button.
+
+    ``ops_escalation_options`` uses the incident id. ``qa_report_ready`` uses
+    the report id. The value is one path segment: letters, digits, ``-``,
+    and ``_``. ``#`` and anything else is rejected so the suffix cannot carry
+    a tenant, a phone number, or free text.
+    """
+
+    if logical not in _URL_BUTTON_INDEX:
+        return None
+    raw = incident_id if logical == "ops_escalation_options" else report_id
+    if isinstance(raw, str) and _URL_SAFE.fullmatch(raw):
+        return raw
+    raise ValueError("url button parameter is missing or not url-safe")
+
+
 def send_whatsapp(
     recipient: str,
     message: str,
     template_id: str | None = None,
     parameters: tuple[str, ...] = (),
+    *,
+    incident_id: str | None = None,
+    report_id: str | None = None,
 ) -> dict[str, Any]:
     """Send WhatsApp via AWS End User Messaging Social, simulating if configured.
 
     A mocked send returns a synthetic id and does not call the API. A live
-    send with a template id uses ``oerf_<logical_name>`` and the parameters in
-    template order. Session text remains for callers that have no template.
+    send with a template id uses the stage's deployed name and the parameters
+    in template order. The two URL-button templates also send the button
+    suffix. Session text remains for callers that have no template.
     """
     msg_id = f"wa-{uuid.uuid4().hex[:12]}"
     if USE_MOCK_WHATSAPP:
@@ -155,7 +227,14 @@ def send_whatsapp(
     # Live integration via AWS End User Messaging (Social Messaging)
     try:
         eum = boto3.client("socialmessaging")
-        payload = _whatsapp_payload(recipient, message, template_id, parameters)
+        payload = _whatsapp_payload(
+            recipient,
+            message,
+            template_id,
+            parameters,
+            incident_id=incident_id,
+            report_id=report_id,
+        )
         resp = eum.send_whatsapp_message(
             originationPhoneNumberId=phone_number_id,
             metaApiVersion="v20.0",
@@ -172,6 +251,8 @@ def send_whatsapp(
             "channel": "WHATSAPP",
             "status": "SENT",
         }
+    except ValueError:
+        raise
     except Exception as exc:
         log(logger, logging.ERROR, "send_failed", channel="WHATSAPP", outcome="error")
         return {"success": False, "error": str(exc), "channel": "WHATSAPP"}
@@ -220,6 +301,9 @@ def _whatsapp_payload(
     message: str,
     template_id: str | None,
     parameters: tuple[str, ...],
+    *,
+    incident_id: str | None = None,
+    report_id: str | None = None,
 ) -> dict[str, Any]:
     """A Utility template when the rung names one, otherwise session text."""
 
@@ -231,15 +315,39 @@ def _whatsapp_payload(
             "type": "text",
             "text": {"preview_url": False, "body": message},
         }
-    name = template_id if template_id.startswith("oerf_") else f"oerf_{template_id}"
+    name = deployed_template_name(template_id)
+    stage = "dev" if _stage_url_templates() else "default"
+    log(
+        logger,
+        logging.INFO,
+        "whatsapp_template",
+        channel="WHATSAPP",
+        outcome="send",
+        template=name,
+        stage=stage,
+    )
+    logical = _logical_template(template_id)
     template: dict[str, Any] = {"name": name, "language": {"code": "en"}}
+    components: list[dict[str, Any]] = []
     if parameters:
-        template["components"] = [
+        components.append(
             {
                 "type": "body",
                 "parameters": [{"type": "text", "text": str(value)} for value in parameters],
             }
-        ]
+        )
+    button = _url_button_text(logical, incident_id, report_id)
+    if button is not None:
+        components.append(
+            {
+                "type": "button",
+                "sub_type": "url",
+                "index": _URL_BUTTON_INDEX[logical],
+                "parameters": [{"type": "text", "text": button}],
+            }
+        )
+    if components:
+        template["components"] = components
     return {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -513,7 +621,15 @@ def route_outbound(
             else ()
         )
         sent_template = "" if request.session_text or request.inline_text else request.template_id
-        sent = provider.send(recipient, body, sent_template, parameters=parameters)
+        report_id = request.facts.get("report_id")
+        sent = provider.send(
+            recipient,
+            body,
+            sent_template,
+            parameters=parameters,
+            incident_id=request.incident_id,
+            report_id=report_id if isinstance(report_id, str) else None,
+        )
         attempts.append(
             _attempt(
                 request,

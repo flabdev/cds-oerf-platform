@@ -1,13 +1,15 @@
 """Context for a laptop dev deploy. This module does not run CDK.
 
 Optional inputs follow ``.github/workflows/deploy.yml`` on the dev environment.
-For ``WA_PHONE_NUMBER_ID``, ``ALARM_EMAIL``, ``SHARED_INBOUND_TOPIC_ARN``, and
-``CHANNELS_LIVE`` an explicit environment variable wins (the workflow input).
+For ``WA_PHONE_NUMBER_ID``, ``ALARM_EMAIL``, ``SHARED_INBOUND_TOPIC_ARN``,
+``CHANNELS_LIVE``, and ``STAGE_URL_TEMPLATES`` an explicit environment
+variable wins (the workflow input).
 Otherwise ``gh variable get <NAME> --env dev`` wins over the repository
 variable, which is how ``vars.*`` resolves in that job. The phone id then
 falls back to SSM ``/oerf/dev/whatsapp/phone-number-id``. A context key is
-omitted only when the resolved value is empty. ``channels:live`` is always
-passed: an empty source becomes ``false``, matching the workflow.
+omitted only when the resolved value is empty. ``channels:live`` and
+``whatsapp:stageUrlTemplates`` are always passed: an empty source becomes
+``false``, matching the workflow.
 
 The phone id is required only when ``channels:live`` is true. Before the
 command returns, a deployed router ``WHATSAPP_PHONE_NUMBER_ID``, an alarm
@@ -42,6 +44,7 @@ CONTEXT_KEYS = (
     "dashboard:enabled",
     "desk:publish",
     "channels:live",
+    "whatsapp:stageUrlTemplates",
     "whatsapp:sharedInboundTopicArn",
     "whatsapp:phoneNumberId",
     "alarms:email",
@@ -77,6 +80,7 @@ def deploy_context(
     topic_arn: str,
     alarm_email: str,
     channels_live: str,
+    stage_url_templates: str = "false",
 ) -> dict[str, str]:
     """The ``-c`` values. Empty phone, topic, and email keys are omitted.
 
@@ -86,6 +90,7 @@ def deploy_context(
     if not account.strip():
         raise SystemExit("dev-deploy needs account")
     live = "true" if channels_live.strip() == "true" else "false"
+    url_templates = "true" if stage_url_templates.strip() == "true" else "false"
     if live == "true" and not phone_id.strip():
         raise SystemExit(LIVE_PHONE_ERROR)
     context = {
@@ -96,6 +101,7 @@ def deploy_context(
         "dashboard:enabled": "true",
         "desk:publish": "true",
         "channels:live": live,
+        "whatsapp:stageUrlTemplates": url_templates,
     }
     if topic_arn.strip():
         context["whatsapp:sharedInboundTopicArn"] = topic_arn.strip()
@@ -179,14 +185,17 @@ def resolve_inputs(
     alarm = resolve_named("ALARM_EMAIL", env, reader)
     topic = resolve_named("SHARED_INBOUND_TOPIC_ARN", env, reader)
     channels = resolve_named("CHANNELS_LIVE", env, reader)
+    stage_urls = resolve_named("STAGE_URL_TEMPLATES", env, reader)
     live = "true" if channels.value == "true" else "false"
-    _report(phone, alarm, topic, channels)
+    url_templates = "true" if stage_urls.value == "true" else "false"
+    _report(phone, alarm, topic, channels, stage_urls)
     context = deploy_context(
         account=account,
         phone_id=phone.value,
         topic_arn=topic.value,
         alarm_email=alarm.value,
         channels_live=live,
+        stage_url_templates=url_templates,
     )
     _guard_omit(session, env, phone=phone, alarm=alarm, topic=topic)
     return context
@@ -344,7 +353,13 @@ def _alarm_subscription_is_set(session: Any) -> bool:
             return False
 
 
-def _report(phone: Resolved, alarm: Resolved, topic: Resolved, channels: Resolved) -> None:
+def _report(
+    phone: Resolved,
+    alarm: Resolved,
+    topic: Resolved,
+    channels: Resolved,
+    stage_urls: Resolved,
+) -> None:
     """One line per value. The line has the name, the source, and set or omitted."""
 
     rows = (
@@ -352,6 +367,7 @@ def _report(phone: Resolved, alarm: Resolved, topic: Resolved, channels: Resolve
         (alarm, alarm.present),
         (topic, topic.present),
         (channels, True),
+        (stage_urls, True),
     )
     for item, included in rows:
         status = "set" if included else "omitted"
