@@ -332,6 +332,81 @@
       ],
       "Next": "CancelAfterSecureFacility?"
     },
+    "EngageFacilityAccept": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn": "__ENGAGE_PARTY_ARN__",
+        "Input": {
+          "tenant_id.$": "$.tenant_id",
+          "incident_id.$": "$.incident_id",
+          "engagement_id.$": "$.workflow.facility_request.engagement_id",
+          "role.$": "$.workflow.facility_request.role",
+          "ask.$": "$.workflow.facility_request.ask",
+          "policy_id.$": "$.workflow.facility_request.policy_id",
+          "facts.$": "$.context"
+        }
+      },
+      "ResultPath": "$.workflow.facility_engagement",
+      "TimeoutSeconds": 86400,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "CancelAfterEngageFacility?"
+    },
+    "CancelAfterEngageFacility?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.cancel_requested", "IsPresent": true},
+            {"Variable": "$.cancel_requested", "BooleanEquals": true}
+          ],
+          "Next": "Cancel"
+        }
+      ],
+      "Default": "FacilityDecision"
+    },
+    "FacilityDecision": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__STEP_SECURE_FACILITY_ARN__",
+        "Payload": {
+          "step_name": "FacilityDecision",
+          "workflow.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.failure",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "FacilityAccepted?"
+    },
     "FacilityAccepted?": {
       "Type": "Choice",
       "Choices": [
@@ -1284,6 +1359,17 @@
             }
           ],
           "Next": "Cancel"
+        }
+      ],
+      "Default": "FacilityContact?"
+    },
+    "FacilityContact?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.workflow.facility_request",
+          "IsPresent": true,
+          "Next": "EngageFacilityAccept"
         }
       ],
       "Default": "FacilityAccepted?"

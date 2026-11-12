@@ -70,6 +70,7 @@ STEPS = frozenset(
         APPROVAL,
         SECURE_FACILITY,
         "SecureFacilityFallback",
+        "FacilityDecision",
         ACT,
         VERIFY,
         "RecordContainment",

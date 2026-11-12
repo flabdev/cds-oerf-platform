@@ -11,5 +11,10 @@ PHASE = "secure_facility"
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     step_name = event.get("step_name") or event.get("step")
-    phase = "secure_facility_fallback" if step_name == "SecureFacilityFallback" else PHASE
+    if step_name == "SecureFacilityFallback":
+        phase = "secure_facility_fallback"
+    elif step_name == "FacilityDecision":
+        phase = "facility_decision"
+    else:
+        phase = PHASE
     return run_step(phase, event, context)

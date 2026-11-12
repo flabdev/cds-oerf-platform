@@ -635,8 +635,20 @@ def _facility_context() -> dict[str, Any]:
         "range_c": [2, 8],
         "allowance_minutes": 45,
         "facilities": [
-            {"id": "FAC-A", "drive_min": 9, "capacity_available": True, "approved": True},
-            {"id": "FAC-B", "drive_min": 21, "capacity_available": True, "approved": True},
+            {
+                "id": "FAC-A",
+                "drive_min": 9,
+                "capacity_available": True,
+                "approved": True,
+                "contact_id": "contact-fac-a",
+            },
+            {
+                "id": "FAC-B",
+                "drive_min": 21,
+                "capacity_available": True,
+                "approved": True,
+                "contact_id": "contact-fac-b",
+            },
         ],
     }
 
@@ -659,7 +671,75 @@ def test_secure_facility_decline_moves_to_the_next_feasible_facility() -> None:
     assert result.facility["facility_id"] == "FAC-A"
     assert result.facility["next_option_id"] == "FAC-B"
     assert result.facility["next_facility_id"] == "FAC-B"
+    assert result.workflow["facility_request"] == {
+        "engagement_id": f"ENG-{INCIDENT_ID}-facility-accept",
+        "policy_id": "partner_request",
+        "role": "facility",
+        "ask": "accept",
+        "facility_id": "FAC-A",
+        "contact_id": "contact-fac-a",
+        "next_option_id": "FAC-B",
+    }
     assert result.incident_state == "SECURING_FACILITY"
+
+
+@pytest.mark.parametrize(
+    ("status", "intent", "accepted", "next_option_id"),
+    [
+        ("answered", "accept", True, "FAC-B"),
+        ("answered", "decline", False, "FAC-B"),
+        ("exhausted", None, False, None),
+    ],
+)
+def test_facility_decision_maps_nested_engagement_outcomes(
+    status: str,
+    intent: str | None,
+    accepted: bool,
+    next_option_id: str | None,
+) -> None:
+    dependencies = _dependencies("SECURING_FACILITY")
+    result_payload: dict[str, Any] = {"status": status}
+    if intent is not None:
+        result_payload["intent"] = intent
+    workflow = _approval_workflow(
+        facility={
+            "accepted": True,
+            "kind": "facility",
+            "facility_id": "FAC-A",
+            "next_option_id": "FAC-B",
+        },
+        facility_request={"facility_id": "FAC-A", "next_option_id": "FAC-B"},
+        facility_engagement={"Output": result_payload},
+    )
+
+    result = HANDLERS["FacilityDecision"](
+        _envelope("FacilityDecision", workflow=workflow), dependencies
+    )
+
+    assert result.facility is not None
+    assert result.facility["accepted"] is accepted
+    assert result.facility["facility_id"] == "FAC-A"
+    assert result.facility["next_option_id"] == next_option_id
+    assert result.workflow["facility_response"]["status"] == status
+    assert result.decision is not None
+    assert result.decision["accepted"] is accepted
+
+
+def test_facility_decision_reads_flattened_nested_result() -> None:
+    dependencies = _dependencies("SECURING_FACILITY")
+    workflow = _approval_workflow(
+        facility={"accepted": True, "kind": "facility", "facility_id": "FAC-A"},
+        facility_request={"facility_id": "FAC-A"},
+        facility_engagement={"status": "answered", "intent": "accept"},
+    )
+
+    result = HANDLERS["FacilityDecision"](
+        _envelope("FacilityDecision", workflow=workflow), dependencies
+    )
+
+    assert result.facility is not None
+    assert result.facility["accepted"] is True
+    assert result.facility["response"]["intent"] == "accept"
 
 
 def test_secure_facility_fallback_uses_next_option_under_a_distinct_idempotency_key() -> None:

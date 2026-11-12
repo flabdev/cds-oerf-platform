@@ -43,6 +43,7 @@ REAL_PLACEHOLDERS = {
     "Approval": "__STEP_APPROVAL_ARN__",
     "SecureFacility": "__STEP_SECURE_FACILITY_ARN__",
     "SecureFacilityFallback": "__STEP_SECURE_FACILITY_ARN__",
+    "FacilityDecision": "__STEP_SECURE_FACILITY_ARN__",
     "Act": "__STEP_ACT_ARN__",
     "VerifyLoop": "__STEP_VERIFY_ARN__",
     "RecordContainment": "__STEP_RECORD_CONTAINMENT_ARN__",
@@ -62,6 +63,8 @@ REAL_PLACEHOLDERS = {
 STUB_COLD_CHAIN_TASKS = frozenset()
 STUB_ENGAGEMENT_TASKS = frozenset()
 NOTICE_TASKS = frozenset({"NotifyContinue", "NotifyDivert"})
+#: Cold-chain states that start a nested state machine instead of a Lambda.
+NESTED_TASKS = frozenset({"EngageDriverDiagnosis", "EngageFacilityAccept"})
 
 
 def load_definition() -> dict:
@@ -162,7 +165,7 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
 
     assert tasks
     for name, state in tasks.items():
-        if name == "EngageDriverDiagnosis":
+        if name in NESTED_TASKS:
             assert state["Resource"] == "arn:aws:states:::states:startExecution.sync:2"
             assert state["Parameters"]["StateMachineArn"] == "__ENGAGE_PARTY_ARN__"
             continue
@@ -178,9 +181,9 @@ def test_task_states_invoke_the_stub_lambda_with_retries_and_catches() -> None:
             assert "task_token" not in json.dumps(state["Parameters"])
             assert state["Catch"][0]["Next"].startswith("CancelAfterNotify")
             continue
-        if name == "SecureFacilityFallback":
+        if name in {"SecureFacilityFallback", "FacilityDecision"}:
             assert state["Parameters"]["FunctionName"] == REAL_PLACEHOLDERS["SecureFacility"]
-            assert state["Parameters"]["Payload"]["step_name"] == "SecureFacilityFallback"
+            assert state["Parameters"]["Payload"]["step_name"] == name
             assert state["Retry"][0]["MaxAttempts"] == 3
             assert state["Catch"][-1]["Next"] == "RecordFailure"
             continue
@@ -1280,6 +1283,33 @@ def test_rejected_approval_escalates_and_keeps_identity() -> None:
 def test_facility_decline_loops_once_to_the_next_facility() -> None:
     """C6: a decline with a ranked fallback goes through a distinct task identity."""
     states = load_definition()["States"]
+    assert states["CancelAfterSecureFacility?"]["Default"] == "FacilityContact?"
+    assert states["FacilityContact?"]["Choices"] == [
+        {
+            "Variable": "$.workflow.facility_request",
+            "IsPresent": True,
+            "Next": "EngageFacilityAccept",
+        }
+    ]
+    assert states["FacilityContact?"]["Default"] == "FacilityAccepted?"
+    assert evaluate_choice(states["FacilityContact?"], {}) == "FacilityAccepted?"
+    assert evaluate_choice(
+        states["FacilityContact?"], {"workflow": {"facility_request": {}}}
+    ) == "EngageFacilityAccept"
+    engage_facility = states["EngageFacilityAccept"]
+    assert engage_facility["Parameters"]["Input"] == {
+        "tenant_id.$": "$.tenant_id",
+        "incident_id.$": "$.incident_id",
+        "engagement_id.$": "$.workflow.facility_request.engagement_id",
+        "role.$": "$.workflow.facility_request.role",
+        "ask.$": "$.workflow.facility_request.ask",
+        "policy_id.$": "$.workflow.facility_request.policy_id",
+        "facts.$": "$.context",
+    }
+    assert engage_facility["ResultPath"] == "$.workflow.facility_engagement"
+    assert states["EngageFacilityAccept"]["Next"] == "CancelAfterEngageFacility?"
+    assert states["CancelAfterEngageFacility?"]["Default"] == "FacilityDecision"
+    assert states["FacilityDecision"]["Next"] == "FacilityAccepted?"
     assert states["FacilityAccepted?"]["Choices"][1] == {
         "And": [
             {"Variable": "$.facility.accepted", "IsPresent": True},
