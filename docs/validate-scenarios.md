@@ -93,10 +93,12 @@ Expect a line like `applied t1 live-contacts driver 2`. A missing parameter prin
 | Driver | Contact | Shipment | Device |
 | --- | --- | --- | --- |
 | Mudita | `C-T1-DRV` | `PH-2841` | `RF-7781` |
-| Ananda | `C-T1-DRV-ANANDA` | `PH-3102` | `RF-9102` |
+| Ananda | `C-T1-DRV-ANANDA` | `PH-2842` | `RF-7783` |
 | Vivek | `C-T1-DRV-VIVEK` | `<fill in from sim/seed/t1>` | `<fill in>` |
 
-The commands below use `PH-2841` / `RF-7781`. For a walk on Ananda's or Vivek's phone, use their shipment and device instead. The three-driver rehearsal needs all three rows seeded and all three driver parameters present.
+`PH-2841` stays the continue story (`eta_min_at_excursion` 15). `PH-2842` is the distance reroute (`eta_min_at_excursion` 60, device `RF-7783`, driver `C-T1-DRV-ANANDA`): destination out of reach, FAC-A in reach. That ranking needs the Assess change that reads the shipment ETA. Drive it with `SHIPMENT=PH-2842` and `DEVICE=RF-7783`.
+
+The commands below use `PH-2841` / `RF-7781`. For a walk on Ananda's phone, use `PH-2842` / `RF-7783`. Vivek has no shipment row yet.
 
 ## Shared sensor
 

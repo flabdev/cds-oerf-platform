@@ -2,7 +2,7 @@
 
 **FROZEN v1.49** — authored 2026-10-18 by OERF-304 (Ananda).
 
-- v1.49 (2026-11-12) `JOIN` still runs only when `SANDBOX_JOIN_ENABLED` is true (dev). `JOIN DRIVER` runs only when `AUDIENCE_JOIN_ENABLED` is true. That flag is false on main and on dev until it is turned on. The audience pool is the t1 shipments marked `audience_pool`. `PH-2841` and `PH-3102` stay out of that pool.
+- v1.49 (2026-11-12) `JOIN` still runs only when `SANDBOX_JOIN_ENABLED` is true (dev). `JOIN DRIVER` runs only when `AUDIENCE_JOIN_ENABLED` is true. That flag is false on main and on dev until it is turned on. The audience pool is the t1 shipments marked `audience_pool`. `PH-2841` and `PH-2842` stay out of that pool.
 
 - v1.48 (2026-11-12) Desk detail includes `qa_review_pending` when an incident `SK=QA_REVIEW` row exists. The callback token stays off the wire. `POST /incidents/{id}/actions` with `review_qa` is unchanged: `tenant_admin` and `platform_admin` only, body `approved` and `disposition` (`release`, `quarantine`, or `reject`). The desk keeps a tenant-list subscription while an incident is open, and refetches that incident when its update arrives.
 

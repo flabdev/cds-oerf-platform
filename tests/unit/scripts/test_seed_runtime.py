@@ -71,7 +71,12 @@ def test_seed_round_trip_matches_the_workflow_readers() -> None:
     shipment = DynamoShipmentReader(client, TABLE).get("t1", "PH-2841")
     assert shipment is not None
     assert shipment["product_profile"] == "PP-2-8-45"
-    assert shipment["eta_min_at_excursion"] == 46
+    assert shipment["eta_min_at_excursion"] == 15
+    reroute_shipment = DynamoShipmentReader(client, TABLE).get("t1", "PH-2842")
+    assert reroute_shipment is not None
+    assert reroute_shipment["device"] == "RF-7783"
+    assert reroute_shipment["driver"] == "C-T1-DRV-ANANDA"
+    assert reroute_shipment["eta_min_at_excursion"] == 60
     assert isinstance(shipment["eta_min_at_excursion"], int)
     assert not isinstance(shipment["eta_min_at_excursion"], bool)
     assert shipment["value_usd"] == 180000

@@ -36,7 +36,7 @@ def test_the_audience_pool_is_twenty_shipments_and_leaves_the_stories() -> None:
     assert len(pool) == 20
     assert pool == tuple(f"PH-P{index:02d}" for index in range(1, 21))
     assert "PH-2841" not in pool
-    assert "PH-3102" not in pool
+    assert "PH-2842" not in pool
 
 
 def test_names_and_links_do_not_carry_a_full_number() -> None:
