@@ -902,6 +902,18 @@ def _path_value(data: dict, path: str) -> object:
     return node
 
 
+def _apply_result_selector(result: list, selector: dict) -> dict:
+    """Apply the ASL ResultSelector's static and JSONPath entries."""
+
+    selected = {}
+    for key, value in selector.items():
+        if key.endswith(".$"):
+            selected[key[:-2]] = _path_value(result, value)
+        else:
+            selected[key] = value
+    return selected
+
+
 def _comparison_holds(rule: dict, data: dict) -> bool:
     """Evaluate one Choice rule. ``And`` stops at the first false condition."""
 
@@ -984,7 +996,9 @@ def simulate(event: dict, handler_fn=handler, max_steps: int = 48) -> tuple:
                 current = state["Catch"][0]["Next"]
                 continue
             monitor_result.setdefault("workflow", {})["qa_monitor_done"] = True
-            data["qa_parallel"] = [qa_result, monitor_result]
+            data["qa_parallel"] = _apply_result_selector(
+                [qa_result, monitor_result], state["ResultSelector"]
+            )
             current = state["Next"]
         elif state["Type"] == "Pass":
             if "InputPath" in state:
