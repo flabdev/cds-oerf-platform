@@ -26,6 +26,12 @@ MESSAGES = {
         "driver_ack": {
             "whatsapp": "Thanks, noted: {answer}. We're checking the shipment now."
         },
+        "facility_ack": {
+            "whatsapp": (
+                "Thank you. Your {answer} response to the cold-storage request "
+                "has been recorded."
+            )
+        },
         "status_update": {
             "whatsapp": (
                 "Update on shipment {shipment_id}: {status}. "
@@ -139,6 +145,39 @@ def test_ack_uses_the_driver_and_session_text() -> None:
     assert template_id == ""
     assert parameters == ()
     assert body == "Thanks, noted: Running. We're checking the shipment now."
+
+
+@pytest.mark.parametrize(
+    ("intent", "acknowledgement"),
+    [("accept", "accepted"), ("decline", "declined")],
+)
+def test_facility_ack_uses_explicit_contact_and_records_decision(
+    intent: str, acknowledgement: str
+) -> None:
+    probe = _Probe()
+    outbox = MemoryOutbox(clock=lambda: NOW)
+    ports = _ports(probe, outbox)
+    ports.registry.register_contact("t1", "C-T1-FAC-A", "facility", OTHER)
+    event = _event(
+        "facility_ack",
+        answer=intent,
+        contact_id="C-T1-FAC-A",
+        shipment_id="PH-2842",
+    )
+    event["role"] = "facility"
+    event["dedupe_key"] = "INC-000001:ENG-INC-000001-facility-accept:facility_ack"
+
+    result = send_one_way(event, ports=ports)
+
+    assert result == {"status": "simulated", "provider_msg_id": "wa-1"}
+    recipient, body, template_id, parameters = probe.calls[0]
+    assert recipient == OTHER
+    assert template_id == ""
+    assert parameters == ()
+    assert body == (
+        f"Thank you. Your {acknowledgement} response to the cold-storage request "
+        "has been recorded."
+    )
 
 
 def test_status_update_parameters_follow_the_template() -> None:

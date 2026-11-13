@@ -18,6 +18,7 @@ CATALOG_IDS = {
     "facility_reminder",
     "driver_reroute",
     "driver_ack",
+    "facility_ack",
     "transfer_confirm_request",
     "qa_report_ready",
     "qa_reminder",

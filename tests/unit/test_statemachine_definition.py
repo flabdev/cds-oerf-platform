@@ -308,9 +308,39 @@ def test_nested_engagement_is_a_token_waiting_state_machine_and_runs_before_asse
     assert states["SendOneWay"]["Parameters"]["FunctionName"] == "__CHANNEL_ROUTER_ARN__"
     assert states["SendOneWay"]["ResultPath"] == "$.one_way"
     assert states["SendOneWay"]["Catch"][0]["Next"] == "AdvanceRung"
-    assert states["InterpretResult"]["Choices"][2]["Next"] == "AcknowledgeReply"
-    assert states["AcknowledgeReply"]["Next"] == "Answered"
+    assert states["InterpretResult"]["Choices"][2]["Next"] == "AcknowledgeType?"
+    assert states["AcknowledgeType?"]["Default"] == "AcknowledgeReply"
+    assert states["AcknowledgeType?"]["Choices"] == [
+        {
+            "And": [
+                {"Variable": "$.role", "IsPresent": True},
+                {"Variable": "$.role", "StringEquals": "facility"},
+            ],
+            "Next": "AcknowledgeFacilityReply",
+        }
+    ]
+    assert evaluate_choice(states["AcknowledgeType?"], {"role": "facility"}) == (
+        "AcknowledgeFacilityReply"
+    )
+    assert evaluate_choice(states["AcknowledgeType?"], {"role": "driver"}) == (
+        "AcknowledgeReply"
+    )
+    facility_ack = states["AcknowledgeFacilityReply"]["Parameters"]["Payload"]
+    assert facility_ack["message"] == "facility_ack"
+    assert facility_ack["facts"] == {
+        "answer.$": "$.response.intent",
+        "contact_id.$": "$.contact_id",
+    }
+    assert "$.facts.shipment" not in json.dumps(facility_ack)
+    assert facility_ack["dedupe_key.$"] == (
+        "States.Format('{}:{}:{}:facility_ack', $.incident_id, $.engagement_id, $.contact_id)"
+    )
+    assert states["AcknowledgeFacilityReply"]["Next"] == "Answered"
     assert states["AcknowledgeReply"]["Parameters"]["Payload"]["message"] == "driver_ack"
+    assert (
+        states["AcknowledgeReply"]["Parameters"]["Payload"]["facts"]["shipment.$"]
+        == "$.facts.shipment"
+    )
     assert states["AcknowledgeReply"]["Catch"][0]["Next"] == "Answered"
     assert states["HandleCallback"]["Next"] == "CallbackPause"
 
@@ -1144,6 +1174,7 @@ def test_ph2841_engagement_happy_path_reaches_answered() -> None:
         "SendViaRouter",
         "Interpret",
         "InterpretResult",
+        "AcknowledgeType?",
         "AcknowledgeReply",
         "Answered",
     ]
