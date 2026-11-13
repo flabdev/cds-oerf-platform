@@ -1817,7 +1817,7 @@
         "incident_state.$": "$.qa_parallel.qa.incident_state",
         "current_stage.$": "$.qa_parallel.qa.current_stage",
         "containment.$": "$.qa_parallel.qa.containment",
-        "report.$": "$.qa_parallel.qa.report"
+        "report.$": "$.qa_parallel.qa.workflow.report"
       },
       "Next": "Close"
     },
@@ -1833,7 +1833,7 @@
         "incident_state.$": "$.qa_parallel.qa.incident_state",
         "current_stage.$": "$.qa_parallel.qa.current_stage",
         "containment.$": "$.qa_parallel.qa.containment",
-        "report.$": "$.qa_parallel.qa.report"
+        "report.$": "$.qa_parallel.qa.workflow.report"
       },
       "Next": "HandleReopen"
     },
