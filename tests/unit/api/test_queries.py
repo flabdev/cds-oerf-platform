@@ -52,7 +52,14 @@ def test_list_and_detail_stay_in_one_tenant_and_hide_secrets() -> None:
     encoded = json.dumps(detail[1])
 
     assert [row["incident_id"] for row in listed[1]["incidents"]] == ["INC-1"]
-    assert set(listed[1]["incidents"][0]) == {"incident_id", "state", "stage", "version"}
+    assert set(listed[1]["incidents"][0]) == {
+        "incident_id",
+        "shipment_id",
+        "state",
+        "stage",
+        "version",
+    }
+    assert listed[1]["incidents"][0]["shipment_id"] == "PH-2841"
     assert detail[1]["shipment_id"] == "PH-2841"
     assert detail[1]["config_snapshot"]["fault_code"] == "E17"
     assert "phone" not in detail[1]["config_snapshot"]

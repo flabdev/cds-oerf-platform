@@ -1,6 +1,8 @@
 # OERF interface contract
 
-**FROZEN v1.49** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.50** — authored 2026-10-18 by OERF-304 (Ananda).
+
+- v1.50 (2026-11-13) `GET /incidents` rows include `shipment_id` when the incident META has one. The desk list keeps that shipment as the row title and shows the incident id beside it. Selecting a row does not move it.
 
 - v1.49 (2026-11-12) `JOIN` still runs only when `SANDBOX_JOIN_ENABLED` is true (dev). `JOIN DRIVER` runs only when `AUDIENCE_JOIN_ENABLED` is true. That flag is false on main and on dev until it is turned on. The audience pool is the t1 shipments marked `audience_pool`. `PH-2841` and `PH-2842` stay out of that pool.
 
@@ -422,7 +424,7 @@ Owner: Mudita (OERF-302) for routes and the subscribe message. Ananda (OERF-308)
 | Route | Contract |
 | --- | --- |
 | `GET /incidents/{id}` | Incident for the token tenant and path id. META fields: `incident_id`, `tenant_id`, `shipment_id`, `state`, `stage`, `version`, `reason`, `opened_at`, `config_version`, `config_snapshot`, `product_profile_id`. `version` is `event_seq` when `version` is absent. `range_c` and `allowance_remaining` use the profile named by `product_profile_id` in the pinned snapshot. A META row without that id uses the shipment row (`PK=TENANT#{tid}`, `SK=SHIPMENT#{sid}`, `product_profile` or `product_profile_id`). Both are null when that profile is unknown. `allowance_remaining` is also null when the readings cannot compute it. The first snapshot profile is not used. Also `driver_label` (a name, blank when it looks like a phone), `qa_review_pending` (true only while `SK=QA_REVIEW` exists; the token is not returned), `evidence` (`fault_codes`, plus `photos` when `last_analyzed_key` is set), `recommendation`, `options`, `engagement_id`, `engagement_status`, `timeline`, and `readings`. Timeline and readings are the tenant's incident partition, `EVT#` and `READ#`, paged, oldest first. `pk`, `sk`, task tokens, and raw step output stay off the wire. |
-| `GET /incidents` | List for the token tenant. Blocked on GSI1 (pattern 12). Each row is the summary object in section 7.3. |
+| `GET /incidents` | List for the token tenant. Blocked on GSI1 (pattern 12). Each row is `incident_id`, `state`, `stage`, `version`, and `shipment_id` when META has one. |
 
 Dashboard `POST /incidents/{id}/actions` is section 3.2 on the same REST API. Ingest (`sim.reefer` / `TemperatureReading`) is the only way an incident and its execution start.
 

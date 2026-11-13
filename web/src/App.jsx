@@ -698,6 +698,9 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
                   >
                     <span className="row-top">
                       <strong>{textField(item.shipment_id, textField(item.incident_id, "?"))}</strong>
+                      {textField(item.shipment_id, "") && textField(item.incident_id, "") ? (
+                        <span className="row-id">{textField(item.incident_id)}</span>
+                      ) : null}
                       {row.aboveLimit ? (
                         <span className="hot-dot" title="Above the limit">
                           <span className="sr-only">Above the limit</span>

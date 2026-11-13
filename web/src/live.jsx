@@ -326,13 +326,7 @@ export function LiveDesk({ config }) {
       if (signingOut.current) {
         return;
       }
-      setIncidents((current) => {
-        if (!Array.isArray(current)) {
-          return [detail];
-        }
-        const rest = current.filter((item) => item.incident_id !== incidentId);
-        return [detail, ...rest];
-      });
+      setIncidents((current) => replaceIncidentRow(current, detail));
     } catch (error) {
       if (authFailure(error)) {
         expireSession();
