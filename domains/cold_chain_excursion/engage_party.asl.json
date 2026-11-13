@@ -95,7 +95,7 @@
       "Choices": [
         {"And": [{"Variable": "$.response.intent", "IsPresent": true}, {"Variable": "$.response.intent", "StringEquals": "call_me"}], "Next": "HandleCallback"},
         {"And": [{"Variable": "$.response.intent", "IsPresent": true}, {"Variable": "$.response.intent", "StringEquals": "clarify"}], "Next": "ResetLadder"},
-        {"And": [{"Variable": "$.response.valid", "IsPresent": true}, {"Variable": "$.response.valid", "BooleanEquals": true}], "Next": "AcknowledgeReply"}
+        {"And": [{"Variable": "$.response.valid", "IsPresent": true}, {"Variable": "$.response.valid", "BooleanEquals": true}], "Next": "AcknowledgeType?"}
       ],
       "Default": "Clarify"
     },
@@ -135,6 +135,38 @@
       "Next": "ComputeNextRung"
     },
     "Clarify": {"Type": "Pass", "Parameters": {"status": "clarify", "intent.$": "$.response.intent", "fields.$": "$.response.fields", "evidence_refs.$": "$.response.evidence_refs", "engagement_id.$": "$.engagement_id"}, "End": true},
+    "AcknowledgeType?": {
+      "Type": "Choice",
+      "Choices": [
+        {"And": [{"Variable": "$.role", "IsPresent": true}, {"Variable": "$.role", "StringEquals": "facility"}], "Next": "AcknowledgeFacilityReply"}
+      ],
+      "Default": "AcknowledgeReply"
+    },
+    "AcknowledgeFacilityReply": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CHANNEL_ROUTER_ARN__",
+        "Payload": {
+          "step_name": "EngagementSendOneWay",
+          "tenant_id.$": "$.tenant_id",
+          "incident_id.$": "$.incident_id",
+          "role.$": "$.role",
+          "message": "facility_ack",
+          "channel": "whatsapp",
+          "facts": {
+            "answer.$": "$.response.intent",
+            "contact_id.$": "$.contact_id"
+          },
+          "dedupe_key.$": "States.Format('{}:{}:{}:facility_ack', $.incident_id, $.engagement_id, $.contact_id)"
+        }
+      },
+      "ResultPath": "$.ack",
+      "TimeoutSeconds": 30,
+      "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.ack_error", "Next": "Answered"}],
+      "Next": "Answered"
+    },
     "AcknowledgeReply": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",

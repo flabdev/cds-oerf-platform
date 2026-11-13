@@ -8,6 +8,9 @@
     "driver_ack": {
       "whatsapp": "Thanks, noted: {answer}. We're checking the shipment now."
     },
+    "facility_ack": {
+      "whatsapp": "Thank you. Your {answer} response to the cold-storage request has been recorded."
+    },
     "driver_reminder": {},
     "driver_call": {},
     "supervisor_escalation": {},

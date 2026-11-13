@@ -21,7 +21,7 @@ from oerf.platform.storage.dynamo import epoch_seconds, is_conditional_failure, 
 logger = get_logger(__name__)
 
 RETENTION_SECONDS = 7 * 24 * 60 * 60
-SESSION_MESSAGES = frozenset({"driver_ack"})
+SESSION_MESSAGES = frozenset({"driver_ack", "facility_ack"})
 CONTINUE_STATUS = "continue to your destination"
 CONTINUE_NEXT = "we're monitoring the temperature"
 
@@ -273,6 +273,15 @@ def _template_facts(
     tenant_id: str,
     ports: Any,
 ) -> dict[str, Any] | None:
+    if message == "facility_ack":
+        answer = facts.get("answer")
+        if answer == "accept":
+            answer = "accepted"
+        elif answer == "decline":
+            answer = "declined"
+        if not isinstance(answer, str) or not answer.strip():
+            return None
+        return {"answer": answer.strip()}
     if message == "driver_ack":
         answer = facts.get("answer")
         if not isinstance(answer, str) or not answer.strip():
@@ -378,6 +387,9 @@ def _directions(lat: object, lon: object) -> str:
 
 
 def _contact_id(facts: dict[str, Any], role: str) -> str | None:
+    direct = facts.get("contact_id")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
     shipment = facts.get("shipment") if isinstance(facts.get("shipment"), dict) else None
     if shipment is None:
         context = facts.get("context") if isinstance(facts.get("context"), dict) else {}
