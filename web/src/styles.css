@@ -584,6 +584,12 @@ button.profile[aria-expanded="true"] {
   letter-spacing: 0.01em;
 }
 
+.row-id {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
 .row-top time {
   margin-left: auto;
   color: var(--muted);

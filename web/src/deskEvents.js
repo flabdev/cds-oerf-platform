@@ -158,7 +158,11 @@ export function replaceIncidentRow(current, detail) {
     return current;
   }
   const next = current.slice();
-  next[index] = { ...previous, ...detail };
+  const merged = { ...previous, ...detail };
+  if (typeof detail.shipment_id !== "string" || !detail.shipment_id.trim()) {
+    merged.shipment_id = previous.shipment_id;
+  }
+  next[index] = merged;
   return next;
 }
 

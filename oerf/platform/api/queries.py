@@ -254,12 +254,16 @@ class SqsActionQueue:
 
 def _summary(item: dict[str, Any]) -> dict[str, Any]:
     state = text(item["state"])
-    return {
+    summary = {
         "incident_id": text(item["incident_id"]),
         "state": state,
         "stage": _optional_text(item, "stage") or state,
         "version": _version(item),
     }
+    shipment_id = _optional_text(item, "shipment_id")
+    if shipment_id:
+        summary["shipment_id"] = shipment_id
+    return summary
 
 
 def _optional_text(item: dict[str, Any], name: str) -> str | None:

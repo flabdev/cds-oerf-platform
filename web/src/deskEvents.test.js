@@ -196,6 +196,17 @@ test("a newer update appends the latest reading", () => {
   assert.equal(next[0].readings[1].temperature_c, 9.1);
 });
 
+test("a detail without a shipment keeps the row in place", () => {
+  const rows = [
+    { incident_id: "INC-1", state: "OPEN", version: 1, shipment_id: "PH-2841" },
+    { incident_id: "INC-2", state: "OPEN", version: 1, shipment_id: "PH-2842" },
+  ];
+  const next = replaceIncidentRow(rows, { incident_id: "INC-2", state: "VERIFYING", version: 2 });
+  assert.deepEqual(next.map((item) => item.incident_id), ["INC-1", "INC-2"]);
+  assert.equal(next[1].shipment_id, "PH-2842");
+  assert.equal(next[1].state, "VERIFYING");
+});
+
 test("an older detail does not replace a newer row", () => {
   const rows = [{ incident_id: "INC-1", state: "CANCELLED", version: 5, shipment_id: "PH-2841" }];
   const next = replaceIncidentRow(rows, { incident_id: "INC-1", state: "IN_TRANSIT", version: 4 });

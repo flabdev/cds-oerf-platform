@@ -561,12 +561,16 @@ def _detail_body(item: dict[str, Any]) -> dict[str, Any]:
 def _summary_row(item: dict[str, Any]) -> dict[str, Any]:
     state = item.get("state")
     version = item.get("version")
-    return {
+    row = {
         "incident_id": item.get("incident_id"),
         "state": state,
         "stage": item.get("stage") or state,
         "version": 1 if version is None else int(version),
     }
+    shipment_id = item.get("shipment_id")
+    if isinstance(shipment_id, str) and shipment_id.strip():
+        row["shipment_id"] = shipment_id.strip()
+    return row
 
 
 def _action_body(body: dict[str, Any]) -> dict[str, Any] | None:
