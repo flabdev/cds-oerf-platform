@@ -345,7 +345,7 @@
           "ask.$": "$.workflow.facility_request.ask",
           "policy_id.$": "$.workflow.facility_request.policy_id",
           "contact_id.$": "$.workflow.facility_request.contact_id",
-          "facts.$": "$.context"
+          "facts.$": "$.workflow.facility_request.facts"
         }
       },
       "ResultPath": "$.workflow.facility_engagement",

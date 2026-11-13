@@ -66,6 +66,14 @@ def test_message_catalog_uses_only_specified_template_text() -> None:
     assert catalog["messages"]["driver_checkin"]["sms"] == (
         "Temperature alert {shipment_id}. Pull over safely and check WhatsApp."
     )
+    assert catalog["messages"]["facility_request"]["whatsapp"] == (
+        "Emergency cold storage request for shipment {shipment_id}. Required range: {range}. "
+        "Expected arrival in about {minutes} minutes. Can you accept it?"
+    )
+    assert catalog["messages"]["facility_reminder"]["whatsapp"] == (
+        "Reminder: shipment {shipment_id} needs emergency cold storage at {facility_name} "
+        "within about {minutes} minutes. Please accept or decline so we can plan."
+    )
 
 
 def test_t1_seed_contains_shipment_roles_and_facilities() -> None:

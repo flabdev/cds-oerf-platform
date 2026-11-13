@@ -13,8 +13,12 @@
     "supervisor_escalation": {},
     "ops_approval": {},
     "approval_reminder": {},
-    "facility_request": {},
-    "facility_reminder": {},
+    "facility_request": {
+      "whatsapp": "Emergency cold storage request for shipment {shipment_id}. Required range: {range}. Expected arrival in about {minutes} minutes. Can you accept it?"
+    },
+    "facility_reminder": {
+      "whatsapp": "Reminder: shipment {shipment_id} needs emergency cold storage at {facility_name} within about {minutes} minutes. Please accept or decline so we can plan."
+    },
     "driver_reroute": {
       "whatsapp": "Please take shipment {shipment_id} to {facility_name}, about {minutes} minutes away. They are expecting you. Directions: {directions} Tap below when you are on your way."
     },
