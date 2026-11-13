@@ -114,6 +114,18 @@ def test_task_token_round_trips_when_a_wait_state_supplies_one() -> None:
     assert envelope.to_event()["task_token"] == "tok-1"
 
 
+def test_report_stays_inside_workflow_for_close_envelope() -> None:
+    report = {"report_key": "reports/t1/INC-1/v1.html"}
+
+    envelope = parse_envelope(
+        {"step": CLOSE, **_start_input(), "workflow": {"report": report}}
+    )
+
+    assert envelope.workflow["report"] == report
+    with pytest.raises(EnvelopeError, match="extra_forbidden"):
+        parse_envelope({"step": CLOSE, **_start_input(), "report": report})
+
+
 def test_missing_step_is_rejected() -> None:
     with pytest.raises(EnvelopeError, match="no 'step' key"):
         parse_envelope({"workflow": _start_input()})

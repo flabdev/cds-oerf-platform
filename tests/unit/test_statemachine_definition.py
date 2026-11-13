@@ -806,12 +806,14 @@ def test_failure_path_records_then_escalates_and_terminates() -> None:
     assert states["NotifyReopenQA"]["Next"] == "VerifyLoop"
 
 
-def test_qa_result_paths_read_report_from_nested_workflow() -> None:
+def test_qa_result_paths_preserve_nested_workflow_without_root_report() -> None:
     states = load_definition()["States"]
-    expected_report_path = "$.qa_parallel.qa.workflow.report"
+    expected_workflow_path = "$.qa_parallel.qa.workflow"
 
-    assert states["UseApprovedQAResult"]["Parameters"]["report.$"] == expected_report_path
-    assert states["UseQAResult"]["Parameters"]["report.$"] == expected_report_path
+    for state_name in ("UseApprovedQAResult", "UseQAResult"):
+        parameters = states[state_name]["Parameters"]
+        assert parameters["workflow.$"] == expected_workflow_path
+        assert "report.$" not in parameters
 
 
 def test_terminal_states_have_no_next_transition() -> None:
