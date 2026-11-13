@@ -1391,6 +1391,7 @@ def test_facility_decline_loops_once_to_the_next_facility() -> None:
         "role.$": "$.workflow.facility_request.role",
         "ask.$": "$.workflow.facility_request.ask",
         "policy_id.$": "$.workflow.facility_request.policy_id",
+        "contact_id.$": "$.workflow.facility_request.contact_id",
         "facts.$": "$.context",
     }
     assert engage_facility["ResultPath"] == "$.workflow.facility_engagement"

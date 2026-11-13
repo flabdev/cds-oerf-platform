@@ -344,6 +344,7 @@
           "role.$": "$.workflow.facility_request.role",
           "ask.$": "$.workflow.facility_request.ask",
           "policy_id.$": "$.workflow.facility_request.policy_id",
+          "contact_id.$": "$.workflow.facility_request.contact_id",
           "facts.$": "$.context"
         }
       },
