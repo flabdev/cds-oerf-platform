@@ -1779,11 +1779,11 @@
         {
           "And": [
             {
-              "Variable": "$.qa_parallel[0].qa.disposition",
+              "Variable": "$.qa_parallel.qa.qa.disposition",
               "IsPresent": true
             },
             {
-              "Variable": "$.qa_parallel[0].qa.disposition",
+              "Variable": "$.qa_parallel.qa.qa.disposition",
               "StringEquals": "approved"
             }
           ],
@@ -1792,11 +1792,11 @@
         {
           "And": [
             {
-              "Variable": "$.qa_parallel[0].qa.disposition",
+              "Variable": "$.qa_parallel.qa.qa.disposition",
               "IsPresent": true
             },
             {
-              "Variable": "$.qa_parallel[0].qa.disposition",
+              "Variable": "$.qa_parallel.qa.qa.disposition",
               "StringEquals": "rejected"
             }
           ],
@@ -1808,32 +1808,32 @@
     "UseApprovedQAResult": {
       "Type": "Pass",
       "Parameters": {
-        "qa.$": "$.qa_parallel[0].qa",
+        "qa.$": "$.qa_parallel.qa.qa",
         "tenant_id.$": "$.tenant_id",
         "incident_id.$": "$.incident_id",
         "shipment_id.$": "$.shipment_id",
-        "workflow.$": "$.qa_parallel[0].workflow",
-        "context.$": "$.qa_parallel[0].context",
-        "incident_state.$": "$.qa_parallel[0].incident_state",
-        "current_stage.$": "$.qa_parallel[0].current_stage",
-        "containment.$": "$.qa_parallel[0].containment",
-        "report.$": "$.qa_parallel[0].report"
+        "workflow.$": "$.qa_parallel.qa.workflow",
+        "context.$": "$.qa_parallel.qa.context",
+        "incident_state.$": "$.qa_parallel.qa.incident_state",
+        "current_stage.$": "$.qa_parallel.qa.current_stage",
+        "containment.$": "$.qa_parallel.qa.containment",
+        "report.$": "$.qa_parallel.qa.report"
       },
       "Next": "Close"
     },
     "UseQAResult": {
       "Type": "Pass",
       "Parameters": {
-        "qa.$": "$.qa_parallel[0].qa",
+        "qa.$": "$.qa_parallel.qa.qa",
         "tenant_id.$": "$.tenant_id",
         "incident_id.$": "$.incident_id",
         "shipment_id.$": "$.shipment_id",
-        "workflow.$": "$.qa_parallel[0].workflow",
-        "context.$": "$.qa_parallel[0].context",
-        "incident_state.$": "$.qa_parallel[0].incident_state",
-        "current_stage.$": "$.qa_parallel[0].current_stage",
-        "containment.$": "$.qa_parallel[0].containment",
-        "report.$": "$.qa_parallel[0].report"
+        "workflow.$": "$.qa_parallel.qa.workflow",
+        "context.$": "$.qa_parallel.qa.context",
+        "incident_state.$": "$.qa_parallel.qa.incident_state",
+        "current_stage.$": "$.qa_parallel.qa.current_stage",
+        "containment.$": "$.qa_parallel.qa.containment",
+        "report.$": "$.qa_parallel.qa.report"
       },
       "Next": "HandleReopen"
     },

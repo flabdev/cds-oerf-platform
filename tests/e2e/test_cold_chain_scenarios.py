@@ -271,10 +271,24 @@ def _path_present(data: dict[str, Any], path: str) -> bool:
 
 def _path_value(data: dict[str, Any], path: str) -> Any:
     node: Any = data
-    parts = __import__("re").sub(r"\[(\d+)\]", r".\1", path.removeprefix("$." )).split(".")
+    parts = __import__("re").findall(r"[^.\[\]]+", path.lstrip("$"))
     for part in parts:
         node = node[int(part)] if isinstance(node, list) and part.isdigit() else node[part]
     return node
+
+
+def _apply_result_selector(
+    result: list[Any], selector: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply the ASL ResultSelector's static and JSONPath entries."""
+
+    selected = {}
+    for key, value in selector.items():
+        if key.endswith(".$"):
+            selected[key[:-2]] = _path_value(result, value)
+        else:
+            selected[key] = value
+    return selected
 
 
 def _matches(rule: dict[str, Any], data: dict[str, Any]) -> bool:
@@ -346,7 +360,7 @@ def _engage(
         if state["Type"] == "Choice":
             current = _choice(state, data)
             if current in {"UseApprovedQAResult", "UseQAResult"}:
-                data = dict(data["qa_parallel"][0])
+                data = dict(data["qa_parallel"]["qa"])
             continue
         if state["Type"] == "Wait":
             if current == "WaitUntilDue":
@@ -438,7 +452,7 @@ def _parent_walk(
             current = _choice(state, data)
             if current in {"UseApprovedQAResult", "UseQAResult"}:
                 pass_state = ASL["States"][current]
-                branch = data["qa_parallel"][0]
+                branch = data["qa_parallel"]["qa"]
                 data = {key: value for key, value in branch.items() if key != "qa_parallel"}
                 current = pass_state["Next"]
                 continue
@@ -495,7 +509,12 @@ def _parent_walk(
             monitor_data["incident_state"] = "AWAITING_DISPOSITION"
             monitor_data["current_stage"] = "AWAITING_DISPOSITION"
             monitor_data.setdefault("workflow", {})["qa_monitor_done"] = True
-            data = {**qa_data, "qa_parallel": [qa_data, monitor_data]}
+            data = {
+                **qa_data,
+                "qa_parallel": _apply_result_selector(
+                    [qa_data, monitor_data], state["ResultSelector"]
+                ),
+            }
             current = state["Next"]
             continue
         if state["Type"] != "Task":
