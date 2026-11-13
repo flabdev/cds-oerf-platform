@@ -13,7 +13,7 @@ from oerf.platform.agent.idempotency import MemoryStepResultStore
 from oerf.platform.cadence.engage import advance_rung, compute_rung
 from oerf.platform.cadence.interpret import interpret_workflow
 from oerf.platform.channels.engagement import MemoryEngagementStore
-from oerf.platform.channels.engagement_send import send_engagement
+from oerf.platform.channels.engagement_send import _request, send_engagement
 from oerf.platform.channels.one_way import MemoryOutbox, send_one_way
 from oerf.platform.channels.providers.base import ProviderResult
 from oerf.platform.channels.registry import MemoryPhoneRegistry
@@ -70,6 +70,37 @@ class _Callbacks:
 
     def send_task_success(self, *, taskToken: str, output: str) -> None:
         self.calls.append({"taskToken": taskToken, "output": output})
+
+
+def test_facility_engagement_uses_selected_facility_contact() -> None:
+    registry = MemoryPhoneRegistry()
+    registry.register_contact(TENANT, "C-T1-FACA", "facility", PLACEHOLDER)
+    ports = type(
+        "Ports",
+        (),
+        {"registry": registry, "parameters": None, "mock_whatsapp": True},
+    )()
+
+    request, _rung, _deadline = _request(
+        {
+            "tenant_id": TENANT,
+            "incident_id": "INC-000001",
+            "engagement_id": "ENG-INC-000001-facility-accept",
+            "role": "facility",
+            "contact_id": "C-T1-FACA",
+            "facts": {"shipment": {"shipment_id": SHIPMENT}},
+            "cadence": {
+                "message": "facility_request",
+                "channel": "whatsapp",
+                "next_rung": 1,
+                "deadline": "2026-10-27T12:00:00+00:00",
+            },
+        },
+        ports,
+    )
+
+    assert request.contact_id == "C-T1-FACA"
+    assert request.recipient == PLACEHOLDER
 
 
 def test_ph2841_reaches_act_on_the_recommended_option() -> None:

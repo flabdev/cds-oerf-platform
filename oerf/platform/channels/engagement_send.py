@@ -58,7 +58,9 @@ def _request(workflow: dict[str, Any], ports: Any) -> tuple[OutboundRequest, int
     role = _text(workflow, _ROLE)
     facts = workflow.get("facts") if isinstance(workflow.get("facts"), dict) else {}
     shipment = facts.get("shipment") if isinstance(facts.get("shipment"), dict) else {}
-    contact_id = shipment.get(role)
+    # A selected party (such as the reroute facility) may be supplied directly
+    # by the parent workflow; shipment roles continue to resolve from shipment.
+    contact_id = workflow.get("contact_id") or shipment.get(role)
     if not isinstance(contact_id, str) or not contact_id.strip():
         raise ValueError("the shipment has no contact for this role")
     recipient = resolve_party_address(
