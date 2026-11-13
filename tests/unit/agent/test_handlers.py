@@ -516,7 +516,11 @@ def test_a_suggestion_is_never_authoritative_over_the_rule() -> None:
 
 def _approval_workflow(**values: Any) -> dict[str, Any]:
     workflow: dict[str, Any] = {
-        "context": {"range_c": [2, 8], "allowance_minutes": 45},
+        "context": {
+            "range_c": [2, 8],
+            "allowance_minutes": 45,
+            "shipment": {"shipment_id": SHIPMENT},
+        },
         "assessment": {
             "route": "approval",
             "needs_approval": True,
@@ -634,6 +638,7 @@ def _facility_context() -> dict[str, Any]:
     return {
         "range_c": [2, 8],
         "allowance_minutes": 45,
+        "shipment": {"shipment_id": SHIPMENT},
         "facilities": [
             {
                 "id": "FAC-A",
@@ -641,6 +646,7 @@ def _facility_context() -> dict[str, Any]:
                 "capacity_available": True,
                 "approved": True,
                 "contact_id": "contact-fac-a",
+                "name": "Facility A (sample cold store)",
             },
             {
                 "id": "FAC-B",
@@ -648,6 +654,7 @@ def _facility_context() -> dict[str, Any]:
                 "capacity_available": True,
                 "approved": True,
                 "contact_id": "contact-fac-b",
+                "name": "Facility B (sample cold store)",
             },
         ],
     }
@@ -679,6 +686,12 @@ def test_secure_facility_decline_moves_to_the_next_feasible_facility() -> None:
         "facility_id": "FAC-A",
         "contact_id": "contact-fac-a",
         "next_option_id": "FAC-B",
+        "facts": {
+            "shipment_id": SHIPMENT,
+            "range": "2–8°C",
+            "facility_name": "Facility A (sample cold store)",
+            "minutes": "9",
+        },
     }
     assert result.incident_state == "SECURING_FACILITY"
 

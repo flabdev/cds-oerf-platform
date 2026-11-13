@@ -65,6 +65,9 @@ def _row(item: dict[str, Any]) -> dict[str, Any]:
     facility_id = _text(item, "facility_id")
     if facility_id:
         row["facility_id"] = facility_id
+    name = _text(item, "name")
+    if name:
+        row["name"] = name
     drive = _number(item, "drive_min")
     if drive is not None:
         row["drive_min"] = drive

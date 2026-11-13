@@ -262,6 +262,9 @@ def _facility_candidate(row: Mapping[str, Any]) -> dict[str, Any]:
         "capacity_available": bool(row["capacity_available"]),
         "approved": bool(row["approved"]),
     }
+    name = text(row, "name")
+    if name is not None:
+        candidate["name"] = name
     contact_id = text(row, "contact_id")
     if contact_id is not None:
         candidate["contact_id"] = contact_id
@@ -962,6 +965,14 @@ def secure_facility(envelope: StepEnvelope, dependencies: StepDependencies) -> S
     # which stores the task token on ``ENG#`` and sends ``facility_request`` to the
     # chosen facility. ``FacilityDecision`` turns the answer into the gate below.
     if record["kind"] == "facility" and record["contact_id"]:
+        shipment = mapping(context, "shipment") or {}
+        shipment_id = text(shipment, "shipment_id")
+        lower_c, upper_c = _range_c(context, envelope.step)
+        if shipment_id is None:
+            raise MissingStepInput(f"step {envelope.step} needs shipment.shipment_id")
+        drive_min = field(facility, "drive_min")
+        if isinstance(drive_min, bool) or not isinstance(drive_min, (int, float)):
+            raise MissingStepInput(f"step {envelope.step} needs the selected facility's drive_min")
         workflow["facility_request"] = {
             "engagement_id": f"ENG-{envelope.incident_id}-{_FACILITY_ROLE}-{_FACILITY_ASK}",
             "policy_id": "partner_request",
@@ -970,6 +981,12 @@ def secure_facility(envelope: StepEnvelope, dependencies: StepDependencies) -> S
             "facility_id": facility_id,
             "contact_id": record["contact_id"],
             "next_option_id": record["next_option_id"],
+            "facts": {
+                "shipment_id": shipment_id,
+                "range": f"{format(lower_c, 'g')}–{format(upper_c, 'g')}°C",
+                "facility_name": text(facility, "name") or facility_id,
+                "minutes": format(float(drive_min), "g"),
+            },
         }
     return apply(
         WorkflowStep(

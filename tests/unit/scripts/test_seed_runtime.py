@@ -64,6 +64,8 @@ def test_seed_round_trip_matches_the_workflow_readers() -> None:
     }
     assert facilities["FAC-A"]["drive_min"] == 9.0
     assert facilities["FAC-B"]["drive_min"] == 21.0
+    assert facilities["FAC-A"]["name"] == "Facility A (sample cold store)"
+    assert facilities["FAC-B"]["name"] == "Facility B (sample cold store)"
     assert facilities["FAC-A"]["approved"] is True
     assert facilities["FAC-A"]["capacity_available"] is True
     assert facilities["FAC-B"]["approved"] is True

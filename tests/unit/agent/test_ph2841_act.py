@@ -13,10 +13,11 @@ from oerf.platform.agent.idempotency import MemoryStepResultStore
 from oerf.platform.cadence.engage import advance_rung, compute_rung
 from oerf.platform.cadence.interpret import interpret_workflow
 from oerf.platform.channels.engagement import MemoryEngagementStore
-from oerf.platform.channels.engagement_send import send_engagement
+from oerf.platform.channels.engagement_send import _request, send_engagement
 from oerf.platform.channels.one_way import MemoryOutbox, send_one_way
 from oerf.platform.channels.providers.base import ProviderResult
 from oerf.platform.channels.registry import MemoryPhoneRegistry
+from oerf.platform.channels.templates import parameter_values, render_message
 from oerf.platform.inbound.dedupe import InboundDedupe
 from oerf.platform.inbound.handler import InboundDependencies, process_message
 from oerf.platform.incidents.repository import IncidentRepository
@@ -72,6 +73,60 @@ class _Callbacks:
         self.calls.append({"taskToken": taskToken, "output": output})
 
 
+def test_facility_engagement_uses_selected_facility_contact() -> None:
+    registry = MemoryPhoneRegistry()
+    registry.register_contact(TENANT, "C-T1-FACA", "facility", PLACEHOLDER)
+    ports = type(
+        "Ports",
+        (),
+        {"registry": registry, "parameters": None, "mock_whatsapp": True},
+    )()
+
+    request, _rung, _deadline = _request(
+        {
+            "tenant_id": TENANT,
+            "incident_id": "INC-000001",
+            "engagement_id": "ENG-INC-000001-facility-accept",
+            "role": "facility",
+            "contact_id": "C-T1-FACA",
+            "facts": {
+                "shipment_id": SHIPMENT,
+                "range": "2–8°C",
+                "facility_name": "Facility A (sample cold store)",
+                "minutes": 9,
+            },
+            "cadence": {
+                "message": "facility_request",
+                "channel": "whatsapp",
+                "next_rung": 1,
+                "deadline": "2026-10-27T12:00:00+00:00",
+            },
+        },
+        ports,
+    )
+
+    messages = json.loads(
+        (ROOT / "domains" / "cold_chain_excursion" / "messages.json").read_text()
+    )
+    assert request.contact_id == "C-T1-FACA"
+    assert request.recipient == PLACEHOLDER
+    assert parameter_values(messages, request.template_id, "whatsapp", request.facts) == (
+        [SHIPMENT, "2–8°C", "9"]
+    )
+    assert render_message(messages, request.template_id, "whatsapp", request.facts) == (
+        "Emergency cold storage request for shipment PH-2841. Required range: 2–8°C. "
+        "Expected arrival in about 9 minutes. Can you accept it?"
+    )
+    assert parameter_values(messages, "facility_reminder", "whatsapp", request.facts) == (
+        [SHIPMENT, "Facility A (sample cold store)", "9"]
+    )
+    assert render_message(messages, "facility_reminder", "whatsapp", request.facts) == (
+        "Reminder: shipment PH-2841 needs emergency cold storage at "
+        "Facility A (sample cold store) within about 9 minutes. "
+        "Please accept or decline so we can plan."
+    )
+
+
 def test_ph2841_reaches_act_on_the_recommended_option() -> None:
     """A running unit keeps today's ranking, then the continue notice is sent."""
 
@@ -114,7 +169,7 @@ def test_ph2841_reaches_act_on_the_recommended_option() -> None:
     assert diagnosed.incident_state == "DIAGNOSING"
     loaded = diagnosed.workflow["context"]["facilities"]
     assert [row["facility_id"] for row in loaded] == [row["facility_id"] for row in facilities]
-    assert all("name" not in row for row in loaded)
+    assert [row["name"] for row in loaded] == [row["name"] for row in facilities]
     assert diagnosed.workflow["ship_time"] == NOW.isoformat()
 
     child = {
