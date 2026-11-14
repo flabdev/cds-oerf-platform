@@ -1,6 +1,8 @@
 # OERF interface contract
 
-**FROZEN v1.50** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.51** — authored 2026-10-18 by OERF-304 (Ananda).
+
+- v1.51 (2026-11-14) The facility engagement id is `ENG-{incident_id}-facility-{facility_id}-accept`. The fallback facility is contacted through `EngageFacilityAccept` before it is accepted. Reply words are scoped by `policy_id`: `critical_field` and `partner_request` each keep their own words, and other policies keep the combined list.
 
 - v1.50 (2026-11-13) `GET /incidents` rows include `shipment_id` when the incident META has one. The desk list keeps that shipment as the row title and shows the incident id beside it. Selecting a row does not move it.
 
