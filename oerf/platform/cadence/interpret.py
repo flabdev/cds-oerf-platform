@@ -7,19 +7,32 @@ import os
 from collections.abc import Callable
 from typing import Any
 
-#: Button labels and ids, after case and underscore folding. The facility ladder
-#: (``partner_request``) reuses ``Accept``/``Decline``/``Call me``, so the same
-#: labels map here and the C13 ``EngageFacilityAccept`` wait classifies them.
-_REPLIES: dict[str, tuple[str, bool, dict[str, str]]] = {
+Reply = tuple[str, bool, dict[str, str]]
+
+#: Driver diagnose (``critical_field``). A facility word is not a diagnosis.
+_CRITICAL_FIELD: dict[str, Reply] = {
     "running": ("unit_running", True, {"unit": "running"}),
     "stopped": ("unit_stopped", True, {"unit": "stopped"}),
     "not sure": ("unknown", False, {}),
     "call me": ("call_me", False, {}),
+}
+
+#: Facility accept/decline (``partner_request``). A unit-status word is not an answer.
+_PARTNER_REQUEST: dict[str, Reply] = {
     "accept": ("accept", True, {}),
     "accepted": ("accept", True, {}),
     "decline": ("decline", True, {}),
     "declined": ("decline", True, {}),
+    "call me": ("call_me", False, {}),
 }
+
+_REPLIES_BY_POLICY: dict[str, dict[str, Reply]] = {
+    "critical_field": _CRITICAL_FIELD,
+    "partner_request": _PARTNER_REQUEST,
+}
+
+#: Every other policy keeps the combined map these two used to share.
+_REPLIES: dict[str, Reply] = {**_CRITICAL_FIELD, **_PARTNER_REQUEST}
 
 Consult = Callable[[str, str], dict[str, Any] | None]
 
@@ -44,7 +57,11 @@ def interpret_workflow(
 
     reply = workflow.get("reply")
     text = reply.get("text") if isinstance(reply, dict) else None
-    mapped = map_reply(text if isinstance(text, str) else None)
+    policy_id = workflow.get("policy_id")
+    mapped = map_reply(
+        text if isinstance(text, str) else None,
+        policy_id if isinstance(policy_id, str) else None,
+    )
     if mapped is None:
         intent, valid, fields = "clarify", False, {}
         advisory = _consult(workflow, enabled=enabled, consult=consult)
@@ -64,15 +81,21 @@ def interpret_workflow(
     return updated
 
 
-def map_reply(text: str | None) -> tuple[str, bool, dict[str, str]] | None:
-    """A known button or keyword, or ``None`` when the text is free-form."""
+def map_reply(text: str | None, policy_id: str | None = None) -> Reply | None:
+    """A known button or keyword for this policy, or ``None`` when it is not.
+
+    ``critical_field`` and ``partner_request`` each accept only their own words.
+    Any other policy, including a missing one, keeps the combined map.
+    """
 
     if text is None:
         return None
     folded = " ".join(text.strip().casefold().replace("_", " ").split())
     if not folded:
         return None
-    return _REPLIES.get(folded)
+    named = policy_id.strip() if isinstance(policy_id, str) else ""
+    table = _REPLIES_BY_POLICY.get(named, _REPLIES)
+    return table.get(folded)
 
 
 def _consult(
