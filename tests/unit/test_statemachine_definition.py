@@ -1019,6 +1019,15 @@ def simulate(event: dict, handler_fn=handler, max_steps: int = 48) -> tuple:
             current = state["Next"]
         elif state["Type"] == "Task":
             if state["Resource"] == "arn:aws:states:::states:startExecution.sync:2":
+                if current == "EngageFacilityAccept":
+                    queue = data.get("_facility_replies")
+                    if isinstance(queue, list) and queue:
+                        child = queue.pop(0)
+                    else:
+                        child = {"status": "answered", "intent": "accept"}
+                    _assign(data, state["ResultPath"], child)
+                    current = state["Next"]
+                    continue
                 data["diagnosis"] = {"engagement_id": "ENG-1", "policy_id": "critical_field"}
                 data["engagement_result"] = {"status": "answered", "intent": "unit_status"}
                 current = state["Next"]
@@ -1464,10 +1473,13 @@ def test_facility_decline_loops_once_to_the_next_facility() -> None:
     assert states["SecureFacilityFallback"]["Parameters"]["Payload"]["step_name"] == (
         "SecureFacilityFallback"
     )
-    assert states["CancelAfterSecureFacilityFallback?"]["Default"] == (
-        "FacilityFallbackAccepted?"
-    )
-    assert states["FacilityFallbackAccepted?"]["Default"] == "Escalate"
+    assert states["SecureFacilityFallback"]["Next"] == "CancelAfterSecureFacilityFallback?"
+    assert states["CancelAfterSecureFacilityFallback?"]["Default"] == "FacilityContact?"
+    assert "FacilityFallbackAccepted?" not in states
+    assert evaluate_choice(
+        states["FacilityContact?"],
+        {"workflow": {"facility_request": {"engagement_id": "ENG-1-facility-FAC-B-accept"}}},
+    ) == "EngageFacilityAccept"
     assert evaluate_choice(
         states["FacilityAccepted?"],
         {"facility": {"accepted": False, "next_option_id": "FAC-B"}},
@@ -1479,43 +1491,107 @@ def test_facility_decline_loops_once_to_the_next_facility() -> None:
     assert evaluate_choice(
         states["FacilityAccepted?"], {"facility": {"accepted": True}}
     ) == "Act"
-    assert evaluate_choice(
-        states["FacilityFallbackAccepted?"], {"facility": {"accepted": False}}
-    ) == "Escalate"
 
 
-def test_facility_decline_graph_walk_uses_fallback_then_continues_to_act() -> None:
-    visits: list[str] = []
+def _facility_request(facility_id: str, contact_id: str) -> dict:
+    return {
+        "engagement_id": f"ENG-INC-001-facility-{facility_id}-accept",
+        "role": "facility",
+        "ask": "accept",
+        "policy_id": "partner_request",
+        "contact_id": contact_id,
+        "facility_id": facility_id,
+        "facts": {"shipment_id": "PH-2841"},
+    }
 
+
+def _facility_graph_handler(visits: list[str], replies: list[dict]):
     def declining_handler(event: dict, _context: object) -> dict:
         step = event["step_name"]
         visits.append(step)
         if step == "SecureFacility":
             result = handler(event, None)
-            result["facility"] = {
-                "accepted": False,
-                "facility_id": "FAC-A",
-                "next_option_id": "FAC-B",
-            }
+            result["facility"] = {"facility_id": "FAC-A", "next_option_id": "FAC-B"}
+            nested = result.get("workflow")
+            if not isinstance(nested, dict):
+                nested = {}
+            nested["facility_request"] = _facility_request("FAC-A", "contact-fac-a")
+            result["workflow"] = nested
+            result["_facility_replies"] = replies
             return result
         if step == "SecureFacilityFallback":
             result = dict(event["workflow"])
-            result["facility"] = {
-                "accepted": True,
-                "facility_id": "FAC-B",
-                "next_option_id": None,
-            }
+            result["facility_fallback"] = True
+            result["facility"] = {"facility_id": "FAC-B", "next_option_id": "FAC-C"}
+            nested = dict(result.get("workflow") or {})
+            nested["facility_request"] = _facility_request("FAC-B", "contact-fac-b")
+            result["workflow"] = nested
+            return result
+        if step == "FacilityDecision":
+            result = handler(event, None)
+            child = (result.get("workflow") or {}).get("facility_engagement") or {}
+            intent = child.get("intent")
+            accepted = child.get("status") == "answered" and intent == "accept"
+            facility = dict(result.get("facility") or {})
+            facility["accepted"] = accepted
+            facility["facility_id"] = (
+                (result.get("workflow") or {}).get("facility_request") or {}
+            ).get("facility_id", facility.get("facility_id"))
+            if result.get("facility_fallback") is True or intent != "decline":
+                facility["next_option_id"] = None
+            result["facility"] = facility
             return result
         return handler(event, _context)
 
-    outcome, final = simulate(dict(INITIAL_EVENT), declining_handler)
+    return declining_handler
+
+
+def test_facility_decline_graph_walk_uses_fallback_then_continues_to_act() -> None:
+    visits: list[str] = []
+    outcome, final = simulate(
+            dict(INITIAL_EVENT),
+            _facility_graph_handler(
+                visits,
+                [
+                    {"status": "answered", "intent": "decline"},
+                    {"status": "answered", "intent": "accept"},
+                ],
+            ),
+            max_steps=64,
+        )
 
     assert outcome == "WorkflowComplete"
     assert visits.count("SecureFacility") == 1
     assert visits.count("SecureFacilityFallback") == 1
+    assert visits.count("FacilityDecision") == 2
     assert "Act" in visits
     assert final["facility"]["facility_id"] == "FAC-B"
+    assert final["facility"]["accepted"] is True
     assert final["action"]["status"] == "completed"
+
+
+def test_facility_fallback_decline_or_timeout_escalates_once() -> None:
+    for second in (
+        {"status": "answered", "intent": "decline"},
+        {"status": "exhausted"},
+    ):
+        visits: list[str] = []
+        outcome, final = simulate(
+            dict(INITIAL_EVENT),
+            _facility_graph_handler(
+                visits,
+                [{"status": "answered", "intent": "decline"}, second],
+            ),
+            max_steps=64,
+        )
+
+        assert outcome == "Escalate", second
+        assert visits.count("SecureFacilityFallback") == 1
+        assert visits.count("FacilityDecision") == 2
+        assert "Act" not in visits
+        assert final["facility"]["accepted"] is False
+        assert final["facility"]["next_option_id"] is None
+        assert final["escalated"] is True
 
 
 def test_reopened_containment_loops_through_reopen_then_closes() -> None:

@@ -661,7 +661,7 @@ def _facility_context() -> dict[str, Any]:
 
 
 def test_secure_facility_decline_moves_to_the_next_feasible_facility() -> None:
-    """C6: facility_a_declines continues to FAC-B instead of escalating."""
+    """C6: a contacted facility stays pending and names FAC-B for a later decline."""
 
     dependencies = _dependencies("SECURING_FACILITY")
     envelope = _envelope(
@@ -674,12 +674,13 @@ def test_secure_facility_decline_moves_to_the_next_feasible_facility() -> None:
     result = HANDLERS["SecureFacility"](envelope, dependencies)
 
     assert result.facility is not None
-    assert result.facility["accepted"] is False
+    assert "accepted" not in result.facility
+    assert result.facility["pending"] is True
     assert result.facility["facility_id"] == "FAC-A"
     assert result.facility["next_option_id"] == "FAC-B"
     assert result.facility["next_facility_id"] == "FAC-B"
     assert result.workflow["facility_request"] == {
-        "engagement_id": f"ENG-{INCIDENT_ID}-facility-accept",
+        "engagement_id": f"ENG-{INCIDENT_ID}-facility-FAC-A-accept",
         "policy_id": "partner_request",
         "role": "facility",
         "ask": "accept",
@@ -755,6 +756,46 @@ def test_facility_decision_reads_flattened_nested_result() -> None:
     assert result.facility["response"]["intent"] == "accept"
 
 
+@pytest.mark.parametrize(
+    ("status", "intent", "accepted"),
+    [
+        ("answered", "decline", False),
+        ("exhausted", None, False),
+        ("answered", "accept", True),
+    ],
+)
+def test_facility_decision_on_the_fallback_attempt_clears_the_next_option(
+    status: str,
+    intent: str | None,
+    accepted: bool,
+) -> None:
+    dependencies = _dependencies("SECURING_FACILITY")
+    result_payload: dict[str, Any] = {"status": status}
+    if intent is not None:
+        result_payload["intent"] = intent
+    workflow = _approval_workflow(
+        facility_fallback=True,
+        facility={
+            "pending": True,
+            "kind": "facility",
+            "facility_id": "FAC-B",
+            "next_option_id": "FAC-C",
+        },
+        facility_request={"facility_id": "FAC-B", "next_option_id": "FAC-C"},
+        facility_engagement={"Output": result_payload},
+    )
+
+    result = HANDLERS["FacilityDecision"](
+        _envelope("FacilityDecision", workflow=workflow), dependencies
+    )
+
+    assert result.facility is not None
+    assert result.facility["accepted"] is accepted
+    assert result.facility["facility_id"] == "FAC-B"
+    assert result.facility["next_option_id"] is None
+    assert "pending" not in result.facility
+
+
 def test_secure_facility_fallback_uses_next_option_under_a_distinct_idempotency_key() -> None:
     dependencies = _dependencies("SECURING_FACILITY")
     initial = HANDLERS["SecureFacility"](
@@ -779,9 +820,16 @@ def test_secure_facility_fallback_uses_next_option_under_a_distinct_idempotency_
     )
 
     assert result.facility is not None
-    assert result.facility["accepted"] is True
+    assert "accepted" not in result.facility
+    assert result.facility["pending"] is True
     assert result.facility["facility_id"] == "FAC-B"
+    assert result.workflow["facility_fallback"] is True
     assert result.workflow["assessment"]["recommended_option"] == "FAC-B"
+    assert result.workflow["facility_request"]["facility_id"] == "FAC-B"
+    assert result.workflow["facility_request"]["contact_id"] == "contact-fac-b"
+    assert result.workflow["facility_request"]["engagement_id"] == (
+        f"ENG-{INCIDENT_ID}-facility-FAC-B-accept"
+    )
     assert result.last_completed_step == "SecureFacilityFallback"
     assert replay == result
     assert dependencies.results.get(
@@ -822,11 +870,12 @@ def test_secure_facility_fallback_requires_a_recorded_next_option() -> None:
     result = HANDLERS["SecureFacility"](envelope, dependencies)
 
     assert result.facility is not None
-    assert result.facility["accepted"] is False
+    assert "accepted" not in result.facility
+    assert result.facility["pending"] is True
     assert result.facility["next_option_id"] is None
 
 
-def test_secure_facility_accepts_a_pre_approved_facility() -> None:
+def test_secure_facility_with_a_contact_leaves_acceptance_pending() -> None:
     dependencies = _dependencies("SECURING_FACILITY")
     envelope = _envelope(
         "SecureFacility",
@@ -836,8 +885,56 @@ def test_secure_facility_accepts_a_pre_approved_facility() -> None:
     result = HANDLERS["SecureFacility"](envelope, dependencies)
 
     assert result.facility is not None
+    assert "accepted" not in result.facility
+    assert result.facility["pending"] is True
+    assert result.facility["facility_id"] == "FAC-A"
+    assert result.workflow["facility_request"]["contact_id"] == "contact-fac-a"
+    assert result.workflow["facility_request"]["engagement_id"] == (
+        f"ENG-{INCIDENT_ID}-facility-FAC-A-accept"
+    )
+
+
+def test_secure_facility_without_a_contact_accepts_the_pre_approved_facility() -> None:
+    """No partner to ask: the pre-approved facility is accepted and not contacted."""
+
+    dependencies = _dependencies("SECURING_FACILITY")
+    context = _facility_context()
+    for facility in context["facilities"]:
+        facility.pop("contact_id")
+    envelope = _envelope(
+        "SecureFacility",
+        workflow=_approval_workflow(context=context),
+    )
+
+    result = HANDLERS["SecureFacility"](envelope, dependencies)
+
+    assert result.facility is not None
     assert result.facility["accepted"] is True
     assert result.facility["facility_id"] == "FAC-A"
+    assert "facility_request" not in result.workflow
+
+
+def test_secure_facility_continue_accepts_without_a_request() -> None:
+    dependencies = _dependencies("SECURING_FACILITY")
+    envelope = _envelope(
+        "SecureFacility",
+        workflow=_approval_workflow(
+            assessment={
+                "route": "auto_proceed",
+                "recommended_option": "CONTINUE",
+                "options": [{"id": "CONTINUE", "kind": "continue", "feasible": True, "rank": 1}],
+            },
+            context=_facility_context(),
+        ),
+    )
+
+    result = HANDLERS["SecureFacility"](envelope, dependencies)
+
+    assert result.facility is not None
+    assert result.facility["accepted"] is True
+    assert result.facility["kind"] == "continue"
+    assert result.facility["facility_id"] is None
+    assert "facility_request" not in result.workflow
 
 
 def test_open_pins_the_config_snapshot_and_replays() -> None:

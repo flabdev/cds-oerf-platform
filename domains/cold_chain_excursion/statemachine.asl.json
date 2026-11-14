@@ -505,26 +505,7 @@
           "Next": "Cancel"
         }
       ],
-      "Default": "FacilityFallbackAccepted?"
-    },
-    "FacilityFallbackAccepted?": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "And": [
-            {
-              "Variable": "$.facility.accepted",
-              "IsPresent": true
-            },
-            {
-              "Variable": "$.facility.accepted",
-              "BooleanEquals": true
-            }
-          ],
-          "Next": "Act"
-        }
-      ],
-      "Default": "Escalate"
+      "Default": "FacilityContact?"
     },
     "Act": {
       "Type": "Task",
