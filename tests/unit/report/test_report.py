@@ -213,6 +213,92 @@ def test_report_versioning_keeps_previous_content_after_new_step_snapshot(monkey
     assert "FAC-C (accepted)" in store.objects[second["report_key"]].decode()
 
 
+def test_fallback_report_uses_each_facility_decision(monkeypatch) -> None:
+    """Pending secure snapshots do not decide. Each FacilityDecision does."""
+
+    html = _html_for(
+        monkeypatch,
+        _stored_incident(),
+        {
+            "SecureFacility": {"facility": _pending("FAC-A")},
+            "SecureFacilityFallback": {"facility": _pending("FAC-B")},
+            "FacilityDecision#FAC-A": {"facility": _decided("FAC-A", accepted=False)},
+            "FacilityDecision#FAC-B": {"facility": _decided("FAC-B", accepted=True)},
+        },
+    )
+    facility = _section(html, "facility", "actions")
+
+    assert "FAC-A (declined)" in facility
+    assert "FAC-B (accepted)" in facility
+
+
+@pytest.mark.parametrize("reason", ["declined", "no_answer"])
+def test_fallback_decline_or_timeout_reports_the_escalation(monkeypatch, reason: str) -> None:
+    incident = _stored_incident()
+    incident["state"] = "ESCALATED"
+    incident["timeline_rows"] = [
+        *incident["timeline_rows"],
+        {
+            "sk": "EVT#2026-10-20T10:40:00Z#0002",
+            "previous_state": "SECURING_FACILITY",
+            "state": "ESCALATED",
+            "reason": reason,
+        },
+    ]
+    html = _html_for(
+        monkeypatch,
+        incident,
+        {
+            "SecureFacility": {"facility": _pending("FAC-A")},
+            "SecureFacilityFallback": {"facility": _pending("FAC-B")},
+            "FacilityDecision#FAC-A": {"facility": _decided("FAC-A", accepted=False)},
+            "FacilityDecision#FAC-B": {
+                "facility": _decided("FAC-B", accepted=False),
+                "facility_response": {"status": reason, "reason": reason},
+            },
+        },
+    )
+    facility = _section(html, "facility", "actions")
+
+    assert "FAC-A (declined)" in facility
+    assert "FAC-B (declined)" in facility
+    assert "FAC-B (accepted)" not in facility
+    assert "ESCALATED" in _section(html, "incident", "shipment")
+    assert "ESCALATED" in _section(html, "state_timeline", "diagnosis")
+
+
+def test_pending_facility_without_a_decision_is_not_declined(monkeypatch) -> None:
+    html = _html_for(
+        monkeypatch,
+        _stored_incident(),
+        {
+            "SecureFacility": {"facility": _pending("FAC-A")},
+            "SecureFacilityFallback": {"facility": _pending("FAC-B")},
+        },
+    )
+    facility = _section(html, "facility", "actions")
+
+    assert "(declined)" not in facility
+    assert "(accepted)" not in facility
+    assert "Not recorded" in facility
+
+
+def test_no_fallback_accept_is_unchanged(monkeypatch) -> None:
+    html = _html_for(
+        monkeypatch,
+        _stored_incident(),
+        {
+            "SecureFacility": {
+                "facility": {"facility_id": "FAC-A", "accepted": True, "kind": "facility"},
+            },
+        },
+    )
+    facility = _section(html, "facility", "actions")
+
+    assert "FAC-A (accepted)" in facility
+    assert "(declined)" not in facility
+
+
 def test_handler_does_not_publish_when_the_incident_is_missing(monkeypatch) -> None:
     store = MemoryReportStore()
     table = _Table(None)
@@ -344,6 +430,29 @@ def test_version_allocation_reads_every_list_page() -> None:
     assert receipt.s3_key == "reports/t1/INC-1/v1002.html"
     assert bucket.objects["reports/t1/INC-1/v1.html"] == b"original"
     assert bucket.objects["reports/t1/INC-1/v1001.html"] == b"page-two"
+
+
+def _pending(facility_id: str) -> dict:
+    return {"facility_id": facility_id, "kind": "facility", "pending": True}
+
+
+def _decided(facility_id: str, *, accepted: bool) -> dict:
+    return {"facility_id": facility_id, "kind": "facility", "accepted": accepted}
+
+
+def _section(html: str, name: str, nxt: str) -> str:
+    return html.split(f'id="{name}"', 1)[1].split(f'id="{nxt}"', 1)[0]
+
+
+def _html_for(monkeypatch, incident: dict, snapshots: dict) -> str:
+    store = MemoryReportStore()
+    table = _StepOutputTable(incident)
+    table.snapshots = snapshots
+    monkeypatch.setattr("oerf.platform.report.generator._store", lambda: store)
+    monkeypatch.setattr("oerf.platform.report.generator.INCIDENT_TABLE_NAME", "incidents")
+    monkeypatch.setattr("oerf.platform.report.generator.get_dynamodb", lambda: table)
+    result = handler({"tenant_id": "t1", "incident_id": incident["incident_id"]}, None)
+    return store.objects[result["report_key"]].decode()
 
 
 def _sections(html: str, first: str, second: str, third: str) -> tuple[str, str]:

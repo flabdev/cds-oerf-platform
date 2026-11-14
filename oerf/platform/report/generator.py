@@ -202,7 +202,7 @@ def _document(
         evidence=_evidence(incident.get("evidence")),
         options=options,
         approval=_optional_text(approval.get("status")),
-        facility=_facility_line(facility),
+        facility=_facility_line(facility, workflows),
         actions=_action_lines(action),
         containment=_containment_line(containment),
         qa_disposition=_optional_text(incident.get("qa_disposition")),
@@ -290,7 +290,16 @@ def _decision_trace(
         return None
 
 
-def _facility_line(facility: dict[str, Any]) -> str | None:
+def _facility_line(
+    facility: dict[str, Any], workflows: dict[str, dict[str, Any]] | None = None
+) -> str | None:
+    """Name each facility from the secure snapshots, and its outcome from the decision.
+
+    ``SecureFacility`` and ``SecureFacilityFallback`` stay pending until
+    ``FacilityDecision#{facility_id}`` records the partner's answer. A pending
+    record has no ``accepted`` flag and is omitted. It is not a decline.
+    """
+
     history = facility.get("history")
     records = [_mapping(item) for item in history] if isinstance(history, list) else []
     records.append(facility)
@@ -299,9 +308,56 @@ def _facility_line(facility: dict[str, Any]) -> str | None:
         facility_id = _optional_text(record.get("facility_id"))
         if facility_id is None:
             continue
-        status = "accepted" if record.get("accepted") is True else "declined"
+        status = _facility_status(record, workflows or {}, facility_id)
+        if status is None:
+            continue
         lines.append(f"{facility_id} ({status})")
     return "; ".join(lines) or None
+
+
+def _facility_status(
+    record: dict[str, Any], workflows: dict[str, dict[str, Any]], facility_id: str
+) -> str | None:
+    decision = _facility_decision(workflows, facility_id)
+    source = decision if decision is not None else record
+    accepted = source.get("accepted")
+    if accepted is True:
+        return "accepted"
+    if accepted is False:
+        return "declined"
+    return None
+
+
+def _facility_decision(
+    workflows: dict[str, dict[str, Any]], facility_id: str
+) -> dict[str, Any] | None:
+    """Latest stored decision for this facility, keyed ``FacilityDecision#{facility_id}``."""
+
+    chosen: dict[str, Any] | None = None
+    chosen_cycle = -1
+    for key, snapshot in workflows.items():
+        cycle = _decision_cycle(key, facility_id)
+        if cycle is None or cycle < chosen_cycle or not isinstance(snapshot, dict):
+            continue
+        facility = _mapping(snapshot.get("facility"))
+        if "accepted" not in facility:
+            continue
+        chosen = facility
+        chosen_cycle = cycle
+    return chosen
+
+
+def _decision_cycle(key: str, facility_id: str) -> int | None:
+    marker = f"#{facility_id}"
+    prefix = "FacilityDecision#"
+    if not key.startswith(prefix) or not key.endswith(marker):
+        return None
+    middle = key[len(prefix):-len(marker)]
+    if middle == "":
+        return 0
+    if middle.isdigit():
+        return int(middle)
+    return None
 
 
 def _action_lines(action: dict[str, Any]) -> list[str]:
