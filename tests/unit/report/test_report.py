@@ -1,5 +1,7 @@
 """Golden HTML, missing sections, reopen versioning, checksum, and privacy."""
 
+from __future__ import annotations
+
 import hashlib
 import threading
 from datetime import UTC, datetime

@@ -1,5 +1,7 @@
 """EventBridge ingest validation, debounce, and start-execution contract."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 import threading
