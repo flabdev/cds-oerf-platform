@@ -32,6 +32,7 @@ def send_rung(
     registry: PhoneRegistry,
     providers: dict[str, MessageProvider],
     messages: dict[str, Any],
+    response_intent: str | None = None,
 ) -> DeliveryResult:
     """Persist the current token/rung, then deliver through the sole router.
 
@@ -59,6 +60,8 @@ def send_rung(
         )
     else:
         if current.status == "ANSWERED":
+            if response_intent != "clarify":
+                raise ValueError("only a WAITING engagement can send a cadence rung")
             current = engagements.reopen_for_clarify(
                 request.tenant_id, request.incident_id, request.engagement_id
             )

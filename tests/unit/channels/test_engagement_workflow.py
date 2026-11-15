@@ -3,6 +3,8 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from oerf.platform.channels.engagement import MemoryEngagementStore
 from oerf.platform.channels.engagement_workflow import send_rung
 from oerf.platform.channels.providers.fake import FakeProvider
@@ -95,12 +97,121 @@ def test_send_rung_reopens_after_inbound_answered_for_clarify() -> None:
         registry=registry,
         providers={"whatsapp": provider},
         messages=MESSAGES,
+        response_intent="clarify",
     )
 
     saved = store.get("t1", "INC-1", "ENG-1")
     assert result.delivered is True
     assert saved.status == "WAITING"
     assert saved.task_token == "token-2"
+
+
+def test_answered_engagement_with_valid_intent_does_not_reopen() -> None:
+    now = datetime(2026, 10, 20, 10, 16, tzinfo=UTC)
+    deadline = now + timedelta(minutes=5)
+    store = MemoryEngagementStore(clock=lambda: now)
+    registry = MemoryPhoneRegistry()
+    registry.register_contact("t1", "C-1", "driver", "+15550000001")
+    provider = FakeProvider("whatsapp")
+    request = OutboundRequest(
+        tenant_id="t1",
+        incident_id="INC-1",
+        engagement_id="ENG-1",
+        role="driver",
+        template_id="check",
+        facts={"shipment_id": "PH-2841"},
+        contact_id="C-1",
+        recipient="+15550000001",
+        channels=("whatsapp",),
+    )
+    send_rung(
+        request,
+        ask="diagnose",
+        policy_id="critical_field",
+        task_token="token-1",
+        rung=1,
+        deadline=deadline,
+        engagements=store,
+        registry=registry,
+        providers={"whatsapp": provider},
+        messages=MESSAGES,
+    )
+    store.answer("t1", "INC-1", "ENG-1")
+    with pytest.raises(ValueError, match="only a WAITING engagement"):
+        send_rung(
+            request,
+            ask="diagnose",
+            policy_id="critical_field",
+            task_token="token-2",
+            rung=2,
+            deadline=deadline,
+            engagements=store,
+            registry=registry,
+            providers={"whatsapp": provider},
+            messages=MESSAGES,
+            response_intent="unit_running",
+        )
+
+
+def test_second_send_after_clarify_reopen_stays_waiting_without_double_reopen() -> None:
+    now = datetime(2026, 10, 20, 10, 16, tzinfo=UTC)
+    deadline = now + timedelta(minutes=5)
+    store = MemoryEngagementStore(clock=lambda: now)
+    registry = MemoryPhoneRegistry()
+    registry.register_contact("t1", "C-1", "driver", "+15550000001")
+    provider = FakeProvider("whatsapp")
+    request = OutboundRequest(
+        tenant_id="t1",
+        incident_id="INC-1",
+        engagement_id="ENG-1",
+        role="driver",
+        template_id="check",
+        facts={"shipment_id": "PH-2841"},
+        contact_id="C-1",
+        recipient="+15550000001",
+        channels=("whatsapp",),
+    )
+    send_rung(
+        request,
+        ask="diagnose",
+        policy_id="critical_field",
+        task_token="token-1",
+        rung=1,
+        deadline=deadline,
+        engagements=store,
+        registry=registry,
+        providers={"whatsapp": provider},
+        messages=MESSAGES,
+    )
+    store.answer("t1", "INC-1", "ENG-1")
+    send_rung(
+        request,
+        ask="diagnose",
+        policy_id="critical_field",
+        task_token="token-2",
+        rung=1,
+        deadline=deadline,
+        engagements=store,
+        registry=registry,
+        providers={"whatsapp": provider},
+        messages=MESSAGES,
+        response_intent="clarify",
+    )
+    send_rung(
+        request,
+        ask="diagnose",
+        policy_id="critical_field",
+        task_token="token-2",
+        rung=1,
+        deadline=deadline,
+        engagements=store,
+        registry=registry,
+        providers={"whatsapp": provider},
+        messages=MESSAGES,
+        response_intent="clarify",
+    )
+    assert store.get("t1", "INC-1", "ENG-1").status == "WAITING"
+    assert store.get("t1", "INC-1", "ENG-1").task_token == "token-2"
 
 
 def test_no_provider_sdk_is_used_outside_the_router() -> None:

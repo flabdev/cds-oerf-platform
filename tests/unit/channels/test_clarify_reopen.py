@@ -66,6 +66,7 @@ def _send(
     token: str,
     rung: int,
     template: str,
+    response_intent: str | None = None,
 ) -> str:
     deadline = START + timedelta(minutes=5)
     result = send_rung(
@@ -89,6 +90,7 @@ def _send(
         registry=registry,
         providers={"whatsapp": FakeProvider("whatsapp")},
         messages=MESSAGES,
+        response_intent=response_intent,
     )
     assert result.delivered
     return result.provider_msg_id
@@ -132,6 +134,7 @@ def test_driver_accept_clarify_then_running() -> None:
         token="token-2",
         rung=workflow["cadence"]["next_rung"],
         template=workflow["cadence"]["message"],
+        response_intent="clarify",
     )
     saved = store.get(workflow["tenant_id"], workflow["incident_id"], workflow["engagement_id"])
     assert saved.status == "WAITING"
@@ -172,6 +175,7 @@ def test_facility_running_clarify_then_decline() -> None:
         token="fac-2",
         rung=workflow["cadence"]["next_rung"],
         template=workflow["cadence"]["message"],
+        response_intent="clarify",
     )
 
     workflow = interpret_workflow({**workflow, "reply": {"text": "Decline"}}, enabled=False)
@@ -207,6 +211,7 @@ def test_two_clarifies_then_cadence_exhausts() -> None:
             token=token,
             rung=workflow["cadence"]["next_rung"],
             template=workflow["cadence"]["message"],
+            response_intent="clarify",
         )
     else:
         _inbound_answered(store, workflow)
