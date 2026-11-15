@@ -796,6 +796,47 @@ def test_facility_decision_on_the_fallback_attempt_clears_the_next_option(
     assert "pending" not in result.facility
 
 
+def test_secure_facility_fallback_clears_the_request_when_the_next_facility_has_no_contact() -> (
+    None
+):
+    """A contactless fallback must not keep FAC-A's request for FacilityContact?."""
+
+    from tests.unit.test_statemachine_definition import evaluate_choice, load_definition
+
+    dependencies = _dependencies("SECURING_FACILITY")
+    context = _facility_context()
+    for facility in context["facilities"]:
+        if facility["id"] == "FAC-B":
+            facility.pop("contact_id", None)
+
+    secured = HANDLERS["SecureFacility"](
+        _envelope("SecureFacility", workflow=_approval_workflow(context=context)),
+        dependencies,
+    )
+    declined = HANDLERS["FacilityDecision"](
+        _envelope(
+            "FacilityDecision",
+            workflow={
+                **secured.workflow,
+                "facility_engagement": {"Output": {"status": "answered", "intent": "decline"}},
+            },
+        ),
+        dependencies,
+    )
+
+    result = HANDLERS["SecureFacilityFallback"](
+        _envelope("SecureFacilityFallback", workflow=declined.workflow),
+        dependencies,
+    )
+
+    assert "facility_request" not in result.workflow
+    assert result.facility is not None
+    assert result.facility["accepted"] is True
+    assert result.facility["facility_id"] == "FAC-B"
+    contact_choice = load_definition()["States"]["FacilityContact?"]
+    assert evaluate_choice(contact_choice, {"workflow": result.workflow}) == "FacilityAccepted?"
+
+
 def test_secure_facility_fallback_uses_next_option_under_a_distinct_idempotency_key() -> None:
     dependencies = _dependencies("SECURING_FACILITY")
     initial = HANDLERS["SecureFacility"](

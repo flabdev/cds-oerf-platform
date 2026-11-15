@@ -889,6 +889,7 @@ def secure_facility(envelope: StepEnvelope, dependencies: StepDependencies) -> S
         workflow["assessment"] = assessment
         # The previous response belongs to the declined partner, not this facility.
         workflow.pop("facility_response", None)
+        workflow.pop("facility_request", None)
         # FacilityDecision reads this and clears next_option_id, so a FAC-B
         # decline, timeout, or exhaustion escalates instead of trying a third.
         workflow["facility_fallback"] = True
