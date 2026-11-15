@@ -1,15 +1,75 @@
 """Credential-free checks for the WhatsApp template definitions."""
 
+import json
+import re
+from pathlib import Path
+
 import pytest
 
-from scripts.whatsapp.templates import Template, definition, lint, load
+from oerf.platform.channels.templates import parameter_values, render_message
+from scripts.whatsapp.templates import VAR_RE, Template, definition, lint, load
 
 TEMPLATES = load()
+MESSAGES = json.loads(
+    Path("domains/cold_chain_excursion/messages.json").read_text(encoding="utf-8")
+)
+_PLACEHOLDER = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+_FACILITY_AND_REOPEN = ("facility_request", "facility_reminder", "reopen_alert")
 
 
 def test_catalog_has_the_twenty_page_20_templates():
     assert len(TEMPLATES) == 20
     assert len({t.name for t in TEMPLATES}) == 20
+
+
+def _meta_body(whatsapp: str) -> str:
+    index = 1
+
+    def repl(_match: re.Match[str]) -> str:
+        nonlocal index
+        text = f"{{{{{index}}}}}"
+        index += 1
+        return text
+
+    return _PLACEHOLDER.sub(repl, whatsapp)
+
+
+@pytest.mark.parametrize("logical", _FACILITY_AND_REOPEN)
+def test_facility_and_reopen_catalog_matches_messages_json(logical: str) -> None:
+    template = next(item for item in TEMPLATES if item.name == f"oerf_{logical}")
+    whatsapp = MESSAGES["messages"][logical]["whatsapp"]
+    assert _meta_body(whatsapp) == template.body
+    assert template.category == "UTILITY"
+    assert template.language == "en"
+    if logical == "facility_request":
+        assert [button["text"] for button in template.buttons] == [
+            "Accept",
+            "Decline",
+            "Call me",
+        ]
+    if logical == "facility_reminder":
+        assert [button["text"] for button in template.buttons] == ["Accept", "Decline"]
+
+
+@pytest.mark.parametrize("logical", _FACILITY_AND_REOPEN)
+def test_facility_and_reopen_parameter_order_matches_template_variables(logical: str) -> None:
+    template = next(item for item in TEMPLATES if item.name == f"oerf_{logical}")
+    whatsapp = MESSAGES["messages"][logical]["whatsapp"]
+    names = _PLACEHOLDER.findall(whatsapp)
+    var_nums = [int(number) for number in VAR_RE.findall(template.body)]
+    assert var_nums == list(range(1, len(names) + 1))
+    assert len(template.examples) == len(names)
+
+    facts: dict[str, object] = {}
+    for name, sample in zip(names, template.examples, strict=True):
+        facts[name] = float(sample) if name == "temperature_c" else sample
+    params = parameter_values(MESSAGES, logical, "whatsapp", facts)
+    assert params == template.examples
+    rendered = render_message(MESSAGES, logical, "whatsapp", facts)
+    filled = template.body
+    for index, sample in enumerate(template.examples, start=1):
+        filled = filled.replace(f"{{{{{index}}}}}", sample)
+    assert rendered == filled
 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda t: t.name)
