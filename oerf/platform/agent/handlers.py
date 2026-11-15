@@ -1889,6 +1889,38 @@ def record_failure(envelope: StepEnvelope, dependencies: StepDependencies) -> St
     )
 
 
+def _escalation_reason(workflow: Mapping[str, Any], envelope: StepEnvelope) -> str:
+    nested = mapping(workflow, "escalation") or {}
+    prior = text(nested, "reason")
+    if prior:
+        return prior
+    failure = mapping(workflow, "failure") or {}
+    error = text(failure, "Error") or ""
+    if error == "Engagement.WorkflowFailed":
+        return "ENGAGEMENT_FAILED"
+    return f"{envelope.step.upper()}_FAILURE"
+
+
+def _supervisor_escalation_facts(
+    workflow: Mapping[str, Any], dependencies: StepDependencies
+) -> dict[str, str]:
+    """Facts for ``supervisor_escalation`` without an assessment or facility choice."""
+
+    shipment_id = text(workflow, "shipment_id") or ""
+    nested = mapping(workflow, "workflow") or {}
+    context = mapping(nested, "context") or mapping(workflow, "context") or {}
+    shipment = mapping(context, "shipment") or {}
+    if not shipment_id:
+        shipment_id = text(shipment, "shipment_id") or "unknown"
+    ship_time = _ship_time(workflow, context) or _ship_time(nested, context)
+    if ship_time:
+        elapsed = _minutes_between(ship_time, dependencies.now())
+        minutes = str(max(1, int(round(elapsed))))
+    else:
+        minutes = "1"
+    return {"shipment_id": shipment_id, "minutes": minutes}
+
+
 @handles("Escalate")
 def escalate(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
     """Move the incident to ``ESCALATED`` and keep the shipment lock.
@@ -1896,12 +1928,30 @@ def escalate(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnve
     Assess may already have walked here. A second call does not write another
     timeline event. ``CLOSED`` and ``CANCELLED`` succeed with no write. Any
     other state that has no direct edge to ``ESCALATED`` fails.
+
+    When assessment has not run, ``workflow.escalation.notify`` carries
+    ``supervisor_escalation`` facts derived from context and ship time only.
     """
 
     replay = _replay(envelope, dependencies)
     if replay is not None:
         return replay
-    return _apply_hop(envelope, dependencies, "ESCALATED")
+    workflow = dict(envelope.workflow)
+    escalation = dict(mapping(workflow, "escalation") or {})
+    escalation.update(
+        {
+            "source": envelope.step,
+            "reason": _escalation_reason(workflow, envelope),
+            "at": dependencies.stamp(),
+            "notify": {
+                "message": "supervisor_escalation",
+                "role": "fleet_supervisor",
+                "facts": _supervisor_escalation_facts(workflow, dependencies),
+            },
+        }
+    )
+    workflow["escalation"] = escalation
+    return _apply_hop(envelope.model_copy(update={"workflow": workflow}), dependencies, "ESCALATED")
 
 
 @handles("Cancel")

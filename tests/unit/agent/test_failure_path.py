@@ -1,14 +1,18 @@
 """Failure-path steps write the incident the execution already decided."""
 
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
 from domains.cold_chain_excursion.steps.cancel import handler as cancel_handler
 from domains.cold_chain_excursion.steps.record_failure import handler as record_handler
-from oerf.platform.agent.context import StepDependencies, StepError
+from oerf.platform.agent.context import StepDependencies
+from oerf.platform.agent.envelope import StepEnvelope
 from oerf.platform.agent.handlers import cancel, escalate, record_failure
 from oerf.platform.agent.idempotency import MemoryStepResultStore
+from oerf.platform.channels.templates import render_message
 from oerf.platform.incidents.repository import IncidentRepository
 
 NOW = datetime(2026, 10, 20, 10, 16, tzinfo=UTC)
@@ -101,17 +105,49 @@ def test_failed_assessing_run_escalates_and_blocks_a_second_incident() -> None:
     assert reused.incident_id == opened.incident_id
 
 
-def test_escalate_from_a_state_without_that_edge_is_an_error() -> None:
+def test_escalate_from_diagnosing_without_assessment_succeeds() -> None:
     incidents = IncidentRepository(clock=lambda: NOW)
     ports = _ports(incidents)
     opened = _open(incidents)
     _walk(incidents, opened.incident_id, "DIAGNOSING")
+    envelope = StepEnvelope(
+        step="Escalate",
+        tenant_id=TENANT,
+        incident_id=opened.incident_id,
+        shipment_id=SHIPMENT,
+        incident_state="DIAGNOSING",
+        workflow={
+            "tenant_id": TENANT,
+            "incident_id": opened.incident_id,
+            "shipment_id": SHIPMENT,
+            "incident_state": "DIAGNOSING",
+            "ship_time": "2026-10-20T10:12:00Z",
+            "context": {"shipment": {"shipment_id": SHIPMENT}, "allowance_minutes": 45},
+            "workflow": {
+                "diagnosis": {
+                    "engagement_result": {"Error": "Engagement.WorkflowFailed"}
+                }
+            },
+            "failure": {"Error": "Engagement.WorkflowFailed"},
+        },
+    )
 
-    with pytest.raises(StepError):
-        escalate(_envelope("Escalate", opened.incident_id, "DIAGNOSING"), ports)
+    result = escalate(envelope, ports)
 
-    assert incidents.get(TENANT, opened.incident_id).state == "DIAGNOSING"
-    assert incidents.lock.get_lock(TENANT, SHIPMENT) is not None
+    assert result.incident_state == "ESCALATED"
+    assert incidents.get(TENANT, opened.incident_id).state == "ESCALATED"
+    notify = result.workflow["escalation"]["notify"]
+    assert notify["message"] == "supervisor_escalation"
+    assert notify["facts"] == {"shipment_id": SHIPMENT, "minutes": "4"}
+    assert result.workflow["escalation"]["reason"] == "ENGAGEMENT_FAILED"
+    catalog = json.loads(
+        Path("domains/cold_chain_excursion/messages.json").read_text(encoding="utf-8")
+    )
+    body = render_message(
+        catalog, "supervisor_escalation", "whatsapp", notify["facts"]
+    )
+    assert "PH-2841" in body
+    assert "None" not in body
 
 
 def test_escalate_of_a_closed_incident_writes_nothing() -> None:

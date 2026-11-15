@@ -13,7 +13,9 @@
     },
     "driver_reminder": {},
     "driver_call": {},
-    "supervisor_escalation": {},
+    "supervisor_escalation": {
+      "whatsapp": "The driver of shipment {shipment_id} has not replied for {minutes} minutes during a temperature alert. Please contact the driver and check they are safe."
+    },
     "ops_approval": {},
     "approval_reminder": {},
     "facility_request": {
