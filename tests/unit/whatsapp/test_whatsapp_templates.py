@@ -2,16 +2,18 @@
 
 import json
 import re
-from pathlib import Path
 
 import pytest
 
 from oerf.platform.channels.templates import parameter_values, render_message
+from oerf.platform.tenancy.config_resolver import find_repo_root
 from scripts.whatsapp.templates import VAR_RE, Template, definition, lint, load
 
 TEMPLATES = load()
 MESSAGES = json.loads(
-    Path("domains/cold_chain_excursion/messages.json").read_text(encoding="utf-8")
+    (find_repo_root() / "domains" / "cold_chain_excursion" / "messages.json").read_text(
+        encoding="utf-8"
+    )
 )
 _PLACEHOLDER = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 _FACILITY_AND_REOPEN = ("facility_request", "facility_reminder", "reopen_alert")
