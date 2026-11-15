@@ -1,5 +1,6 @@
 """Fallback, opt-out, and correlation through the single outbound router."""
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -422,6 +423,264 @@ def test_route_outbound_passes_the_incident_and_report_ids() -> None:
         messages=MESSAGES,
     )
     assert seen["ids"] == ("INC-000001", "RPT-000001", "driver_checkin")
+
+
+_URL_MESSAGES = {
+    "messages": {
+        "ops_escalation_options": {
+            "whatsapp": "body-do-not-log",
+            "sms": "sms-escalation",
+        },
+        "qa_report_ready": {
+            "whatsapp": "body-do-not-log",
+            "sms": "sms-report",
+        },
+    }
+}
+
+
+def _live_whatsapp(monkeypatch: pytest.MonkeyPatch, sent: list[dict]) -> None:
+    """A live WhatsApp send that records the API payload and does not call AWS."""
+
+    from oerf.platform.channels import phone_id, router
+
+    monkeypatch.setattr(router, "USE_MOCK_WHATSAPP", False)
+    monkeypatch.setattr(router, "WA_PHONE_NUMBER_ID_PARAM", "")
+    monkeypatch.setattr(router, "WHATSAPP_PHONE_NUMBER_ID", "pn-test")
+    monkeypatch.setattr(phone_id, "_cached_phone_number_id", phone_id._PHONE_UNSET)
+
+    class _Social:
+        def send_whatsapp_message(self, **kwargs: object) -> dict[str, str]:
+            raw = kwargs["message"]
+            sent.append(json.loads(raw))
+            return {"messageId": "mid-1"}
+
+    monkeypatch.setattr(router.boto3, "client", lambda *_args, **_kwargs: _Social())
+
+
+def _url_request(template_id: str, incident_id: str, facts: dict) -> OutboundRequest:
+    return _request().model_copy(
+        update={
+            "template_id": template_id,
+            "incident_id": incident_id,
+            "facts": facts,
+            "channels": ("whatsapp", "sms"),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("template_id", "incident_id", "facts", "suffix"),
+    [
+        ("ops_escalation_options", "", {}, ""),
+        ("qa_report_ready", "INC-000001", {}, ""),
+        (
+            "qa_report_ready",
+            "INC-000001",
+            {"report_id": "bad/report"},
+            "bad/report",
+        ),
+    ],
+)
+def test_invalid_url_button_falls_through_when_the_stage_flag_is_on(
+    template_id: str,
+    incident_id: str,
+    facts: dict,
+    suffix: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("WHATSAPP_STAGE_URL_TEMPLATES", "true")
+    sent: list[dict] = []
+    _live_whatsapp(monkeypatch, sent)
+    registry, engagements = _open()
+    sms = FakeProvider("sms")
+
+    result = route_outbound(
+        _url_request(template_id, incident_id, facts),
+        registry=registry,
+        engagements=engagements,
+        providers={"whatsapp": WhatsAppProvider(), "sms": sms},
+        messages=_URL_MESSAGES,
+        correlate=False,
+    )
+
+    assert result.delivered is True
+    assert result.channel == "sms"
+    assert [(item.channel, item.delivered, item.reason) for item in result.attempts] == [
+        ("whatsapp", False, "invalid_button_data"),
+        ("sms", True, None),
+    ]
+    assert sms.calls
+    assert sent == []
+    text = capsys.readouterr().out
+    assert '"msg":"invalid_button_data"' in text
+    assert "+910000000101" not in text
+    assert "body-do-not-log" not in text
+    if suffix:
+        assert suffix not in text
+
+
+def test_valid_url_button_is_still_sent_when_the_stage_flag_is_on(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("WHATSAPP_STAGE_URL_TEMPLATES", "true")
+    sent: list[dict] = []
+    _live_whatsapp(monkeypatch, sent)
+    registry, engagements = _open()
+    sms = FakeProvider("sms")
+    cases = (
+        ("ops_escalation_options", {}, "1", "INC-000001", "oerf_dev_ops_escalation_options"),
+        (
+            "qa_report_ready",
+            {"report_id": "RPT-000001"},
+            "3",
+            "RPT-000001",
+            "oerf_dev_qa_report_ready",
+        ),
+    )
+
+    for template_id, facts, index, suffix, name in cases:
+        sent.clear()
+        result = route_outbound(
+            _url_request(template_id, "INC-000001", facts),
+            registry=registry,
+            engagements=engagements,
+            providers={"whatsapp": WhatsAppProvider(), "sms": sms},
+            messages=_URL_MESSAGES,
+            correlate=False,
+        )
+        assert result.delivered is True
+        assert result.channel == "whatsapp"
+        assert result.attempts[0].reason is None
+        payload = sent[0]
+        assert payload["template"]["name"] == name
+        assert _button(payload) == {
+            "type": "button",
+            "sub_type": "url",
+            "index": index,
+            "parameters": [{"type": "text", "text": suffix}],
+        }
+
+    assert sms.calls == []
+    text = capsys.readouterr().out
+    assert "+910000000101" not in text
+    assert "body-do-not-log" not in text
+    assert "INC-000001" not in text
+    assert "RPT-000001" not in text
+
+
+@pytest.mark.parametrize("flag", [None, "false"])
+@pytest.mark.parametrize(
+    ("template_id", "incident_id", "facts", "suffix"),
+    [
+        ("ops_escalation_options", "", {}, ""),
+        ("qa_report_ready", "INC-000001", {}, ""),
+        (
+            "qa_report_ready",
+            "INC-000001",
+            {"report_id": "bad/report"},
+            "bad/report",
+        ),
+    ],
+)
+def test_invalid_url_button_still_stops_routing_when_the_flag_is_off(
+    flag: str | None,
+    template_id: str,
+    incident_id: str,
+    facts: dict,
+    suffix: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    if flag is None:
+        monkeypatch.delenv("WHATSAPP_STAGE_URL_TEMPLATES", raising=False)
+    else:
+        monkeypatch.setenv("WHATSAPP_STAGE_URL_TEMPLATES", flag)
+    sent: list[dict] = []
+    _live_whatsapp(monkeypatch, sent)
+    registry, engagements = _open()
+    sms = FakeProvider("sms")
+
+    with pytest.raises(ValueError, match="url-safe") as caught:
+        route_outbound(
+            _url_request(template_id, incident_id, facts),
+            registry=registry,
+            engagements=engagements,
+            providers={"whatsapp": WhatsAppProvider(), "sms": sms},
+            messages=_URL_MESSAGES,
+            correlate=False,
+        )
+
+    assert sms.calls == []
+    assert sent == []
+    assert "+910000000101" not in str(caught.value)
+    assert "body-do-not-log" not in str(caught.value)
+    if suffix:
+        assert suffix not in str(caught.value)
+    assert "invalid_button_data" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("flag", [None, "false"])
+def test_valid_url_button_is_unchanged_when_the_flag_is_off(
+    flag: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if flag is None:
+        monkeypatch.delenv("WHATSAPP_STAGE_URL_TEMPLATES", raising=False)
+    else:
+        monkeypatch.setenv("WHATSAPP_STAGE_URL_TEMPLATES", flag)
+    sent: list[dict] = []
+    _live_whatsapp(monkeypatch, sent)
+    registry, engagements = _open()
+    sms = FakeProvider("sms")
+
+    result = route_outbound(
+        _url_request("ops_escalation_options", "INC-000001", {}),
+        registry=registry,
+        engagements=engagements,
+        providers={"whatsapp": WhatsAppProvider(), "sms": sms},
+        messages=_URL_MESSAGES,
+        correlate=False,
+    )
+
+    assert result.delivered is True
+    assert result.channel == "whatsapp"
+    assert sms.calls == []
+    assert sent[0]["template"]["name"] == "oerf_ops_escalation_options"
+    assert _button(sent[0])["parameters"] == [{"type": "text", "text": "INC-000001"}]
+
+
+def test_another_value_error_still_stops_routing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WHATSAPP_STAGE_URL_TEMPLATES", "true")
+
+    class _Boom:
+        def send(
+            self,
+            recipient: str,
+            body: str,
+            template_id: str,
+            parameters: tuple[str, ...] = (),
+            *,
+            incident_id: str | None = None,
+            report_id: str | None = None,
+        ):
+            del recipient, body, template_id, parameters, incident_id, report_id
+            raise ValueError("other failure")
+
+    registry, engagements = _open()
+    sms = FakeProvider("sms")
+    request = _request().model_copy(update={"channels": ("whatsapp", "sms")})
+
+    with pytest.raises(ValueError, match="other failure"):
+        route_outbound(
+            request,
+            registry=registry,
+            engagements=engagements,
+            providers={"whatsapp": _Boom(), "sms": sms},
+            messages=MESSAGES,
+        )
+
+    assert sms.calls == []
 
 
 def _button(payload: dict) -> dict | None:

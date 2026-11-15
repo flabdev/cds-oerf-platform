@@ -55,6 +55,11 @@ _URL_BUTTON_INDEX = {
 }
 _URL_SAFE = re.compile(r"^[A-Za-z0-9_-]+$")
 
+
+class InvalidButtonData(ValueError):
+    """The URL-button suffix is missing or not one safe path segment."""
+
+
 # Lazy-loaded AWS clients
 _dynamodb = None
 _ses = None
@@ -179,7 +184,7 @@ def _url_button_text(
     raw = incident_id if logical == "ops_escalation_options" else report_id
     if isinstance(raw, str) and _URL_SAFE.fullmatch(raw):
         return raw
-    raise ValueError("url button parameter is missing or not url-safe")
+    raise InvalidButtonData("url button parameter is missing or not url-safe")
 
 
 def send_whatsapp(
@@ -622,14 +627,31 @@ def route_outbound(
         )
         sent_template = "" if request.session_text or request.inline_text else request.template_id
         report_id = request.facts.get("report_id")
-        sent = provider.send(
-            recipient,
-            body,
-            sent_template,
-            parameters=parameters,
-            incident_id=request.incident_id,
-            report_id=report_id if isinstance(report_id, str) else None,
-        )
+        try:
+            sent = provider.send(
+                recipient,
+                body,
+                sent_template,
+                parameters=parameters,
+                incident_id=request.incident_id,
+                report_id=report_id if isinstance(report_id, str) else None,
+            )
+        except InvalidButtonData:
+            if channel != "whatsapp" or not _stage_url_templates():
+                raise
+            log(
+                logger,
+                logging.WARNING,
+                "invalid_button_data",
+                channel="WHATSAPP",
+                outcome="error",
+                tenant_id=request.tenant_id,
+                engagement_id=request.engagement_id,
+            )
+            attempts.append(
+                _attempt(request, channel, delivered=False, reason="invalid_button_data")
+            )
+            continue
         attempts.append(
             _attempt(
                 request,
