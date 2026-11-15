@@ -1,6 +1,8 @@
 # OERF interface contract
 
-**FROZEN v1.51** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.52** — authored 2026-10-18 by OERF-304 (Ananda).
+
+- v1.52 (2026-11-15) An unclear driver or facility reply reopens the engagement for the next cadence rung: inbound still marks the row `ANSWERED`, and `EngagementSendViaRouter` returns it to `WAITING` only when `workflow.response.intent` is `clarify`. A failed `oerf-engage-party` child runs `RecordFailure` and `FailureRoute` default `Escalate`, not `Cancel`. `Escalate` may move `DIAGNOSING` to `ESCALATED` and records `workflow.escalation.notify` with `supervisor_escalation` facts from context and ship time when assessment has not run; no step sends that notify payload yet.
 
 - v1.51 (2026-11-14) The facility engagement id is `ENG-{incident_id}-facility-{facility_id}-accept`. The fallback facility is contacted through `EngageFacilityAccept` before it is accepted. Reply words are scoped by `policy_id`: `critical_field` and `partner_request` each keep their own words, and other policies keep the combined list. When `WHATSAPP_STAGE_URL_TEMPLATES` is true, a missing or unsafe URL-button suffix fails that WhatsApp attempt with reason `invalid_button_data` and the router tries the next channel. That send log records the reason and does not record the suffix, the number, or the body. With the flag off, a missing or unsafe suffix still raises and the message is not sent.
 

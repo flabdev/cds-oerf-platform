@@ -86,6 +86,17 @@ def test_answered_reply_returns_none(store) -> None:
     assert engagements.correlate("wamid-1") is None
 
 
+def test_reopen_for_clarify_returns_waiting(store) -> None:
+    engagements, _clock = store
+    _open(engagements)
+    engagements.answer("t1", "INC-000001", "eng-1")
+
+    reopened = engagements.reopen_for_clarify("t1", "INC-000001", "eng-1")
+
+    assert reopened is not None
+    assert reopened.status == "WAITING"
+
+
 def test_second_open_does_not_reset_a_stopped_engagement(store) -> None:
     engagements, _clock = store
     _open(engagements)

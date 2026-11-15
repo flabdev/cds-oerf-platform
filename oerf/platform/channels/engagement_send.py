@@ -30,6 +30,9 @@ def send_engagement(event: dict[str, Any], *, ports: Any | None = None) -> dict[
         raise ValueError("engagement send needs a task token")
     built = ports if ports is not None else _ports()
     request, rung, deadline = _request(workflow, built)
+    response = workflow.get("response")
+    intent = response.get("intent") if isinstance(response, dict) else None
+    response_intent = intent.strip() if isinstance(intent, str) and intent.strip() else None
     result = send_rung(
         request,
         ask=_text(workflow, "ask"),
@@ -41,6 +44,7 @@ def send_engagement(event: dict[str, Any], *, ports: Any | None = None) -> dict[
         registry=built.registry,
         providers=built.providers,
         messages=built.messages,
+        response_intent=response_intent,
     )
     return {
         "delivered": result.delivered,
