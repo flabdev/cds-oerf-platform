@@ -165,6 +165,7 @@ class _Scenario:
         self.config = config
         self.events: list[str] = []
         self.child_outputs: list[dict[str, Any]] = []
+        self.facility_requests: list[dict[str, Any]] = []
         self.one_way: list[tuple[str, str | None]] = []
 
     def publish(
@@ -564,6 +565,7 @@ def _parent_walk(
                 _assign(data, state["ResultPath"], result)
             elif name == "EngageFacilityAccept":
                 request = data["workflow"]["facility_request"]
+                scenario.facility_requests.append(dict(request))
                 facility_reply = facility_replies.pop(0) if facility_replies else None
                 child = {
                     "tenant_id": data["tenant_id"],
@@ -700,9 +702,10 @@ def test_stopped_scenario_declines_facility_a_then_uses_facility_b_fallback() ->
     outcome, final = _walk(
         scenario,
         driver_reply="Stopped",
-        facility_replies=["Decline"],
+        facility_replies=["Decline", "Accept"],
     )
 
+    incident_id = final["incident_id"]
     assert outcome == "WorkflowComplete", (scenario.events, final)
     assert "Assess" in scenario.events
     assert "SecureFacility" in scenario.events
@@ -711,10 +714,40 @@ def test_stopped_scenario_declines_facility_a_then_uses_facility_b_fallback() ->
     assert "SecureFacilityFallback" in scenario.events
     assert scenario.child_outputs[0]["intent"] == "unit_stopped"
     assert scenario.child_outputs[1]["intent"] == "decline"
-    assert scenario.events.count("EngageFacilityAccept") == 1
+    assert scenario.child_outputs[2]["intent"] == "accept"
+    assert scenario.events.count("EngageFacilityAccept") == 2
+    assert [request["engagement_id"] for request in scenario.facility_requests] == [
+        f"ENG-{incident_id}-facility-FAC-A-accept",
+        f"ENG-{incident_id}-facility-FAC-B-accept",
+    ]
+    assert scenario.facility_requests[1]["facility_id"] == "FAC-B"
+    assert scenario.facility_requests[1]["contact_id"] == "C-T1-FACB"
     assert final["workflow"]["facility"]["facility_id"] == "FAC-B"
+    assert final["workflow"]["facility"]["accepted"] is True
     assert final["workflow"]["containment"]["status"] == "contained"
-    assert scenario.incidents.get("t1", final["incident_id"]).state == "CLOSED"
+    assert scenario.incidents.get("t1", incident_id).state == "CLOSED"
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("second_reply", ["Decline", None])
+def test_facility_b_decline_or_timeout_escalates(second_reply: str | None) -> None:
+    scenario = _Scenario()
+    outcome, final = _walk(
+        scenario,
+        driver_reply="Stopped",
+        facility_replies=["Decline", second_reply],
+    )
+
+    assert outcome == "Escalate", (scenario.events, final)
+    assert scenario.events.count("EngageFacilityAccept") == 2
+    assert scenario.events.count("SecureFacilityFallback") == 1
+    assert scenario.facility_requests[1]["facility_id"] == "FAC-B"
+    assert scenario.facility_requests[1]["contact_id"] == "C-T1-FACB"
+    assert final["workflow"]["facility"]["facility_id"] == "FAC-B"
+    assert final["workflow"]["facility"]["accepted"] is False
+    assert final["workflow"]["facility"]["next_option_id"] is None
+    assert scenario.events[-1] == "Escalate"
+    assert scenario.incidents.get("t1", final["incident_id"]).state == "ESCALATED"
 
 
 @pytest.mark.e2e

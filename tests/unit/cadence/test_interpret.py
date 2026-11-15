@@ -70,6 +70,57 @@ def test_a_keyword_does_not_consult_and_a_failure_stays_on_the_rule() -> None:
     assert "advisory" not in failed["response"]
 
 
+def test_reply_words_follow_the_engagement_policy() -> None:
+    """A word outside the policy is clarify, the same as any other unknown reply."""
+
+    driver_accept = interpret_workflow(
+        {"policy_id": "critical_field", "reply": {"text": "accept"}},
+        enabled=False,
+    )
+    assert driver_accept["response"]["intent"] == "clarify"
+    assert driver_accept["response"]["valid"] is False
+
+    for text, intent in (
+        ("accept", "accept"),
+        ("accepted", "accept"),
+        ("decline", "decline"),
+        ("declined", "decline"),
+    ):
+        facility = interpret_workflow(
+            {"policy_id": "partner_request", "reply": {"text": text}},
+            enabled=False,
+        )
+        assert facility["response"]["intent"] == intent, text
+        assert facility["response"]["valid"] is True
+
+    for text, intent, fields in (
+        ("running", "unit_running", {"unit": "running"}),
+        ("stopped", "unit_stopped", {"unit": "stopped"}),
+    ):
+        driver = interpret_workflow(
+            {"policy_id": "critical_field", "reply": {"text": text}},
+            enabled=False,
+        )
+        assert driver["response"]["intent"] == intent
+        assert driver["response"]["valid"] is True
+        assert driver["response"]["fields"] == fields
+
+    # Policies other than the two scoped ladders keep the combined word list.
+    for policy_id in (
+        "approval_fast",
+        "driver_ack",
+        "transfer_confirm",
+        "review_normal",
+        "notify_only",
+    ):
+        kept = interpret_workflow(
+            {"policy_id": policy_id, "reply": {"text": "accept"}},
+            enabled=False,
+        )
+        assert kept["response"]["intent"] == "accept", policy_id
+        assert kept["response"]["valid"] is True
+
+
 def test_advisory_stays_off_unless_agentcore_is_enabled() -> None:
     result = interpret_workflow(
         {"tenant_id": "t1", "incident_id": "INC-000001", "reply": {"text": "hello"}},

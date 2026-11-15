@@ -19,7 +19,13 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
-from oerf.platform.agent.context import PinnedConfig, StepDependencies, advance, stage_for
+from oerf.platform.agent.context import (
+    PinnedConfig,
+    StepDependencies,
+    StepError,
+    advance,
+    stage_for,
+)
 from oerf.platform.agent.envelope import MIRRORS, StepEnvelope
 
 RULE_SOURCE = "deterministic_rules"
@@ -175,6 +181,38 @@ def _mirrors(workflow: Mapping[str, Any], envelope: StepEnvelope) -> dict[str, d
     return projected
 
 
+def result_step(envelope: StepEnvelope) -> str:
+    """Idempotency key for a step, distinct per facility decision.
+
+    A reopened cycle already gets its own suffix. ``FacilityDecision`` runs once
+    per contacted facility, so the facility id is part of the key. A retry of
+    the same facility replays; the fallback facility does not replay the first.
+    """
+
+    cycle = envelope.workflow.get("reopen_cycle", 0)
+    if not isinstance(cycle, int) or isinstance(cycle, bool) or cycle < 0:
+        raise StepError("workflow reopen_cycle must be a non-negative integer")
+    base = envelope.step if cycle == 0 else f"{envelope.step}#{cycle}"
+    if envelope.step != "FacilityDecision":
+        return base
+    request = envelope.workflow.get("facility_request")
+    carried = envelope.workflow.get("facility")
+    facility_id = _facility_key(request) or _facility_key(carried)
+    if facility_id is None:
+        return base
+    return f"{base}#{facility_id}"
+
+
+def _facility_key(value: Any) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    facility_id = value.get("facility_id")
+    if not isinstance(facility_id, str):
+        return None
+    stripped = facility_id.strip()
+    return stripped or None
+
+
 def apply(
     step: WorkflowStep,
     envelope: StepEnvelope,
@@ -211,12 +249,10 @@ def apply(
     )
     if not remember:
         return output
-    cycle = envelope.workflow.get("reopen_cycle", 0)
-    key_step = step.step if cycle == 0 else f"{step.step}#{cycle}"
     dependencies.results.put(
         tenant_id=envelope.tenant_id,
         incident_id=envelope.incident_id,
-        step=key_step,
+        step=result_step(envelope),
         decision=deepcopy(step.decision),
         result=deepcopy({"transition": moved, **step.result}),
         step_output=deepcopy(output.to_event()),

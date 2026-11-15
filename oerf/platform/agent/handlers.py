@@ -35,6 +35,7 @@ from oerf.platform.agent.carriers import (
     field,
     finish,
     mapping,
+    result_step,
     text,
 )
 from oerf.platform.agent.context import (
@@ -112,11 +113,8 @@ def _required_mapping(source: Mapping[str, Any] | None, key: str, step: str) -> 
 
 
 def _cycle_step(envelope: StepEnvelope) -> str:
-    """Use a separate idempotency key for each post-reopen workflow cycle."""
-    cycle = envelope.workflow.get("reopen_cycle", 0)
-    if not isinstance(cycle, int) or isinstance(cycle, bool) or cycle < 0:
-        raise StepError("workflow reopen_cycle must be a non-negative integer")
-    return envelope.step if cycle == 0 else f"{envelope.step}#{cycle}"
+    """Use a separate idempotency key for each post-reopen cycle and facility."""
+    return result_step(envelope)
 
 
 def _replay(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope | None:
@@ -861,20 +859,18 @@ def _option_facility_id(option: Mapping[str, Any] | None) -> str | None:
 
 @handles("SecureFacility", "SecureFacilityFallback")
 def secure_facility(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelope:
-    """Confirm the facility the recovery chose, or decline to the next one.
+    """Record the facility to contact, and leave acceptance to ``FacilityDecision``.
 
-    ``FacilityAccepted?`` reads ``$.facility.accepted``. The recommended (or the
-    approver's chosen) facility is accepted when it is pre-approved and the
-    partner confirmation says so; otherwise this step records a decline together
-    with the next feasible candidate the ranking already produced, so the workflow
-    can request that facility instead of escalating on the first refusal. The
-    ``facility_a_declines`` scenario is exactly this path: A refuses and the run
-    continues with B. Only when no further feasible facility remains is there
-    nothing to try, and the definition's ``FacilityAccepted?`` default escalates.
+    A facility that has a ``contact_id`` is not accepted here. This step writes
+    ``facility_request`` and leaves ``accepted`` unset so ``FacilityContact?``
+    runs ``EngageFacilityAccept``. Only ``FacilityDecision`` turns the partner's
+    answer into ``$.facility.accepted``. ``SecureFacilityFallback`` does the same
+    for the next facility and sets ``workflow.facility_fallback``, so that later
+    decision clears ``next_option_id`` and the run cannot try a third facility.
 
-    This step does not send the request: the facility engagement send is the
-    router's work, and wiring this handler into the ASL is C0's. It records the
-    partner the send will target and the next candidate to try on a decline.
+    A continue option, and a facility with no ``contact_id``, keep the previous
+    gate: continue is accepted immediately, and a contactless pre-approved
+    facility is accepted when nobody has replied. Neither writes a request.
     """
     replay = _replay(envelope, dependencies)
     if replay is not None:
@@ -893,6 +889,9 @@ def secure_facility(envelope: StepEnvelope, dependencies: StepDependencies) -> S
         workflow["assessment"] = assessment
         # The previous response belongs to the declined partner, not this facility.
         workflow.pop("facility_response", None)
+        # FacilityDecision reads this and clears next_option_id, so a FAC-B
+        # decline, timeout, or exhaustion escalates instead of trying a third.
+        workflow["facility_fallback"] = True
 
     context = _required_mapping(workflow, "context", envelope.step)
     assessment = _required_mapping(workflow, "assessment", envelope.step)
@@ -932,55 +931,76 @@ def secure_facility(envelope: StepEnvelope, dependencies: StepDependencies) -> S
         )
 
     facility_id = text(facility, "facility_id") or text(facility, "id")
+    contact_id = text(facility, "contact_id")
     confirmation = mapping(workflow, "facility_response") or {}
     accepted = _facility_accepted(confirmation, workflow)
-    if accepted is None:
-        # No partner answer yet: request this facility. ``_require_pre_approved_facility``
-        # still refuses a facility the pinned limits do not cover.
-        _require_pre_approved_facility(facility, config.resolved, envelope.step)
-        accepted = True
     next_option = _next_feasible_facility(assessment, option)
-    record = {
-        "accepted": bool(accepted),
+    next_option_id = text(next_option, "id") if next_option is not None else None
+    next_facility_id = _option_facility_id(next_option) if next_option is not None else None
+    record: dict[str, Any] = {
         "facility_id": facility_id,
         "kind": "facility",
-        "contact_id": text(facility, "contact_id"),
-        "next_option_id": text(next_option, "id") if next_option is not None else None,
-        "next_facility_id": _option_facility_id(next_option) if next_option is not None else None,
+        "contact_id": contact_id,
+        "next_option_id": next_option_id,
+        "next_facility_id": next_facility_id,
         "decided_at": dependencies.stamp(),
         "config_version": config.version,
         "config_source": config.source,
     }
-    outcome = decision(
-        "facility.accept",
-        config=config,
-        inputs={"facility_id": facility_id, "declined": accepted is False},
-        accepted=record["accepted"],
-        facility_id=facility_id,
-        next_option_id=record["next_option_id"],
-    )
+    if contact_id:
+        # Someone can answer. Do not claim acceptance; FacilityDecision does.
+        _require_pre_approved_facility(facility, config.resolved, envelope.step)
+        record["pending"] = True
+        outcome = decision(
+            "facility.accept",
+            config=config,
+            inputs={"facility_id": facility_id, "pending": True},
+            pending=True,
+            facility_id=facility_id,
+            next_option_id=next_option_id,
+        )
+        result = {"pending": True, "facility_id": facility_id}
+    else:
+        # Nobody to ask. A reply already on the workflow is kept; otherwise a
+        # pre-approved facility is accepted and the contact choice is skipped.
+        if accepted is None:
+            _require_pre_approved_facility(facility, config.resolved, envelope.step)
+            accepted = True
+        record["accepted"] = bool(accepted)
+        outcome = decision(
+            "facility.accept",
+            config=config,
+            inputs={"facility_id": facility_id, "declined": accepted is False},
+            accepted=record["accepted"],
+            facility_id=facility_id,
+            next_option_id=next_option_id,
+        )
+        result = {"accepted": record["accepted"], "facility_id": facility_id}
     workflow["facility"] = record
     # C13: record the engagement the facility contact/wait will use. The nested
     # ``EngageFacilityAccept`` state starts ``engage_party_v1`` with this request,
     # which stores the task token on ``ENG#`` and sends ``facility_request`` to the
-    # chosen facility. ``FacilityDecision`` turns the answer into the gate below.
-    if record["kind"] == "facility" and record["contact_id"]:
+    # chosen facility. The id is stable for retries of the same facility.
+    # ``FacilityDecision`` turns the answer into the gate below.
+    if contact_id:
         shipment = mapping(context, "shipment") or {}
         shipment_id = text(shipment, "shipment_id")
         lower_c, upper_c = _range_c(context, envelope.step)
         if shipment_id is None:
             raise MissingStepInput(f"step {envelope.step} needs shipment.shipment_id")
+        if facility_id is None:
+            raise MissingStepInput(f"step {envelope.step} needs the selected facility's id")
         drive_min = field(facility, "drive_min")
         if isinstance(drive_min, bool) or not isinstance(drive_min, (int, float)):
             raise MissingStepInput(f"step {envelope.step} needs the selected facility's drive_min")
         workflow["facility_request"] = {
-            "engagement_id": f"ENG-{envelope.incident_id}-{_FACILITY_ROLE}-{_FACILITY_ASK}",
+            "engagement_id": f"ENG-{envelope.incident_id}-facility-{facility_id}-{_FACILITY_ASK}",
             "policy_id": "partner_request",
             "role": _FACILITY_ROLE,
             "ask": _FACILITY_ASK,
             "facility_id": facility_id,
-            "contact_id": record["contact_id"],
-            "next_option_id": record["next_option_id"],
+            "contact_id": contact_id,
+            "next_option_id": next_option_id,
             "facts": {
                 "shipment_id": shipment_id,
                 "range": f"{format(lower_c, 'g')}–{format(upper_c, 'g')}°C",
@@ -993,7 +1013,7 @@ def secure_facility(envelope: StepEnvelope, dependencies: StepDependencies) -> S
             step=envelope.step,
             workflow=workflow,
             decision=outcome,
-            result={"accepted": record["accepted"], "facility_id": facility_id},
+            result=result,
             incident_state="SECURING_FACILITY",
             current_stage="SECURING_FACILITY",
         ),
@@ -1034,10 +1054,13 @@ def facility_decision(envelope: StepEnvelope, dependencies: StepDependencies) ->
     maps the child's terminal output onto ``FacilityAccepted?``:
 
     * ``answered`` with ``accept`` -> ``accepted`` true, so the run advances to ``Act``.
-    * ``answered`` with ``decline`` -> ``accepted`` false and the next feasible
-      option is preserved, so ``SecureFacilityFallback`` requests ``FAC-B`` (#66).
+    * ``answered`` with ``decline`` on the first facility -> ``accepted`` false and
+      the next feasible option is preserved, so ``SecureFacilityFallback`` requests
+      that facility (#66).
     * ``exhausted`` (no answer within the ladder), a timeout, or an unusable
       reply -> ``accepted`` false with no next option, so the definition escalates.
+    * any outcome while ``workflow.facility_fallback`` is set -> ``next_option_id``
+      is cleared, so a second decline, timeout, or exhaustion escalates.
 
     The request the facility was contacted on is ``workflow.facility_request``; the
     facility gate ``SecureFacility`` wrote carries ``facility_id`` and
@@ -1053,6 +1076,7 @@ def facility_decision(envelope: StepEnvelope, dependencies: StepDependencies) ->
     if not request:
         raise MissingStepInput("FacilityDecision needs the facility engagement request")
     carried = dict(mapping(workflow, "facility") or {})
+    carried.pop("pending", None)
     facility_id = text(carried, "facility_id") or text(request, "facility_id")
     next_option_id = text(carried, "next_option_id") or text(request, "next_option_id")
     result = _child_result(workflow, "facility_engagement")
@@ -1071,6 +1095,8 @@ def facility_decision(envelope: StepEnvelope, dependencies: StepDependencies) ->
         accepted = False
         next_option_id = None
         outcome_reason = status or "no_answer"
+    if workflow.get("facility_fallback") is True:
+        next_option_id = None
 
     facility_response = {"status": status or "no_answer", "reason": outcome_reason}
     if intent is not None:
