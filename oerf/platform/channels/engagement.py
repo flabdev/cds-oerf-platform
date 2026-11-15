@@ -106,6 +106,11 @@ class EngagementStore(Protocol):
     def answer(self, tenant_id: str, incident_id: str, engagement_id: str) -> Engagement:
         """Mark a WAITING engagement ANSWERED."""
 
+    def reopen_for_clarify(
+        self, tenant_id: str, incident_id: str, engagement_id: str
+    ) -> Engagement | None:
+        """Return an ANSWERED engagement to WAITING after a clarify (clear recorded answer)."""
+
     def for_contact(self, tenant_id: str, contact_id: str) -> list[Engagement]:
         """Return engagements opened for one contact in one tenant."""
 
@@ -245,6 +250,16 @@ class MemoryEngagementStore:
         if current is None or current.status != "WAITING":
             raise ValueError("only a WAITING engagement can be answered")
         updated = current.model_copy(update={"status": "ANSWERED"})
+        self._engagements[(updated.tenant_id, updated.incident_id, updated.engagement_id)] = updated
+        return updated
+
+    def reopen_for_clarify(
+        self, tenant_id: str, incident_id: str, engagement_id: str
+    ) -> Engagement | None:
+        current = self.get(tenant_id, incident_id, engagement_id)
+        if current is None or current.status != "ANSWERED":
+            return current
+        updated = current.model_copy(update={"status": "WAITING"})
         self._engagements[(updated.tenant_id, updated.incident_id, updated.engagement_id)] = updated
         return updated
 
@@ -534,6 +549,16 @@ class DynamoEngagementStore:
         )
         if updated is None or updated.status != "ANSWERED":
             raise ValueError("only a WAITING engagement can be answered")
+        return updated
+
+    def reopen_for_clarify(
+        self, tenant_id: str, incident_id: str, engagement_id: str
+    ) -> Engagement | None:
+        updated = self._set_status(
+            tenant_id, incident_id, engagement_id, "WAITING", frozenset({"ANSWERED"})
+        )
+        if updated is None:
+            return self.get(tenant_id, incident_id, engagement_id)
         return updated
 
     def for_contact(self, tenant_id: str, contact_id: str) -> list[Engagement]:

@@ -57,17 +57,22 @@ def send_rung(
             rung=rung,
             deadline=deadline,
         )
-    elif current.status != "WAITING":
-        raise ValueError("only a WAITING engagement can send a cadence rung")
-    elif current.rung != rung or current.task_token != task_token:
-        engagements.prepare_wait(
-            request.tenant_id,
-            request.incident_id,
-            request.engagement_id,
-            task_token,
-            rung=rung,
-            deadline=deadline,
-        )
+    else:
+        if current.status == "ANSWERED":
+            current = engagements.reopen_for_clarify(
+                request.tenant_id, request.incident_id, request.engagement_id
+            )
+        if current is None or current.status != "WAITING":
+            raise ValueError("only a WAITING engagement can send a cadence rung")
+        if current.rung != rung or current.task_token != task_token:
+            engagements.prepare_wait(
+                request.tenant_id,
+                request.incident_id,
+                request.engagement_id,
+                task_token,
+                rung=rung,
+                deadline=deadline,
+            )
 
     return route_outbound(
         request,
