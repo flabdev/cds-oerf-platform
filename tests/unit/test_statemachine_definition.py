@@ -663,7 +663,15 @@ def test_cancel_and_failure_routes_cover_canonical_terminal_transitions() -> Non
         for state, targets in TRANSITIONS.items()
         if state not in {"CLOSED", "CANCELLED"}
     )
-    assert failure_route["Default"] == "Cancel"
+    assert failure_route["Default"] == "Escalate"
+
+
+def test_failure_route_default_escalates_diagnosing_engagement_failures() -> None:
+    states = load_definition()["States"]
+    assert (
+        evaluate_choice(states["FailureRoute"], {"incident_state": "DIAGNOSING"})
+        == "Escalate"
+    )
 
 
 def test_cancellation_is_checked_after_work_steps_and_infeasible_assessment_escalates() -> None:
@@ -796,7 +804,7 @@ def test_failure_path_records_then_escalates_and_terminates() -> None:
 
     assert states["RecordFailure"]["Next"] == "FailureRoute"
     assert states["Escalate"]["End"] is True
-    assert states["FailureRoute"]["Default"] == "Cancel"
+    assert states["FailureRoute"]["Default"] == "Escalate"
     assert states["HandleReopen"]["Next"] == "CancelAfterHandleReopen?"
     assert states["StartQAAndMonitor"]["Next"] == "QAParallelDecision"
     assert states["QAParallelDecision"]["Choices"][1]["Next"] == "UseApprovedQAResult"

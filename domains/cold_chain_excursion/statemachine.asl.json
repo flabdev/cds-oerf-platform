@@ -1033,7 +1033,7 @@
           "Next": "Escalate"
         }
       ],
-      "Default": "Cancel"
+      "Default": "Escalate"
     },
     "CancelRequested?": {
       "Type": "Choice",
