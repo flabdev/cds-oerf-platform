@@ -1,6 +1,9 @@
-"""Rules decide the intent. A model note cannot change it or the incident."""
-
-from oerf.platform.cadence.interpret import interpret_workflow, map_reply
+from oerf.platform.cadence.interpret import (
+    MAX_REPLY_TEXT,
+    interpret_workflow,
+    map_reply,
+    validate_proposal,
+)
 
 _CASES = (
     ("Running", "unit_running", True, {"unit": "running"}),
@@ -13,61 +16,212 @@ _CASES = (
 )
 
 
-def test_known_replies_map_without_an_advisory() -> None:
+def test_known_replies_bypass_classifier_and_map_deterministically() -> None:
+    def refuse(*_args: object) -> object:
+        raise AssertionError("known reply must bypass classifier")
+
     for text, intent, valid, fields in _CASES:
-        mapped = map_reply(text)
-        assert mapped == (intent, valid, fields), text
-        result = interpret_workflow({"reply": {"text": text}}, enabled=True, consult=_refuse)
-        assert result["response"]["intent"] == intent
-        assert result["response"]["valid"] is valid
-        assert result["response"]["fields"] == fields
-        assert result["response"]["evidence_refs"] == []
-        assert "advisory" not in result["response"]
+        assert map_reply(text) == (intent, valid, fields)
+        response = interpret_workflow({"reply": {"text": text}}, enabled=True, classify=refuse)[
+            "response"
+        ]
+        assert response["intent"] == intent
+        assert response["valid"] is valid
+        assert response["fields"] == fields
+        assert response["evidence_refs"] == []
+        assert "category" not in response
 
 
-def test_free_form_text_stays_clarify_and_keeps_only_status() -> None:
-    def consult(tenant_id: str, incident_id: str) -> dict[str, str | bool]:
-        assert tenant_id == "t1"
-        assert incident_id == "INC-000001"
-        return {
-            "status": "placeholder",
-            "fallback": True,
-            "recommended_actions": ["divert"],
-            "intent": "unit_running",
-        }
+def _proposal(**overrides: object) -> dict:
+    value = {
+        "category": "answer",
+        "intent": "unit_running",
+        "fields": {"setpoint_temp_c": 4.5},
+        "confidence": 0.93,
+    }
+    value.update(overrides)
+    return value
+
+
+def test_exact_text_and_tenant_scope_reach_classifier() -> None:
+    seen: list[tuple] = []
+
+    def classify(tenant: str, incident: str, text: str, policy: str | None) -> object:
+        seen.append((tenant, incident, text, policy))
+        return _proposal()
 
     result = interpret_workflow(
-        {"tenant_id": "t1", "incident_id": "INC-000001", "reply": {"text": "the door is open"}},
+        {
+            "tenant_id": "tenant-1",
+            "incident_id": "INC-9",
+            "policy_id": "critical_field",
+            "reply": {"text": "The unit sounds like it is running."},
+        },
         enabled=True,
-        consult=consult,
+        classify=classify,
+        confidence_floor=0.8,
     )
+    assert seen == [("tenant-1", "INC-9", "The unit sounds like it is running.", "critical_field")]
+    assert result["response"] == {
+        "category": "answer",
+        "intent": "unit_running",
+        "valid": True,
+        "fields": {"setpoint_temp_c": 4.5},
+        "confidence": 0.93,
+        "evidence_refs": [],
+    }
+    assert result["reply"]["text"] == "The unit sounds like it is running."
 
+
+def test_no_confidence_floor_or_disabled_classifier_fails_closed() -> None:
+    def classify(*_args: object) -> object:
+        return _proposal()
+
+    workflow = {"tenant_id": "t1", "incident_id": "i1", "reply": {"text": "Sounds on"}}
+    accepted = interpret_workflow(workflow, enabled=True, classify=classify, confidence_floor=0.8)[
+        "response"
+    ]
+    assert accepted["intent"] == "unit_running" and accepted["valid"] is True
+    no_floor = interpret_workflow(workflow, enabled=True, classify=classify)["response"]
+    assert no_floor["category"] == "answer"
+    assert no_floor["intent"] == "clarify" and no_floor["valid"] is False
+    disabled = interpret_workflow(workflow, enabled=False, classify=classify, confidence_floor=0.8)[
+        "response"
+    ]
+    assert disabled["intent"] == "clarify" and disabled["valid"] is False
+
+
+def test_empty_nonstring_and_oversized_text_never_reach_classifier() -> None:
+    calls: list[str] = []
+
+    def classify(_tenant: str, _incident: str, text: str, _policy: str | None) -> object:
+        calls.append(text)
+        return _proposal()
+
+    for text in (None, "", "  ", 42, "x" * (MAX_REPLY_TEXT + 1)):
+        response = interpret_workflow(
+            {"tenant_id": "t1", "incident_id": "i1", "reply": {"text": text}},
+            enabled=True,
+            classify=classify,
+            confidence_floor=0.8,
+        )["response"]
+        assert response["intent"] == "clarify" and response["valid"] is False
+        assert response["fields"] == {} and response["evidence_refs"] == []
+    assert calls == []
+
+
+def test_classifier_exception_does_not_crash_or_leak_exception_text() -> None:
+    def broken(*_args: object) -> object:
+        raise RuntimeError("private reply and model output")
+
+    response = interpret_workflow(
+        {"tenant_id": "t1", "incident_id": "i1", "reply": {"text": "private reply"}},
+        enabled=True,
+        classify=broken,
+        confidence_floor=0.8,
+    )["response"]
+    assert response["intent"] == "clarify" and response["valid"] is False
+    assert "private reply" not in str(response)
+
+
+def test_invalid_classifier_proposals_fail_closed() -> None:
+    invalid = [
+        None,
+        "prose",
+        {**_proposal(), "extra": "do not expose"},
+        _proposal(category="unknown"),
+        _proposal(intent="arbitrary-route"),
+        _proposal(category="answer", intent="decline"),
+        _proposal(confidence=1.01),
+        _proposal(confidence=-0.1),
+        _proposal(confidence=float("nan")),
+        _proposal(fields={"untrusted": "secret"}),
+        _proposal(fields={"fault_code": "E17"}),
+        {**_proposal(), "valid": True},
+    ]
+    for proposal in invalid:
+        response = validate_proposal(proposal, tenant_id="t1", confidence_floor=0.8)
+        assert response["intent"] == "clarify" and response["valid"] is False
+        assert response["fields"] == {} and response["evidence_refs"] == []
+        assert "secret" not in str(response) and "untrusted" not in str(response)
+
+
+def test_unknown_answer_and_nonfinite_fields_are_rejected_or_safely_routed() -> None:
+    proposal = _proposal(intent="unknown", fields={})
+    response = validate_proposal(proposal, tenant_id="t1", confidence_floor=0.8)
+    assert response["intent"] == "unknown" and response["valid"] is True
+    huge = _proposal(fields={"setpoint_temp_c": 10**10000})
+    rejected = validate_proposal(huge, tenant_id="t1", confidence_floor=0.8)
+    assert rejected["intent"] == "clarify" and rejected["valid"] is False
+
+
+def test_fault_code_requires_tenant_scoped_catalog_validation() -> None:
+    proposal = _proposal(fields={"fault_code": "E17"})
+    accepted = validate_proposal(
+        proposal,
+        tenant_id="t1",
+        confidence_floor=0.8,
+        knows_fault_code=lambda tenant, code: tenant == "t1" and code == "E17",
+    )
+    assert accepted["valid"] is True
+    denied = validate_proposal(
+        proposal,
+        tenant_id="t2",
+        confidence_floor=0.8,
+        knows_fault_code=lambda tenant, code: tenant == "t1" and code == "E17",
+    )
+    assert denied["intent"] == "clarify" and denied["fields"] == {}
+
+
+def test_help_concern_and_unrelated_remain_clarifications() -> None:
+    for category in ("help", "concern", "unrelated"):
+        response = validate_proposal(
+            {"category": category, "intent": "clarify", "fields": {}, "confidence": 0.99},
+            tenant_id="t1",
+            confidence_floor=0.8,
+        )
+        assert response["category"] == category
+        assert response["intent"] == "clarify" and response["valid"] is False
+
+
+def test_known_replies_map_without_an_advisory() -> None:
+    def refuse(*_args: object) -> object:
+        raise AssertionError("known reply must bypass classifier")
+
+    for text, intent, valid, fields in _CASES:
+        assert map_reply(text) == (intent, valid, fields), text
+        response = interpret_workflow({"reply": {"text": text}}, enabled=True, classify=refuse)[
+            "response"
+        ]
+        assert response["intent"] == intent
+        assert response["valid"] is valid
+        assert response["fields"] == fields
+        assert response["evidence_refs"] == []
+
+
+def test_free_form_text_fails_closed_without_confidence_policy() -> None:
+    def classify(*_args: object) -> object:
+        return {"category": "answer", "intent": "unit_running", "fields": {}, "confidence": 0.99}
+
+    result = interpret_workflow(
+        {"tenant_id": "t1", "incident_id": "INC-000001", "reply": {"text": "door is open"}},
+        enabled=True,
+        classify=classify,
+    )
     assert result["response"]["intent"] == "clarify"
     assert result["response"]["valid"] is False
-    assert result["response"]["advisory"] == {"status": "placeholder", "fallback": True}
-    assert "recommended_actions" not in result["response"]["advisory"]
 
 
-def test_a_keyword_does_not_consult_and_a_failure_stays_on_the_rule() -> None:
-    skipped = interpret_workflow(
+def test_known_keyword_does_not_invoke_classifier() -> None:
+    def refuse(*_args: object) -> object:
+        raise AssertionError("known reply must bypass classifier")
+
+    result = interpret_workflow(
         {"reply": {"text": "Running"}, "tenant_id": "t1", "incident_id": "INC-000001"},
         enabled=True,
-        consult=_refuse,
+        classify=refuse,
     )
-    assert skipped["response"]["intent"] == "unit_running"
-    assert "advisory" not in skipped["response"]
-
-    def broken(tenant_id: str, incident_id: str) -> dict[str, str]:
-        del tenant_id, incident_id
-        raise RuntimeError("runtime unavailable")
-
-    failed = interpret_workflow(
-        {"tenant_id": "t1", "incident_id": "INC-000001", "reply": {"text": ""}},
-        enabled=True,
-        consult=broken,
-    )
-    assert failed["response"]["intent"] == "clarify"
-    assert "advisory" not in failed["response"]
+    assert result["response"]["intent"] == "unit_running"
 
 
 def test_reply_words_follow_the_engagement_policy() -> None:
@@ -125,12 +279,6 @@ def test_advisory_stays_off_unless_agentcore_is_enabled() -> None:
     result = interpret_workflow(
         {"tenant_id": "t1", "incident_id": "INC-000001", "reply": {"text": "hello"}},
         enabled=False,
-        consult=_refuse,
     )
     assert result["response"]["intent"] == "clarify"
     assert "advisory" not in result["response"]
-
-
-def _refuse(tenant_id: str, incident_id: str) -> dict[str, str]:
-    del tenant_id, incident_id
-    raise AssertionError("a keyword match must not consult the model")
