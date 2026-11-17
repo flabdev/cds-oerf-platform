@@ -27,6 +27,39 @@ Dev laptop and GitHub deploys currently pass `-c agentcore:enabled=true` (see [i
 4. Free text may invoke the runtime. The advisory is attached; the rule result stands.
 5. If the runtime is unset, times out, or errors, Interpret continues without the model.
 
+### Free-text driver classification (`task=interpret`, OERF-211)
+
+A free-text driver reply that matches no button or keyword may be offered to the
+runtime with `task=interpret` and `inputs.reply_text` only (the 4,000-character
+inbound cap). The runtime returns a bounded proposal and never a `valid` flag:
+
+```json
+{"status": "proposal", "fallback": false,
+ "proposal": {"category": "answer", "intent": "unit_running", "fields": {}, "confidence": 0.9}}
+```
+
+Anything unusable — a missing or oversized reply, a guardrail block, a schema
+violation, a model error, or a proposed fault code the tenant catalog does not
+know — returns the documented fallback `{"status": "placeholder", "fallback": true}`,
+and Interpret maps it to `clarify`. The proposal is validated by
+`oerf.platform.cadence.interpret.validate_proposal`, which owns the final
+`response.intent` and `response.valid`. The confidence floor is `0.8`
+(`CLASSIFIER_CONFIDENCE_FLOOR`).
+
+The classifier is `oerf/platform/agent/agentcore/classifier.py`. The schema is
+closed (Pydantic, `extra="forbid"`, `Literal` enums, allow-listed fields), the
+prompt marks the reply as untrusted data, and the existing Bedrock Guardrail
+applies. The model call is traced with the allow-listed fields only; the reply
+text, the prompt, and the raw model output are never logged or traced.
+
+Fault codes stay unverified. The runtime drops a proposed code unless the
+tenant's own `FAULTCODE#` catalog (pattern 5) contains it, and the Interpret
+caller fails closed unconditionally because its role has no tenant-table grant
+(OERF-211 does not widen runtime IAM). No seed file or seed run writes
+`FAULTCODE#` rows yet, so E17/E05/E22/E09 cannot be accepted until the
+authoritative per-tenant catalog source and its dev/test provisioning are added.
+There is no global allow-list.
+
 Rollback is a deploy with `agentcore:enabled` false. That removes the runtime from the compute stack. Do not delete `AWS::XRay::TransactionSearchConfig` on a whim: it is account-wide and is created on the data stack when AgentCore is on ([runbook-deploy.md](runbook-deploy.md)).
 
 ## After the first dev deploy (A6)

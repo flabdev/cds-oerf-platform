@@ -1,3 +1,7 @@
+import json
+
+import pytest
+
 from oerf.platform.cadence.interpret import (
     MAX_REPLY_TEXT,
     interpret_workflow,
@@ -82,7 +86,10 @@ def test_no_confidence_floor_or_disabled_classifier_fails_closed() -> None:
         "response"
     ]
     assert accepted["intent"] == "unit_running" and accepted["valid"] is True
-    no_floor = interpret_workflow(workflow, enabled=True, classify=classify)["response"]
+    # An explicit ``None`` floor is still refused outright.
+    no_floor = interpret_workflow(
+        workflow, enabled=True, classify=classify, confidence_floor=None
+    )["response"]
     assert no_floor["category"] == "answer"
     assert no_floor["intent"] == "clarify" and no_floor["valid"] is False
     disabled = interpret_workflow(workflow, enabled=False, classify=classify, confidence_floor=0.8)[
@@ -207,9 +214,35 @@ def test_free_form_text_fails_closed_without_confidence_policy() -> None:
         {"tenant_id": "t1", "incident_id": "INC-000001", "reply": {"text": "door is open"}},
         enabled=True,
         classify=classify,
+        confidence_floor=None,
     )
     assert result["response"]["intent"] == "clarify"
     assert result["response"]["valid"] is False
+
+
+def test_the_documented_confidence_floor_is_point_eight() -> None:
+    """OERF-211 chooses the numeric floor the frozen contract left open."""
+
+    from oerf.platform.cadence import interpret
+
+    assert interpret.CLASSIFIER_CONFIDENCE_FLOOR == 0.8
+
+
+def test_a_proposal_below_the_default_floor_fails_closed() -> None:
+    def classify(*_args: object) -> object:
+        return {"category": "answer", "intent": "unit_running", "fields": {}, "confidence": 0.79}
+
+    workflow = {"tenant_id": "t1", "incident_id": "INC-000001", "reply": {"text": "maybe on"}}
+
+    # No explicit floor: the module default (0.8) applies.
+    below = interpret_workflow(workflow, enabled=True, classify=classify)["response"]
+    assert below["intent"] == "clarify" and below["valid"] is False
+
+    # An explicit lower floor accepts the same proposal.
+    above = interpret_workflow(
+        workflow, enabled=True, classify=classify, confidence_floor=0.75
+    )["response"]
+    assert above["intent"] == "unit_running" and above["valid"] is True
 
 
 def test_known_keyword_does_not_invoke_classifier() -> None:
@@ -222,6 +255,55 @@ def test_known_keyword_does_not_invoke_classifier() -> None:
         classify=refuse,
     )
     assert result["response"]["intent"] == "unit_running"
+
+
+def test_the_runtime_envelope_is_unwrapped_and_a_fallback_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The AgentCore runtime wraps a proposal; the caller unwraps it.
+
+    A documented fallback (or a missing proposal) raises, so the deterministic
+    caller maps the whole call to ``clarify``.
+    """
+
+    from oerf.platform.cadence import interpret
+
+    monkeypatch.setenv("AGENT_RUNTIME_ARN", "arn:aws:bedrock-agentcore:us-east-1:1:runtime/x")
+
+    class _Client:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def invoke_agent_runtime(self, **_kwargs: object) -> dict:
+            return {"response": self._body}
+
+    def _with(body: dict) -> object:
+        monkeypatch.setattr(
+            "boto3.client", lambda _service, **_kwargs: _Client(json.dumps(body).encode())
+        )
+        return interpret._runtime_classifier("t1", "INC-1", "the unit is running", None)
+
+    proposal = _with(
+        {
+            "status": "proposal",
+            "fallback": False,
+            "proposal": {
+                "category": "answer",
+                "intent": "unit_running",
+                "fields": {},
+                "confidence": 0.9,
+            },
+        }
+    )
+    assert proposal["intent"] == "unit_running"
+
+    for body in (
+        {"status": "placeholder", "fallback": True},
+        {"status": "proposal", "fallback": False},
+        {"status": "proposal", "fallback": False, "proposal": "prose"},
+    ):
+        with pytest.raises(ValueError):
+            _with(body)
 
 
 def test_reply_words_follow_the_engagement_policy() -> None:

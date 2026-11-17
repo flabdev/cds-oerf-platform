@@ -39,6 +39,8 @@ _ENVELOPE = ("tenant_id", "incident_id", "task", "inputs", "trace_id")
 _PLACEHOLDER: dict[str, object] = {"status": "placeholder", "fallback": True}
 _PORT = 8080
 _MAX_BODY_BYTES = 64 * 1024
+#: The only task that returns a classifier proposal. Everything else is advisory.
+_INTERPRET_TASK = "interpret"
 
 _client: Any = None
 _incidents: IncidentReader | None = None
@@ -49,12 +51,16 @@ def handle(event: object) -> dict[str, object]:
 
     Anything unrecognized, unavailable, or inconsistent returns the fallback:
     the caller's deterministic path then owns the decision. No error message
-    echoes the body.
+    echoes the body. ``task=interpret`` (OERF-211) is the one other path: it
+    returns the bounded classifier proposal, or the same fallback.
     """
 
     envelope = _envelope(event)
     if envelope is None:
         return dict(_PLACEHOLDER)
+    task = event.get("task") if isinstance(event, dict) else None
+    if task == _INTERPRET_TASK:
+        return _interpret(event)
     try:
         return _advisory(envelope)
     except (IncidentMissing, TenantMismatch):
@@ -78,6 +84,73 @@ def handle(event: object) -> dict[str, object]:
             count=1,
         )
     return dict(_PLACEHOLDER)
+
+
+def _interpret(event: dict[str, object]) -> dict[str, object]:
+    """Return the bounded classifier proposal, or the documented fallback.
+
+    The nested ``proposal`` carries no ``valid`` flag: the Interpret caller
+    validates it and owns ``response.intent`` and ``response.valid``. The reply
+    text is used here and never logged, traced, or echoed.
+    """
+
+    from oerf.platform.agent.agentcore import classifier
+
+    inputs = event.get("inputs")
+    reply_text = inputs.get("reply_text") if isinstance(inputs, dict) else None
+    if not isinstance(reply_text, str) or not reply_text.strip():
+        return dict(_PLACEHOLDER)
+    tenant_id = str(event.get("tenant_id", ""))
+    try:
+        policy = _interpret_policy(tenant_id)
+        agent = classifier.build_agent()
+        proposal = classifier.classify_reply(reply_text, policy=policy, agent=agent)
+    except Exception:  # noqa: BLE001 - a classifier failure is the fallback
+        log(
+            logger,
+            logging.ERROR,
+            f"classifier failed for incident {event.get('incident_id', '')}",
+            tenant_id=tenant_id,
+            incident_id=str(event.get("incident_id", "")),
+            outcome="error",
+            count=1,
+        )
+        return dict(_PLACEHOLDER)
+    if proposal is None:
+        return dict(_PLACEHOLDER)
+    return {"status": "proposal", "fallback": False, "proposal": proposal}
+
+
+def _interpret_policy(tenant_id: str) -> Any:
+    """The tenant's evidence policy, so only a catalog-known code survives.
+
+    Any read or resolution failure degrades to a policy with an empty catalog:
+    a fault-code proposal then fails closed, and a proposal with no code still
+    works. Nothing here raises.
+    """
+
+    from oerf.platform.agent.agentcore.decision import policy_for
+    from oerf.platform.evidence.policy import FALLBACK_MIN_CONFIDENCE, EvidencePolicy
+
+    _, client = _readers()
+    tenant_table = os.environ.get("TENANT_TABLE_NAME", "")
+    if not tenant_table or client is None:
+        # No catalog to read: the policy knows no code, so a code proposal
+        # fails closed rather than advancing on an unverified extraction.
+        return EvidencePolicy(tenant_id=tenant_id, min_confidence=FALLBACK_MIN_CONFIDENCE)
+    try:
+        tenant_reader, config_reader = dynamo_readers(client, tenant_table)
+        return policy_for(tenant_id, tenant=tenant_reader, config=config_reader)
+    except Exception:  # noqa: BLE001 - an unreadable catalog is an empty catalog
+        log(
+            logger,
+            logging.WARNING,
+            f"tenant {tenant_id} evidence policy unreadable",
+            tenant_id=tenant_id,
+            outcome="unavailable",
+            count=1,
+        )
+        return EvidencePolicy(tenant_id=tenant_id, min_confidence=FALLBACK_MIN_CONFIDENCE)
 
 
 def _advisory(envelope: dict[str, str]) -> dict[str, object]:

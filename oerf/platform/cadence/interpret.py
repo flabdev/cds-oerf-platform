@@ -10,8 +10,10 @@ from typing import Any, Protocol
 
 Reply = tuple[str, bool, dict[str, str]]
 MAX_REPLY_TEXT = 4_000
-# OERF-211 must define this policy before a model proposal can be accepted.
-CLASSIFIER_CONFIDENCE_FLOOR: float | None = None
+#: The numeric floor OERF-211 chose, matching the tenant evidence default
+#: ``evidence.min_confidence``. A proposal below it is unusable and maps to
+#: ``clarify``. ``None`` still fails closed, so a caller can refuse outright.
+CLASSIFIER_CONFIDENCE_FLOOR: float | None = 0.8
 CATEGORIES = frozenset({"answer", "decline", "help", "concern", "call-me", "unrelated"})
 INTENTS = frozenset({"unit_running", "unit_stopped", "unknown", "decline", "call_me", "clarify"})
 _PROPOSAL_KEYS = frozenset({"category", "intent", "fields", "confidence"})
@@ -286,4 +288,11 @@ def _runtime_classifier(
         raw = raw.decode("utf-8")
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError("classifier returned no result")
-    return json.loads(raw)
+    result = json.loads(raw)
+    if not isinstance(result, dict) or result.get("fallback"):
+        # The documented fallback (missing, malformed, blocked, or unusable).
+        raise ValueError("classifier returned no usable proposal")
+    proposal = result.get("proposal")
+    if not isinstance(proposal, dict):
+        raise ValueError("classifier returned no proposal")
+    return proposal

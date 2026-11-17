@@ -159,3 +159,107 @@ def test_a_code_outside_the_tenant_catalog_is_flagged_not_trusted(
 
     assert any("not in the tenant catalog" in note for note in advisory["notes"])
     assert advisory["confidence"] <= 0.49
+
+
+_INTERPRET = {
+    "tenant_id": "t1",
+    "incident_id": "INC-1",
+    "task": "interpret",
+    "inputs": {"reply_text": "the unit is running"},
+    "trace_id": "trace-1",
+}
+
+
+def test_interpret_without_a_reply_text_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    _serve(monkeypatch, _INCIDENT, INCIDENT_TABLE_NAME="incident")
+
+    for inputs in ({}, {"reply_text": ""}, {"reply_text": 42}, {"reply_text": None}):
+        result = app.handle({**_INTERPRET, "inputs": inputs})
+        assert result == {"status": "placeholder", "fallback": True}
+
+
+def test_interpret_returns_the_bare_proposal_and_never_the_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The proposal has no ``valid`` flag; Interpret owns that decision."""
+
+    from oerf.platform.agent.agentcore import classifier
+
+    class _Agent:
+        def __call__(self, _prompt: str, *, structured_output_model: object) -> object:
+            return type(
+                "_Result",
+                (),
+                {
+                    "structured_output": structured_output_model(
+                        category="answer",
+                        intent="unit_running",
+                        fields={},
+                        confidence=0.9,
+                    ),
+                    "metrics": {"usage": {"inputTokens": 3, "outputTokens": 4}},
+                },
+            )()
+
+    _serve(monkeypatch, _INCIDENT, client=_Dynamo([]), INCIDENT_TABLE_NAME="incident")
+    monkeypatch.setenv("TENANT_TABLE_NAME", "tenant")
+    monkeypatch.setattr(classifier, "build_agent", lambda **_kwargs: _Agent())
+
+    result = app.handle(_INTERPRET)
+
+    assert result["status"] == "proposal"
+    assert result["fallback"] is False
+    assert result["proposal"] == {
+        "category": "answer",
+        "intent": "unit_running",
+        "fields": {},
+        "confidence": 0.9,
+    }
+    assert "the unit is running" not in str(result)
+
+
+def test_interpret_falls_back_when_the_classifier_returns_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from oerf.platform.agent.agentcore import classifier
+
+    _serve(monkeypatch, _INCIDENT, client=_Dynamo([]), INCIDENT_TABLE_NAME="incident")
+    monkeypatch.setenv("TENANT_TABLE_NAME", "tenant")
+    monkeypatch.setattr(classifier, "build_agent", lambda **_kwargs: None)
+
+    assert app.handle(_INTERPRET) == {"status": "placeholder", "fallback": True}
+
+
+def test_interpret_drops_a_fault_code_the_tenant_catalog_lacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The tenant catalog knows E99; the model's E17 must not survive."""
+
+    from oerf.platform.agent.agentcore import classifier
+
+    class _Agent:
+        def __call__(self, _prompt: str, *, structured_output_model: object) -> object:
+            return type(
+                "_Result",
+                (),
+                {
+                    "structured_output": structured_output_model(
+                        category="answer",
+                        intent="unit_stopped",
+                        fields={"fault_code": "E17"},
+                        confidence=0.9,
+                    ),
+                    "metrics": {},
+                },
+            )()
+
+    _serve(
+        monkeypatch,
+        _INCIDENT,
+        client=_Dynamo(["E99"]),
+        INCIDENT_TABLE_NAME="incident",
+        TENANT_TABLE_NAME="tenant",
+    )
+    monkeypatch.setattr(classifier, "build_agent", lambda **_kwargs: _Agent())
+
+    assert app.handle(_INTERPRET) == {"status": "placeholder", "fallback": True}
