@@ -4,6 +4,10 @@ Interpret may ask Bedrock AgentCore for an advisory on free-text driver replies.
 
 This page is the operator runbook (sheet G2). Image build and IAM are OERF-312. Live invocation smoke is C11 and waits on the first **dev** deploy (A6).
 
+## Adopted approach note
+
+[AgentCore implementation approach](agentcore-implementation-approach.md) is retained as a planning reference under OERF-215. Its source is preserved verbatim with provenance and a reconciliation note: it predates the accepted OERF-209/ADR-042 free-text contract and is not authoritative where it conflicts with current behavior. Current acceptance status and operator guidance remain on this page and in [ADR-042](adr/ADR-042-driver-reply-classification.md).
+
 ## What deploys
 
 Context `agentcore:enabled` defaults to **false** so `cdk synth` does not build an image. When it is true:
