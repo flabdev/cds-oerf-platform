@@ -1,6 +1,14 @@
 # OERF interface contract
 
-**FROZEN v1.52** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.56** — authored 2026-10-18 by OERF-304 (Ananda).
+
+- v1.56 (2026-11-18, OERF-214) Documents the OERF-214 operator checklist and credential-free synthetic acceptance rehearsal for the existing `agentcore:enabled`/`AGENTCORE_ENABLED` gate, including the expected validated intents and ASL terminal paths. No live dev runtime, model, or guardrail result is claimed: this session had no usable AWS identity, and authoritative tenant `FAULTCODE#` catalog provisioning remains open. The documented runtime/model metadata and prompt/schema version fields must be measured from a future authorized dev invocation before live acceptance can close.
+
+- v1.55 (2026-11-18, OERF-212/213) The validated-intent route is covered per row for all 42 privacy-safe corpus entries: `answer`/`decline` acknowledge and consume (`AcknowledgeReply` → `Answered`), `call-me` routes to `HandleCallback` without a consumption acknowledgment, and `help`/`concern`/`unrelated` clarify through `ResetLadder` without consuming the response. `scripts.eval_driver_replies` still reports the historical exact `map_reply` baseline as 0/42 and now adds a separately labeled deterministic offline fixture evaluation with per-row predicted corpus label, proposed fields, validated ASL intent, validity, route, and consumption outcome; the offline fixture score is an evaluator/route contract check, never a model or Bedrock score, and its synthetic catalog (E17, E05, E22, E09) is not tenant data. Rejected, malformed, low-confidence, timeout, exception, and missing-catalog proposals fail closed to `clarify`.
+
+- v1.54 (2026-11-17, OERF-211) Chooses the numeric confidence floor the v1.53 contract left open: `CLASSIFIER_CONFIDENCE_FLOOR` is `0.8`, the same default as the tenant `evidence.min_confidence`, and a proposal below it is unusable and maps to `clarify`. The optional `task=interpret` runtime path is implemented in `oerf/platform/agent/agentcore/classifier.py` with a closed Pydantic schema (`extra="forbid"`, closed `category`/`intent` enums, allow-listed `fields`, `confidence` in `[0, 1]`), the existing Bedrock Guardrail, and the existing sanitized trace; it returns a bare proposal and never a `valid` flag. A proposed `fault_code` is kept only when the tenant's own `FAULTCODE#` catalog (pattern 5) contains it, so a missing or unreadable catalog drops the code. No seed file or seed run writes `FAULTCODE#` rows yet, so E17/E05/E22/E09 stay unverified and fail closed; there is no global allow-list.
+
+- v1.53 (2026-11-17, OERF-209) Defines the bounded free-text driver-reply proposal contract: corpus `expected_intent` is `response.category`, ASL routing is `response.intent`, and deterministic Interpret rules own final `intent`/`valid`. Free text is capped at 4,000 characters, is not newly persisted or logged/traced, and classification failures fail closed to `clarify`/`ResetLadder`. Only inbound resumes task tokens; buttons and known keywords bypass AgentCore.
 
 - v1.52 (2026-11-15) An unclear driver or facility reply reopens the engagement for the next cadence rung: inbound still marks the row `ANSWERED`, and `EngagementSendViaRouter` returns it to `WAITING` only when `workflow.response.intent` is `clarify`. A failed `oerf-engage-party` child runs `RecordFailure` and `FailureRoute` default `Escalate`, not `Cancel`. `Escalate` may move `DIAGNOSING` to `ESCALATED` and records `workflow.escalation.notify` with `supervisor_escalation` facts from context and ship time when assessment has not run; no step sends that notify payload yet.
 
@@ -93,6 +101,7 @@ Change process: a pull request, plus sign-off from the owner of each section the
 | OERF-205 | | | pending — name to be filled by Ananda |
 | OERF-206 | | agent behaviour | pending — name to be filled by Ananda |
 | OERF-207 | | vision behaviour | pending — name to be filled by Ananda |
+| OERF-209 | TBD | inbound, agent behaviour | pending section-owner sign-off |
 | OERF-208 | Mudita | action handler, incident key, action route | pending |
 | OERF-117 | Mudita | report generator | pending |
 | OERF-301 | Ananda | env names (acked), `SendTaskSuccess` move, synth | pending |
@@ -318,6 +327,51 @@ Pre-correlation WhatsApp normalization is `NormalizedMessage` in [oerf/platform/
 ## 5. Inbound, JOIN, and correlation
 
 Owner: inbound handler (`oerf-inbound`). Library pieces that already exist: `oerf.platform.inbound.normalize`, `dedupe`, `dynamo`, and `oerf.platform.inbound.handler`.
+
+### Phase 1 free-text driver reply contract (OERF-209)
+
+A correlated inbound message resumes the existing engagement task token through the inbound handler. Inbound remains the only task-token resumer; it does not call AgentCore. Known buttons and policy-scoped keywords are mapped by deterministic Interpret rules and bypass AgentCore. Only an otherwise-unmatched free-text driver reply may be offered to the optional `task=interpret` classifier after the task token has resumed.
+
+The classifier's proposal has exactly these keys:
+
+```json
+{
+  "category": "answer",
+  "intent": "unit_running",
+  "fields": {},
+  "confidence": 0.91
+}
+```
+
+- `category` is the corpus `expected_intent` / FR-M3 evaluation label: `answer`, `decline`, `help`, `concern`, `call-me`, or `unrelated`. It is not the dataset's descriptive slice label (such as `clean_code`, `hinglish`, or `driving_safety`); that descriptive label stays in the evaluation corpus only.
+- Proposed `intent` must be one of the ASL routing values: `unit_running`, `unit_stopped`, `unknown`, `decline`, `call_me`, or `clarify`. The corpus label `answer` is never an ASL route. These values are proposals only; deterministic Interpret rules set the final `intent` and `valid`.
+- `fields` is an object with no keys other than `fault_code` (string) and `setpoint_temp_c` (number). Extracted fault codes remain unverified proposals: `fault_code` is accepted into the final response only after the existing tenant `EvidencePolicy.knows_fault_code` catalog check succeeds. A missing or unreadable tenant catalog, including for E17/E05/E22/E09, fails closed; no checked-in authoritative source for those codes is established by this contract. Do not add a global allow-list or bypass the tenant policy.
+- `confidence` is a finite number in the inclusive range [0, 1]. It is advisory metadata, not authority to route or validate. A result below the configured deterministic acceptance floor, or with no usable floor, is unusable and maps to clarification; OERF-211 must document the floor it implements.
+
+The workflow's `$.response` contract is `{category, intent, valid, fields, confidence, evidence_refs}`. `category` is the validated corpus label, distinct from the ASL `intent`. `intent` and `valid` are set by deterministic rules, never copied as authoritative model decisions. `fields` contains only allow-listed, policy-validated values; `evidence_refs` is `[]` for text-only Phase 1. The mapping and outcome are:
+
+| Corpus `expected_intent` / `response.category` | Final ASL `response.intent` | Deterministic result | Existing engagement outcome |
+| --- | --- | --- | --- |
+| `answer` | `unit_running`, `unit_stopped`, or `unknown` (use `unknown` when state is not clearly supported) | `valid: true` only for a schema- and policy-valid answer; fault-code fields must pass tenant catalog policy | `AcknowledgeType?` → `AcknowledgeReply` → `Answered` |
+| `decline` | `decline` | `valid: true` | Existing valid-answer acknowledgment → `Answered` |
+| `call-me` | `call_me` | Valid callback request | Existing `HandleCallback` |
+| `help`, `concern`, `unrelated` | `clarify` | `valid: false` | Existing `ResetLadder`; do not consume the reply |
+| Unmatched, malformed, out-of-range/low-confidence, unavailable, guardrail-blocked, or timed out | `clarify` | `valid: false` | Existing `ResetLadder`; do not consume the reply |
+
+A valid unit-state free-text answer may be represented as:
+
+```json
+{
+  "category": "answer",
+  "intent": "unit_running",
+  "valid": true,
+  "fields": {"setpoint_temp_c": 5.0},
+  "confidence": 0.91,
+  "evidence_refs": []
+}
+```
+
+This example assumes the deterministic rules validate the state and numeric field. A proposed fault code absent from the tenant catalog is not copied into validated `fields` and cannot make the answer valid. The final response is workflow data, not a new durable reply store. The original reply remains subject to the existing bounded inbound/task-token flow; do not add persistence. Never write reply text, prompts, raw model output, or model proposals to logs or traces. The existing inbound cap is 4,000 characters; any absent, malformed, low-confidence, blocked, unavailable, or timed-out classifier result fails closed to `clarify` and `ResetLadder`. No media interpretation, facility/operations classification, generated chat, or new ASL states are introduced.
 
 Order for a provider message:
 
@@ -609,6 +663,10 @@ Context `agentcore:enabled` defaults to false so synth does not build an image. 
 
 The placeholder listens on port 8080. `POST /invocations` reads a JSON object with `tenant_id`, `incident_id`, `task`, `inputs`, and `trace_id`. It returns `{"status": "placeholder", "fallback": true}` and does not echo those fields. `GET /ping` returns `{"status": "Healthy"}`. The docstring on `handle` is `placeholder, behaviour owned by OERF-206`.
 
+For Phase 1 free-text driver classification (`task=interpret`), the only reply content supplied in `inputs` is `reply_text`, capped at 4,000 characters by inbound. Do not add reply text to the invocation envelope outside `inputs.reply_text`, or load it from a message/media store. The runtime proposes strict JSON with exactly `category`, `intent`, `fields`, and `confidence`; `category` is the corpus `expected_intent` label, and `intent` is only a proposal from the closed ASL intent enum. The deterministic Interpret caller validates the schema, category-to-intent mapping, confidence, allow-listed fields, and tenant policy, and sets the final `response.category`, `response.intent`, `response.valid`, `response.fields`, `response.confidence`, and empty `response.evidence_refs`. A missing, malformed, blocked, low-confidence, unavailable, or timed-out proposal is unusable and maps to `clarify`/`ResetLadder`. The numerical confidence floor is `0.8` (`CLASSIFIER_CONFIDENCE_FLOOR`, OERF-211), the same default as the tenant `evidence.min_confidence`. The existing advisory task remains separate and backward-compatible; this contract does not authorize runtime side effects.
+
+The `task=interpret` proposal is produced by `oerf/platform/agent/agentcore/classifier.py`. The runtime schema is closed: `category` and `intent` are `Literal` enums, `fields` allows only `fault_code` and `setpoint_temp_c`, `confidence` is a float in `[0, 1]`, and an unknown key or a non-finite number is rejected. The prompt marks the reply as untrusted data and the existing Bedrock Guardrail applies. The runtime returns `{"status": "proposal", "fallback": false, "proposal": {...}}` or the documented fallback; the proposal has no `valid` key. A `fault_code` field is kept only when the tenant's own `FAULTCODE#` catalog (pattern 5) contains it; the runtime reads that catalog with the read-only tenant-table grant it already holds. No `FAULTCODE#` row exists in any seed file or seed run yet, so E17/E05/E22/E09 cannot be verified and a code proposal fails closed. The Interpret caller keeps the same gate: its `knows_fault_code` fails closed unconditionally (`_runtime_knows_fault_code`), because the Interpret role has no tenant-table grant and OERF-211 must not widen runtime IAM. So a code never becomes valid at the caller either, and there is no global allow-list. The authoritative per-tenant catalog source and its dev/test provisioning remain open work; until they exist, E17/E05/E22/E09 stay unverified.
+
 The runtime idle timeout is 60 seconds and the max lifetime is 5 minutes. The network mode is public. The execution role may pull the image, write its log group, call X-Ray, invoke Nova Lite, apply the guardrail, and read the incident and tenant tables. It cannot write those tables or call Step Functions, WhatsApp, SMS, SES, or SNS.
 
 Section 8 does not name a caller role for OERF-206. The stack adds placeholder role `oerf-agent-caller`, trusted by `lambda.amazonaws.com`, with `bedrock-agentcore:InvokeAgentRuntime` on the runtime ARN only. OERF-206 replaces that role when it names the real caller.
@@ -700,6 +758,7 @@ Mudita's other ticket numbers in this table are ownership for coordination. They
 | 9 | Lifecycle shape uses source `oerf.incident`, detail-type `IncidentStateChanged`, and the detail in section 4.2. The incident-table stream drives WebSocket broadcasts; no EventBridge consumer or lifecycle rule is registered. | Ananda, 308 |
 | 10 | Page 20 sections 3–4 need no WhatsApp template. The outside list is empty (section 11). | Ananda, WhatsApp infra |
 | 11 | OERF-201–207 owner names stay blank until Ananda fills them. | Ananda |
+| 12 | Free-text driver interpretation uses an agent-proposed closed vocabulary; deterministic validation owns routing and validity; inbound alone resumes task tokens (ADR-042). | OERF-209 |
 
 ## 14. Open items
 
