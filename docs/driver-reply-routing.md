@@ -58,14 +58,41 @@ answer intents and clarify.
 | DR-041 | driving_safety (`help`) | clarify | ResetLadder | not consumed |
 | DR-042 | driving_safety (`help`) | clarify | ResetLadder | not consumed |
 
+
+## Reproducible evaluation
+
+Run the credential-free report from the repository root:
+
+```bash
+python -m scripts.eval_driver_replies
+python -m scripts.eval_driver_replies --json
+```
+
+The report retains the historical exact `map_reply` baseline as **0/42** and
+separately reports the deterministic offline fixture evaluation. The fixture
+mirrors the corpus labels/fields; its perfect result validates evaluator and
+routing wiring only, **not a model or Bedrock score**. Per-row output includes
+predicted corpus label, proposed fields, validated ASL intent, validity,
+expected/actual route, and expected/actual consumption outcome. Breakdowns are
+available by descriptive corpus category, ASL route, and final outcome.
+
+The offline evaluator exercises the actual `interpret_workflow` validation
+boundary. Its accepted corpus proposals use only a synthetic fixture catalog
+(E17, E05, E22, E09), never an authoritative tenant allow-list. Use the test
+suite to exercise rejected, malformed, low-confidence, timeout, exception, and
+missing-catalog paths. Those paths clarify and do not consume the response.
+
 ## Fail-closed catalog condition
 
 At present there is no authoritative per-tenant catalog provisioned for these
-codes. Accordingly, any answer proposal containing a fault code (DR-001–DR-011)
-currently validates as `clarify` and routes through `ResetLadder`, not
-`AcknowledgeReply` / `Answered`. `tests/unit/evals/test_driver_reply_routing.py`
-checks both the positive synthetic-catalog paths above and these missing-catalog
-failure paths. Never treat the synthetic fixture as a production allow-list.
+codes. Accordingly, in production any answer proposal containing a fault code
+(DR-001–DR-011) validates as `clarify` and routes through `ResetLadder`, not
+`AcknowledgeReply` / `Answered`. The offline report's 25 consumed rows assume the
+synthetic fixture catalog above; with no catalog those code rows instead clarify,
+and `scripts.eval_driver_replies` run with a missing catalog marks them
+fail-closed. `tests/unit/evals/test_driver_reply_routing.py` checks both the
+positive synthetic-catalog paths above and these missing-catalog failure paths.
+Never treat the synthetic fixture as a production allow-list.
 
 Classifier errors, malformed or low-confidence proposals, and any unmatched
 intent follow the same safe clarification route. ASL routing receives only the
