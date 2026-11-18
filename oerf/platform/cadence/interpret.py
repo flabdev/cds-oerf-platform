@@ -8,12 +8,22 @@ import os
 from collections.abc import Callable, Mapping
 from typing import Any, Protocol
 
+from botocore.config import Config
+
+from oerf.platform.evidence.policy import EvidencePolicy
+
 Reply = tuple[str, bool, dict[str, str]]
 MAX_REPLY_TEXT = 4_000
 #: The numeric floor OERF-211 chose, matching the tenant evidence default
 #: ``evidence.min_confidence``. A proposal below it is unusable and maps to
 #: ``clarify``. ``None`` still fails closed, so a caller can refuse outright.
 CLASSIFIER_CONFIDENCE_FLOOR: float | None = 0.8
+#: Worst case for the AgentCore hop is ``2 * (1 + 10) = 22`` seconds, under the
+#: 30-second Interpret Lambda. Values outside these bounds fall back to the
+#: default so an environment override cannot outlive that budget.
+_AGENTCORE_CONNECT_TIMEOUT = 1
+_AGENTCORE_READ_TIMEOUT = 10
+_AGENTCORE_MAX_ATTEMPTS = 2
 CATEGORIES = frozenset({"answer", "decline", "help", "concern", "call-me", "unrelated"})
 INTENTS = frozenset({"unit_running", "unit_stopped", "unknown", "decline", "call_me", "clarify"})
 _PROPOSAL_KEYS = frozenset({"category", "intent", "fields", "confidence"})
@@ -63,11 +73,24 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     if not isinstance(workflow, dict):
         raise ValueError("interpret needs a workflow")
     enabled = os.environ.get("AGENTCORE_ENABLED", "false").strip().lower() == "true"
+    tenant_id = workflow.get("tenant_id")
+    reply = workflow.get("reply")
+    text = reply.get("text") if isinstance(reply, dict) else None
+    policy_id = workflow.get("policy_id")
+    policy_id = policy_id if isinstance(policy_id, str) else None
+    # Buttons and known words never call the model, so they never read the catalog.
+    needs_policy = (
+        enabled
+        and isinstance(tenant_id, str)
+        and map_reply(text if isinstance(text, str) else None, policy_id) is None
+    )
+    policy = _tenant_policy(tenant_id) if needs_policy else None
     return interpret_workflow(
         workflow,
         enabled=enabled,
         classify=_runtime_classifier,
-        knows_fault_code=_runtime_knows_fault_code,
+        confidence_floor=_floor_from_policy(policy),
+        knows_fault_code=lambda checked, code: _policy_knows(policy, checked, code),
     )
 
 
@@ -248,11 +271,94 @@ def _clarification(category: str | None = None, confidence: float | None = None)
     return response
 
 
-def _runtime_knows_fault_code(tenant_id: str, code: str) -> bool:
-    """Fail closed until the authoritative tenant catalog source is established."""
+def _floor_from_policy(policy: EvidencePolicy | None) -> float | None:
+    """The tenant ``evidence.min_confidence``, or ``None`` when it cannot be read.
 
-    del tenant_id, code
-    return False
+    ``None`` fails closed in ``validate_proposal``. A fallback policy is not a
+    tenant choice, so it does not widen acceptance down to the packaged 0.8.
+    """
+
+    if policy is None or policy.source != "tenant_config":
+        return None
+    value = policy.min_confidence
+    if not _finite_number(value) or not 0 <= float(value) <= 1:
+        return None
+    return float(value)
+
+
+def _policy_knows(policy: EvidencePolicy | None, tenant_id: str, code: str) -> bool:
+    """True only when this invocation's tenant catalog contains ``code``.
+
+    A missing policy, a different tenant, or a reader error is unverified.
+    """
+
+    if policy is None or policy.tenant_id != tenant_id:
+        return False
+    try:
+        return bool(policy.knows_fault_code(code))
+    except Exception:  # noqa: BLE001 - an unreadable catalog fails closed
+        return False
+
+
+def _tenant_policy(tenant_id: str) -> EvidencePolicy | None:
+    """Read one tenant's evidence policy, or ``None`` when that read cannot be trusted."""
+
+    table = os.environ.get("TENANT_TABLE_NAME", "").strip()
+    if not table or not tenant_id.strip():
+        return None
+    try:
+        import boto3
+
+        from oerf.platform.evidence.policy import dynamo_readers, resolve_policy
+
+        tenant_reader, config_reader = dynamo_readers(
+            boto3.client("dynamodb", config=tenant_client_config()), table
+        )
+        return resolve_policy(tenant_id, tenant=tenant_reader, config=config_reader)
+    except Exception:  # noqa: BLE001 - an unreadable tenant config fails closed
+        return None
+
+
+def tenant_client_config() -> Config:
+    """One short read. Added to the AgentCore budget, the worst case stays under 30 seconds."""
+
+    return Config(
+        connect_timeout=1,
+        read_timeout=2,
+        retries={"max_attempts": 1, "mode": "standard"},
+    )
+
+
+def agentcore_client_config() -> Config:
+    """Bound ``InvokeAgentRuntime`` so a hang returns before the Lambda is killed."""
+
+    return Config(
+        connect_timeout=_bounded_int(
+            "AGENTCORE_CONNECT_TIMEOUT", _AGENTCORE_CONNECT_TIMEOUT, low=1, high=2
+        ),
+        read_timeout=_bounded_int(
+            "AGENTCORE_READ_TIMEOUT", _AGENTCORE_READ_TIMEOUT, low=1, high=10
+        ),
+        retries={
+            "max_attempts": _bounded_int(
+                "AGENTCORE_MAX_ATTEMPTS", _AGENTCORE_MAX_ATTEMPTS, low=1, high=2
+            ),
+            "mode": "standard",
+        },
+    )
+
+
+def _bounded_int(name: str, default: int, *, low: int, high: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    if value < low or value > high:
+        return default
+    return value
 
 
 def _runtime_classifier(
@@ -275,7 +381,9 @@ def _runtime_classifier(
     }
     prefix = os.environ.get("AGENT_SESSION_PREFIX", "oerf-interpret").strip() or "oerf-interpret"
     session = f"{prefix}-{incident_id}".ljust(33, "0")
-    response = boto3.client("bedrock-agentcore").invoke_agent_runtime(
+    response = boto3.client(
+        "bedrock-agentcore", config=agentcore_client_config()
+    ).invoke_agent_runtime(
         agentRuntimeArn=arn,
         runtimeSessionId=session[:100],
         payload=json.dumps(payload).encode("utf-8"),

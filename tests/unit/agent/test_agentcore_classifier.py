@@ -219,3 +219,22 @@ def test_the_categories_and_intents_are_the_frozen_vocabulary() -> None:
         "clarify",
     }
     assert set(classifier.FIELD_KEYS) == {"fault_code", "setpoint_temp_c"}
+
+
+def test_the_bedrock_client_is_bounded_to_one_short_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = classifier.bedrock_client_config()
+    assert config.connect_timeout == 1
+    assert config.read_timeout == 6
+    assert config.retries["max_attempts"] == 1
+    assert config.connect_timeout + config.read_timeout < 10
+
+    monkeypatch.setenv("CLASSIFIER_READ_TIMEOUT", "60")
+    monkeypatch.setenv("CLASSIFIER_MAX_ATTEMPTS", "5")
+    bounded = classifier.bedrock_client_config()
+    assert bounded.read_timeout == 6
+    assert bounded.retries["max_attempts"] == 1
+    kwargs = classifier.bedrock_model_kwargs()
+    assert kwargs["boto_client_config"] is not None
+    assert kwargs["max_tokens"] == classifier.MAX_TOKENS

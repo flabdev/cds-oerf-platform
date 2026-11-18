@@ -191,7 +191,14 @@ EXPECTED_FUNCTIONS = {
     },
     "oerf-engage-interpret": {
         "handler": "oerf.platform.cadence.interpret.handler",
-        "env": {"LOG_LEVEL", "AGENTCORE_ENABLED"},
+        "env": {
+            "LOG_LEVEL",
+            "AGENTCORE_ENABLED",
+            "TENANT_TABLE_NAME",
+            "AGENTCORE_CONNECT_TIMEOUT",
+            "AGENTCORE_READ_TIMEOUT",
+            "AGENTCORE_MAX_ATTEMPTS",
+        },
     },
     "oerf-engage-lifecycle": {
         "handler": "oerf.platform.cadence.engagement_lifecycle.handler",
@@ -460,9 +467,9 @@ def test_step_roles_have_only_the_handler_actions(template: Template) -> None:
 
 @pytest.mark.security
 def test_engagement_adapters_cannot_send_or_resume(template: Template) -> None:
-    """Cadence and interpret hold no table, no provider send, and no task token."""
+    """Cadence holds no table. Interpret may only read the tenant table."""
 
-    for name in ("oerf-engage-cadence", "oerf-engage-interpret", "oerf-engage-lifecycle"):
+    for name in ("oerf-engage-cadence", "oerf-engage-lifecycle"):
         actions = role_actions(template, name)
         assert not any(action.startswith("dynamodb:") for action in actions), name
         assert "states:SendTaskSuccess" not in actions
@@ -470,6 +477,27 @@ def test_engagement_adapters_cannot_send_or_resume(template: Template) -> None:
         assert "sns:Publish" not in actions
         assert "ses:SendEmail" not in actions
         assert "lambda:InvokeFunction" not in actions
+    interpret = role_actions(template, "oerf-engage-interpret")
+    reads = {action for action in interpret if action.startswith("dynamodb:")}
+    assert reads
+    assert reads <= {
+        "dynamodb:BatchGetItem",
+        "dynamodb:ConditionCheckItem",
+        "dynamodb:DescribeTable",
+        "dynamodb:GetItem",
+        "dynamodb:GetRecords",
+        "dynamodb:GetShardIterator",
+        "dynamodb:Query",
+        "dynamodb:Scan",
+    }
+    assert "dynamodb:PutItem" not in interpret
+    assert "dynamodb:UpdateItem" not in interpret
+    assert "dynamodb:DeleteItem" not in interpret
+    assert "states:SendTaskSuccess" not in interpret
+    assert "social-messaging:SendWhatsAppMessage" not in interpret
+    assert "sns:Publish" not in interpret
+    assert "ses:SendEmail" not in interpret
+    assert "lambda:InvokeFunction" not in interpret
 
 
 @pytest.mark.security
@@ -1379,6 +1407,9 @@ def test_agentcore_flag_scopes_the_runtime_and_the_caller() -> None:
     assert variables["BEDROCK_MODEL_ID"] == "amazon.nova-lite-v1:0"
     assert variables["GUARDRAIL_ID"]["Fn::GetAtt"][1] == "GuardrailId"
     assert variables["GUARDRAIL_VERSION"]["Fn::GetAtt"][1] == "Version"
+    assert variables["CLASSIFIER_CONNECT_TIMEOUT"] == "1"
+    assert variables["CLASSIFIER_READ_TIMEOUT"] == "6"
+    assert variables["CLASSIFIER_MAX_ATTEMPTS"] == "1"
 
     assert enabled.find_resources("AWS::ECR::Repository") == {}
 
