@@ -60,12 +60,39 @@ caller fails closed unconditionally because its role has no tenant-table grant
 authoritative per-tenant catalog source and its dev/test provisioning are added.
 There is no global allow-list.
 
-Rollback is a deploy with `agentcore:enabled` false. That removes the runtime from the compute stack. Do not delete `AWS::XRay::TransactionSearchConfig` on a whim: it is account-wide and is created on the data stack when AgentCore is on ([runbook-deploy.md](runbook-deploy.md)).
+## OERF-214 dev acceptance and operator checklist
 
-## After the first dev deploy (A6)
+### Configuration and enablement
 
-1. Confirm `OerfComputeStack-dev` is `*_COMPLETE` and output `AgentRuntimeArn` is set.
-2. Synth with `-c stage=dev -c agentcore:enabled=true` must stay green in CI (already a required job).
-3. A live free-text reply smoke (C11) is not claimed here.
+The supported deployment switch is CDK context `agentcore:enabled`; default is `false`. The compute stack sets `AGENTCORE_ENABLED=false` and does not set `AGENT_RUNTIME_ARN` when disabled. When enabled, it sets `AGENTCORE_ENABLED=true`, wires the `AgentRuntimeArn` stack output to `AGENT_RUNTIME_ARN`, and grants the Interpret caller `bedrock-agentcore:InvokeAgentRuntime` only on that runtime ARN. No new CDK or IAM permissions are needed for OERF-214. Check these behaviors in `infra/stacks/compute_stack.py` before changing deployment wiring.
 
-Model enablement is [bedrock-access.md](bedrock-access.md).
+Deploy/inspect dev using the existing operator procedures in [infra/bootstrap/README.md](../infra/bootstrap/README.md) and [runbook-deploy.md](runbook-deploy.md). Before a real model rehearsal, confirm `OerfComputeStack-dev` is `*_COMPLETE`, its `AgentRuntimeArn` output is present, and the deployed Interpret configuration has `AGENTCORE_ENABLED=true` plus that ARN. Do not print or paste the ARN into a ticket/report. CI's credential-free enabled synth is `cdk synth --lookups false --quiet -c account=000000000000 -c stage=dev -c agentcore:enabled=true`; the default/off synth must remain deterministic and must not build the runtime image.
+
+Known buttons and policy-scoped keywords are resolved before the optional classifier and must remain deterministic with AgentCore on or off. With the flag disabled, a missing ARN, or an invocation error/timeout, unmatched free text maps to invalid `clarify` and the existing `ResetLadder`; it is not consumed. The existing exact-match button/keyword mapping remains available. Do not turn an offline fake score into a Bedrock/model score.
+
+### Credential-free acceptance rehearsal (2026-11-18)
+
+This rehearsal used synthetic proposals through the production `interpret_workflow` validation boundary. It made no AWS calls, used no live model, and contains no driver reply text or PII. The table records expected corpus category, validated intent, validity, and terminal ASL route:
+
+| Synthetic case | Expected category | Validated intent | Valid | Terminal path |
+| --- | --- | --- | --- | --- |
+| Running status | `answer` | `unit_running` | yes | `AcknowledgeReply` → `Answered` |
+| Stopped status | `answer` | `unit_stopped` | yes | `AcknowledgeReply` → `Answered` |
+| Unknown status | `answer` | `unknown` | yes | `AcknowledgeReply` → `Answered` |
+| Decline | `decline` | `decline` | yes | `AcknowledgeReply` → `Answered` |
+| Callback request | `call-me` | `call_me` | yes | `HandleCallback` (not consumed as an answer) |
+| Help request | `help` | `clarify` | no | `ResetLadder` (not consumed) |
+| Safety concern | `concern` | `clarify` | no | `ResetLadder` (not consumed) |
+| Unrelated message | `unrelated` | `clarify` | no | `ResetLadder` (not consumed) |
+| Ambiguous / below confidence floor | `answer` proposal rejected | `clarify` | no | `ResetLadder` (not consumed) |
+| Runtime unavailable / exception | no usable proposal | `clarify` | no | `ResetLadder` (not consumed) |
+
+The synthetic table validates deterministic mapping and route wiring, not model quality. The separate 42-row offline evaluator is also a fixture/evaluator contract check only. Fault-code answers are **not** accepted by this rehearsal: there is no authoritative tenant `FAULTCODE#` catalog or dev seed for E17/E05/E22/E09, and such proposals fail closed. Do not report code-bearing answer rows as passing until that prerequisite is installed and tested.
+
+No live dev invocation was performed for this record: the session had no usable AWS identity, so deployment status, live runtime availability, and Bedrock/guardrail behavior could not be confirmed. Consequently, measured model latency/token usage, actual model identifier returned by the deployed runtime, runtime prompt/schema version in the deployed image, and live guardrail action are **not measured** here. The implementation defaults to model id `amazon.nova-lite-v1:0`; this is configuration, not evidence of a live invocation. The runtime has a closed proposal schema and confidence floor `0.8` (interfaces v1.54/v1.55; ADR-042); the prompt has no separately recorded version identifier. Record only sanitized metadata (`model_id`, `latency_ms`, input/output token counts, `guardrail_action`, `outcome`) from the existing trace on an authorized dev rehearsal. Never include reply text, prompt, raw model output, or runtime ARN in acceptance evidence.
+
+### Rollback
+
+To disable the feature, deploy the existing dev stacks with `agentcore:enabled=false` (or omit the context, whose default is false) using the established dev deploy procedure. Confirm the resulting Interpret environment has `AGENTCORE_ENABLED=false` and no `AGENT_RUNTIME_ARN`; unmatched free text must clarify through `ResetLadder`, while buttons and known keywords continue to map deterministically. Do not manually delete the account-wide `AWS::XRay::TransactionSearchConfig`: it is created on the data stack when AgentCore is enabled and is not a runtime-only rollback resource. Do not change IAM as part of rollback without a separately reviewed infrastructure change.
+
+A live dev/model acceptance rehearsal remains pending authorized dev access, a deployed runtime, and authoritative tenant fault-code catalog provisioning. Model enablement is documented in [bedrock-access.md](bedrock-access.md).

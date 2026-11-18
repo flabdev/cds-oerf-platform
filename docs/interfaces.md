@@ -1,6 +1,8 @@
 # OERF interface contract
 
-**FROZEN v1.55** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.56** — authored 2026-10-18 by OERF-304 (Ananda).
+
+- v1.56 (2026-11-18, OERF-214) Documents the OERF-214 operator checklist and credential-free synthetic acceptance rehearsal for the existing `agentcore:enabled`/`AGENTCORE_ENABLED` gate, including the expected validated intents and ASL terminal paths. No live dev runtime, model, or guardrail result is claimed: this session had no usable AWS identity, and authoritative tenant `FAULTCODE#` catalog provisioning remains open. The documented runtime/model metadata and prompt/schema version fields must be measured from a future authorized dev invocation before live acceptance can close.
 
 - v1.55 (2026-11-18, OERF-212/213) The validated-intent route is covered per row for all 42 privacy-safe corpus entries: `answer`/`decline` acknowledge and consume (`AcknowledgeReply` → `Answered`), `call-me` routes to `HandleCallback` without a consumption acknowledgment, and `help`/`concern`/`unrelated` clarify through `ResetLadder` without consuming the response. `scripts.eval_driver_replies` still reports the historical exact `map_reply` baseline as 0/42 and now adds a separately labeled deterministic offline fixture evaluation with per-row predicted corpus label, proposed fields, validated ASL intent, validity, route, and consumption outcome; the offline fixture score is an evaluator/route contract check, never a model or Bedrock score, and its synthetic catalog (E17, E05, E22, E09) is not tenant data. Rejected, malformed, low-confidence, timeout, exception, and missing-catalog proposals fail closed to `clarify`.
 
