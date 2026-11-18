@@ -1225,7 +1225,12 @@ def test_ph2841_engagement_happy_path_reaches_answered() -> None:
 
 
 def _walk_engagement(
-    definition: dict, data: dict, reply_text: str, limit: int = 30, stop_at=frozenset()
+    definition: dict,
+    data: dict,
+    reply_text: str,
+    limit: int = 30,
+    stop_at=frozenset(),
+    interpret_fn=None,
 ):
     """Walk the engagement graph with deterministic replies and the real handlers.
 
@@ -1261,7 +1266,7 @@ def _walk_engagement(
                 if step_name in {"EngagementComputeNextRung", "EngagementAdvanceRung"}:
                     data = cadence_handler(payload, None)
                 elif step_name == "EngagementInterpret":
-                    data = interpret_handler(payload, None)
+                    data = (interpret_fn or interpret_handler)(payload, None)
                 elif step_name in {
                     "EngagementHandleCallback",
                     "EngagementResetLadder",
