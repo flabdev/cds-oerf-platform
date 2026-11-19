@@ -1,4 +1,6 @@
-"""The rules half of the advisory: tenant-scoped reads, whitelisted notes."""
+from __future__ import annotations
+
+from dataclasses import dataclass
 
 import pytest
 
@@ -182,6 +184,36 @@ def test_a_failing_agent_degrades_to_no_note() -> None:
             raise RuntimeError("ThrottlingException")
 
     assert advisory.note_for("ASSESSING", "EXCURSION", [], agent=_Agent()) is None
+
+
+def test_the_real_sdk_metrics_object_still_yields_a_note() -> None:
+    """OERF-214: a dataclass ``metrics`` must not discard a note the model produced.
+
+    ``strands`` sets ``AgentResult.metrics`` to an ``EventLoopMetrics`` dataclass
+    with no ``.get``. Reading it as a mapping raised ``AttributeError`` inside the
+    guarded call, which silently degraded every advisory to the rules-only path.
+    """
+
+    @dataclass
+    class _Metrics:
+        accumulated_usage: dict[str, int]
+
+        def __init__(self) -> None:
+            self.accumulated_usage = {"inputTokens": 12, "outputTokens": 3, "totalTokens": 15}
+
+    class _Result:
+        def __init__(self) -> None:
+            self.message = {"content": [{"text": "  PROCEED_WITH_DECISION\n because  "}]}
+            self.metrics = _Metrics()
+            self.stop_reason = "end_turn"
+
+    class _Agent:
+        def __call__(self, prompt: str) -> object:
+            return _Result()
+
+    note = advisory.note_for("ASSESSING", "EXCURSION", ["E17"], agent=_Agent())
+
+    assert note == "PROCEED_WITH_DECISION because"
 
 
 def test_a_model_note_cannot_smuggle_an_action_the_vocabulary_lacks() -> None:
