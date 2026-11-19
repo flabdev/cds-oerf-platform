@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from oerf.platform.observability.ai_trace import TraceRejected, record_invocation
@@ -97,15 +98,17 @@ def note_for(state: str, reason: str, fault_codes: list[str], agent: Any = None)
     started = time.monotonic()
     response: dict[str, Any] | None = None
     try:
+        # The note is read first, so a trace-shape surprise can never discard a
+        # note the model actually produced: the trace reports what it can read.
         result = agent(prompt)
-        response = _response_dict(result)
         note = _note_from_result(result)
-    except Exception:  # noqa: BLE001 - a model failure is a fallback, not an error
+        response = _response_dict(result)
+    except Exception as exc:  # noqa: BLE001 - a model failure is a fallback, not an error
         _record(latency_ms=_elapsed_ms(started), response=None, outcome="ERROR")
         log(
             logger,
             logging.ERROR,
-            "the advisory note call failed",
+            f"the advisory note call failed error={type(exc).__name__}",
             outcome="error",
             count=1,
         )
@@ -130,12 +133,41 @@ def _note_from_result(result: Any) -> str | None:
     return None
 
 
-def _response_dict(result: Any) -> dict[str, Any] | None:
-    """The usage and stop reason the trace reads, when the SDK exposes them."""
+def _response_dict(result: Any) -> dict[str, Any]:
+    """The usage and stop reason the trace reads, from either SDK shape.
 
-    metrics = getattr(result, "metrics", None) or {}
-    usage = metrics.get("usage") if isinstance(metrics, dict) else None
-    return {"usage": usage or {}, "metadata": {"stopReason": metrics.get("stop_reason")}}
+    ``strands`` returns ``AgentResult.metrics`` as an ``EventLoopMetrics``
+    dataclass whose token totals sit on ``accumulated_usage``; the tests and an
+    older launch path expose a plain mapping. Both are accepted, and a shape
+    this reader does not recognize yields an empty trace instead of raising: a
+    metrics change must never discard a note the model produced (OERF-214).
+    """
+
+    metrics = getattr(result, "metrics", None)
+    return {"usage": _usage(metrics), "metadata": {"stopReason": _stop_reason_of(result, metrics)}}
+
+
+def _usage(metrics: Any) -> dict[str, Any]:
+    """The token counts from a mapping or from an ``EventLoopMetrics`` object."""
+
+    if isinstance(metrics, Mapping):
+        usage = metrics.get("usage")
+        return dict(usage) if isinstance(usage, Mapping) else {}
+    usage = getattr(metrics, "accumulated_usage", None)
+    return dict(usage) if isinstance(usage, Mapping) else {}
+
+
+def _stop_reason_of(result: Any, metrics: Any) -> str | None:
+    """The result's own ``stop_reason``, or the mapping's ``stop_reason`` key."""
+
+    reason = getattr(result, "stop_reason", None)
+    if isinstance(reason, str) and reason:
+        return reason
+    if isinstance(metrics, Mapping):
+        reason = metrics.get("stop_reason")
+        if isinstance(reason, str) and reason:
+            return reason
+    return None
 
 
 def _clean(text: str) -> str:

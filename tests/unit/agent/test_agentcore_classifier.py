@@ -7,6 +7,8 @@ would, and the module's own schema and policy rules decide the outcome.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pytest
 
 from oerf.platform.agent.agentcore import classifier
@@ -28,6 +30,45 @@ class _Result:
             "usage": {"inputTokens": 31, "outputTokens": 12},
             "stop_reason": stop_reason,
         }
+
+
+@dataclass
+class _SdkMetrics:
+    """The real ``strands.telemetry.metrics.EventLoopMetrics`` shape.
+
+    It is a dataclass with ``accumulated_usage`` and no ``.get``, so a caller
+    that assumes a mapping raises ``AttributeError`` (the OERF-214 defect).
+    """
+
+    accumulated_usage: dict[str, int]
+    stop_reason: str = "end_turn"
+
+    def __init__(self, stop_reason: str = "end_turn") -> None:
+        self.accumulated_usage = {"inputTokens": 31, "outputTokens": 12, "totalTokens": 43}
+        self.stop_reason = stop_reason
+
+
+class _SdkResult:
+    """The real ``strands.agent.agent_result.AgentResult`` shape."""
+
+    def __init__(self, structured: object, stop_reason: str = "end_turn") -> None:
+        self.structured_output = structured
+        self.metrics = _SdkMetrics(stop_reason)
+        self.stop_reason = stop_reason
+        self.message = {"role": "assistant", "content": []}
+
+
+class _SdkAgent:
+    """A fake agent that returns the real SDK result shape, not a mapping."""
+
+    def __init__(self, structured: object, stop_reason: str = "end_turn") -> None:
+        self._structured = structured
+        self._stop_reason = stop_reason
+        self.prompts: list[str] = []
+
+    def __call__(self, prompt: str, *, structured_output_model: object) -> _SdkResult:
+        self.prompts.append(prompt)
+        return _SdkResult(self._structured, self._stop_reason)
 
 
 class _Agent:
@@ -94,6 +135,43 @@ def test_an_empty_nonstring_or_oversized_reply_never_calls_the_model(reply: obje
 def test_without_an_agent_there_is_no_proposal() -> None:
     assert classifier.classify_reply("running", policy=_policy(), agent=None) is None
     assert classifier.build_agent() is None  # the SDK is absent in the unit suite
+
+
+def test_the_real_sdk_metrics_object_still_yields_a_proposal() -> None:
+    """OERF-214: a dataclass ``metrics`` must not discard a usable proposal.
+
+    ``strands`` sets ``AgentResult.metrics`` to an ``EventLoopMetrics`` dataclass
+    with no ``.get``. Reading it as a mapping raised ``AttributeError`` inside the
+    guarded call, which silently degraded every free-text reply to ``clarify``.
+    """
+
+    agent = _SdkAgent(_valid())
+
+    proposal = classifier.classify_reply("the unit is running", policy=_policy(), agent=agent)
+
+    assert proposal == {
+        "category": "answer",
+        "intent": "unit_running",
+        "fields": {"setpoint_temp_c": 4.5},
+        "confidence": 0.93,
+    }
+
+
+def test_the_trace_reads_tokens_and_stop_reason_from_the_sdk_object() -> None:
+    """The trace reports real usage from ``accumulated_usage`` and the result reason."""
+
+    response = classifier._response_dict(_SdkResult(_valid(), stop_reason="guardrail_intervened"))
+
+    assert response["usage"] == {"inputTokens": 31, "outputTokens": 12, "totalTokens": 43}
+    assert response["metadata"]["stopReason"] == "guardrail_intervened"
+
+
+def test_a_guardrail_block_on_the_sdk_object_is_still_unusable() -> None:
+    """A blocked SDK result stays unusable, so the fix does not weaken the gate."""
+
+    agent = _SdkAgent(_valid(), stop_reason="guardrail_intervened")
+
+    assert classifier.classify_reply("text", policy=_policy(), agent=agent) is None
 
 
 
