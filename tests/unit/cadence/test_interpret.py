@@ -364,3 +364,166 @@ def test_advisory_stays_off_unless_agentcore_is_enabled() -> None:
     )
     assert result["response"]["intent"] == "clarify"
     assert "advisory" not in result["response"]
+
+
+def _free_text_event() -> dict:
+    return {
+        "workflow": {
+            "tenant_id": "t1",
+            "incident_id": "INC-1",
+            "reply": {"text": "the unit is running"},
+        }
+    }
+
+
+def _running_proposal(**overrides: object) -> dict:
+    proposal = {
+        "category": "answer",
+        "intent": "unit_running",
+        "fields": {},
+        "confidence": 0.9,
+    }
+    proposal.update(overrides)
+    return proposal
+
+
+def test_handler_uses_the_tenant_confidence_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    from oerf.platform.cadence import interpret
+    from oerf.platform.evidence.policy import EvidencePolicy
+
+    monkeypatch.setenv("AGENTCORE_ENABLED", "true")
+    monkeypatch.setattr(interpret, "_runtime_classifier", lambda *_args: _running_proposal())
+
+    def configured(floor: float):
+        def policy(tenant_id: str) -> EvidencePolicy:
+            return EvidencePolicy(
+                tenant_id=tenant_id,
+                min_confidence=floor,
+                source="tenant_config",
+            )
+
+        return policy
+
+    monkeypatch.setattr(interpret, "_tenant_policy", configured(0.95))
+    tight = interpret.handler(_free_text_event(), None)["response"]
+    assert tight["intent"] == "clarify" and tight["valid"] is False
+
+    monkeypatch.setattr(interpret, "_tenant_policy", configured(0.5))
+    loose = interpret.handler(_free_text_event(), None)["response"]
+    assert loose["intent"] == "unit_running" and loose["valid"] is True
+
+    monkeypatch.setattr(interpret, "_tenant_policy", lambda _tenant: None)
+    missing = interpret.handler(_free_text_event(), None)["response"]
+    assert missing["intent"] == "clarify" and missing["valid"] is False
+
+    monkeypatch.setattr(
+        interpret,
+        "_tenant_policy",
+        lambda tenant_id: EvidencePolicy(
+            tenant_id=tenant_id, min_confidence=0.8, source="fallback"
+        ),
+    )
+    fallback = interpret.handler(_free_text_event(), None)["response"]
+    assert fallback["intent"] == "clarify" and fallback["valid"] is False
+
+
+def test_handler_accepts_only_the_loaded_tenants_fault_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from oerf.platform.cadence import interpret
+    from oerf.platform.evidence.policy import EvidencePolicy
+
+    monkeypatch.setenv("AGENTCORE_ENABLED", "true")
+    monkeypatch.setattr(
+        interpret,
+        "_runtime_classifier",
+        lambda *_args: _running_proposal(fields={"fault_code": "E17"}),
+    )
+
+    def policy(tenant_id: str) -> EvidencePolicy:
+        codes = frozenset({"E17"}) if tenant_id == "t1" else frozenset()
+        return EvidencePolicy(
+            tenant_id=tenant_id,
+            min_confidence=0.8,
+            known_fault_codes=codes,
+            source="tenant_config",
+        )
+
+    monkeypatch.setattr(interpret, "_tenant_policy", policy)
+    known = interpret.handler(_free_text_event(), None)["response"]
+    assert known["valid"] is True and known["fields"] == {"fault_code": "E17"}
+
+    other = _free_text_event()
+    other["workflow"]["tenant_id"] = "t2"
+    denied = interpret.handler(other, None)["response"]
+    assert denied["intent"] == "clarify" and denied["fields"] == {}
+
+    monkeypatch.setattr(
+        interpret,
+        "_tenant_policy",
+        lambda tenant_id: EvidencePolicy(
+            tenant_id=tenant_id,
+            min_confidence=0.8,
+            known_fault_codes=frozenset(),
+            source="tenant_config",
+        ),
+    )
+    absent = interpret.handler(_free_text_event(), None)["response"]
+    assert absent["intent"] == "clarify" and absent["fields"] == {}
+
+    class _Unreadable:
+        tenant_id = "t1"
+        source = "tenant_config"
+        min_confidence = 0.8
+
+        def knows_fault_code(self, _code: str) -> bool:
+            raise RuntimeError("catalog unreadable")
+
+    monkeypatch.setattr(interpret, "_tenant_policy", lambda _tenant: _Unreadable())
+    unreadable = interpret.handler(_free_text_event(), None)["response"]
+    assert unreadable["intent"] == "clarify" and unreadable["fields"] == {}
+
+
+def test_a_classifier_timeout_clarifies_instead_of_failing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from oerf.platform.cadence import interpret
+    from oerf.platform.evidence.policy import EvidencePolicy
+
+    monkeypatch.setenv("AGENTCORE_ENABLED", "true")
+
+    def timed_out(*_args: object) -> object:
+        raise TimeoutError("read timeout")
+
+    monkeypatch.setattr(interpret, "_runtime_classifier", timed_out)
+    monkeypatch.setattr(
+        interpret,
+        "_tenant_policy",
+        lambda tenant_id: EvidencePolicy(
+            tenant_id=tenant_id, min_confidence=0.8, source="tenant_config"
+        ),
+    )
+    response = interpret.handler(_free_text_event(), None)["response"]
+    assert response["intent"] == "clarify" and response["valid"] is False
+    assert "timeout" not in str(response)
+
+
+def test_agentcore_client_timeouts_stay_inside_the_lambda_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from oerf.platform.cadence import interpret
+
+    config = interpret.agentcore_client_config()
+    tenant = interpret.tenant_client_config()
+    assert config.connect_timeout == 1
+    assert config.read_timeout == 10
+    assert config.retries["max_attempts"] == 2
+    agentcore_budget = 2 * (config.connect_timeout + config.read_timeout)
+    tenant_budget = tenant.retries["max_attempts"] * (tenant.connect_timeout + tenant.read_timeout)
+    assert agentcore_budget + tenant_budget < 30
+
+    monkeypatch.setenv("AGENTCORE_READ_TIMEOUT", "60")
+    monkeypatch.setenv("AGENTCORE_MAX_ATTEMPTS", "9")
+    bounded = interpret.agentcore_client_config()
+    assert bounded.read_timeout == 10
+    assert bounded.retries["max_attempts"] == 2

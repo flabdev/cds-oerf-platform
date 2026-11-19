@@ -1010,9 +1010,10 @@ class OerfComputeStack(Stack):
         """Cadence and interpret. Neither role can send or resume a token.
 
         ``SendViaRouter`` invokes ``oerf-channel-router`` from the state machine.
+        Interpret may read the tenant table for the confidence floor and the
+        fault-code catalog. It cannot write that table.
         """
 
-        del data_stack
         self._function(
             "CadenceFunction",
             function_name=self.stage.res("engage-cadence"),
@@ -1031,10 +1032,17 @@ class OerfComputeStack(Stack):
             memory_size=256,
             environment={"LOG_LEVEL": "INFO"},
         )
-        environment = {"LOG_LEVEL": "INFO", "AGENTCORE_ENABLED": "false"}
+        shared = {
+            "LOG_LEVEL": "INFO",
+            "TENANT_TABLE_NAME": data_stack.tenant_table.table_name,
+            "AGENTCORE_CONNECT_TIMEOUT": "1",
+            "AGENTCORE_READ_TIMEOUT": "10",
+            "AGENTCORE_MAX_ATTEMPTS": "2",
+        }
+        environment = {**shared, "AGENTCORE_ENABLED": "false"}
         if self.agent_runtime_arn is not None:
             environment = {
-                "LOG_LEVEL": "INFO",
+                **shared,
                 "AGENTCORE_ENABLED": "true",
                 "AGENT_RUNTIME_ARN": self.agent_runtime_arn,
             }
@@ -1053,6 +1061,7 @@ class OerfComputeStack(Stack):
             memory_size=256,
             environment=environment,
         )
+        data_stack.tenant_table.grant_read_data(interpret)
         if self.agent_runtime_arn is not None:
             interpret.add_to_role_policy(
                 iam.PolicyStatement(

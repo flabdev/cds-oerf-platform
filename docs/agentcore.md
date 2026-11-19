@@ -47,8 +47,11 @@ violation, a model error, or a proposed fault code the tenant catalog does not
 know — returns the documented fallback `{"status": "placeholder", "fallback": true}`,
 and Interpret maps it to `clarify`. The proposal is validated by
 `oerf.platform.cadence.interpret.validate_proposal`, which owns the final
-`response.intent` and `response.valid`. The confidence floor is `0.8`
-(`CLASSIFIER_CONFIDENCE_FLOOR`).
+`response.intent` and `response.valid`. The Interpret Lambda uses the tenant's
+`evidence.min_confidence`. The packaged default is `0.8`
+(`CLASSIFIER_CONFIDENCE_FLOOR`). A missing, unreadable, or out-of-range floor
+fails closed to `clarify` and does not fall back to a lower number. Callers
+that pass no tenant policy, including the offline evaluator, still use `0.8`.
 
 The classifier is `oerf/platform/agent/agentcore/classifier.py`. The schema is
 closed (Pydantic, `extra="forbid"`, `Literal` enums, allow-listed fields), the
@@ -56,19 +59,39 @@ prompt marks the reply as untrusted data, and the existing Bedrock Guardrail
 applies. The model call is traced with the allow-listed fields only; the reply
 text, the prompt, and the raw model output are never logged or traced.
 
-Fault codes stay unverified. The runtime drops a proposed code unless the
-tenant's own `FAULTCODE#` catalog (pattern 5) contains it, and the Interpret
-caller fails closed unconditionally because its role has no tenant-table grant
-(OERF-211 does not widen runtime IAM). No seed file or seed run writes
-`FAULTCODE#` rows yet, so E17/E05/E22/E09 cannot be accepted until the
-authoritative per-tenant catalog source and its dev/test provisioning are added.
-There is no global allow-list.
+Fault codes stay unverified until a named owner confirms an authoritative
+catalog. The row shape is `TENANT#{tenant_id}` / `FAULTCODE#{code}` (pattern 5).
+The runtime and the Interpret Lambda both read that tenant's rows and fail
+closed when the catalog is missing or unreadable. No seed file writes those
+rows, and E17, E05, E22, and E09 are not confirmed, so OERF-214 verified-code
+success cases stay blocked. There is no global allow-list.
+
+### Timeouts
+
+The Interpret Lambda and the `Interpret` state both time out at 30 seconds. A
+slow model call must return before that kill so Interpret can map it to
+`clarify` instead of `EngagementFailed`.
+
+| Client | Connect | Read | Attempts | Worst case |
+| --- | --- | --- | --- | --- |
+| Interpret tenant-table read | 1s | 2s | 1 | 3s |
+| Interpret `bedrock-agentcore` | 1s | 10s | 2 | 22s |
+| Classifier Bedrock | 1s | 6s | 1 | 7s |
+
+The table read and the AgentCore call run one after the other, so their combined worst case is 25 seconds. The Bedrock call happens inside one AgentCore read.
+
+Environment variables `AGENTCORE_CONNECT_TIMEOUT`, `AGENTCORE_READ_TIMEOUT`,
+and `AGENTCORE_MAX_ATTEMPTS` tune the caller. `CLASSIFIER_CONNECT_TIMEOUT`,
+`CLASSIFIER_READ_TIMEOUT`, and `CLASSIFIER_MAX_ATTEMPTS` tune the runtime.
+Values outside the ranges above are ignored and the defaults are used, so an
+override cannot grow past this budget. The runtime idle timeout stays 60
+seconds and the max lifetime stays 5 minutes.
 
 ## OERF-214 dev acceptance and operator checklist
 
 ### Configuration and enablement
 
-The supported deployment switch is CDK context `agentcore:enabled`; default is `false`. The compute stack sets `AGENTCORE_ENABLED=false` and does not set `AGENT_RUNTIME_ARN` when disabled. When enabled, it sets `AGENTCORE_ENABLED=true`, wires the `AgentRuntimeArn` stack output to `AGENT_RUNTIME_ARN`, and grants the Interpret caller `bedrock-agentcore:InvokeAgentRuntime` only on that runtime ARN. No new CDK or IAM permissions are needed for OERF-214. Check these behaviors in `infra/stacks/compute_stack.py` before changing deployment wiring.
+The supported deployment switch is CDK context `agentcore:enabled`; default is `false`. The compute stack sets `AGENTCORE_ENABLED=false` and does not set `AGENT_RUNTIME_ARN` when disabled. When enabled, it sets `AGENTCORE_ENABLED=true`, wires the `AgentRuntimeArn` stack output to `AGENT_RUNTIME_ARN`, and grants the Interpret caller `bedrock-agentcore:InvokeAgentRuntime` only on that runtime ARN. Interpret also has read-only access to the tenant table so it can resolve `evidence.min_confidence` and `FAULTCODE#` rows. It cannot write that table, send a message, or resume a task token. Check these behaviors in `infra/stacks/compute_stack.py` before changing deployment wiring.
 
 Deploy/inspect dev using the existing operator procedures in [infra/bootstrap/README.md](../infra/bootstrap/README.md) and [runbook-deploy.md](runbook-deploy.md). Before a real model rehearsal, confirm `OerfComputeStack-dev` is `*_COMPLETE`, its `AgentRuntimeArn` output is present, and the deployed Interpret configuration has `AGENTCORE_ENABLED=true` plus that ARN. Do not print or paste the ARN into a ticket/report. CI's credential-free enabled synth is `cdk synth --lookups false --quiet -c account=000000000000 -c stage=dev -c agentcore:enabled=true`; the default/off synth must remain deterministic and must not build the runtime image.
 
@@ -112,5 +135,19 @@ No live dev invocation was performed for this record: the session had no usable 
 ### Rollback
 
 To disable the feature, deploy the existing dev stacks with `agentcore:enabled=false` (or omit the context, whose default is false) using the established dev deploy procedure. Confirm the resulting Interpret environment has `AGENTCORE_ENABLED=false` and no `AGENT_RUNTIME_ARN`; unmatched free text must clarify through `ResetLadder`, while buttons and known keywords continue to map deterministically. Do not manually delete the account-wide `AWS::XRay::TransactionSearchConfig`: it is created on the data stack when AgentCore is enabled and is not a runtime-only rollback resource. Do not change IAM as part of rollback without a separately reviewed infrastructure change.
+
+### Live corpus score
+
+`python -m scripts.eval_driver_replies_live --confirm-bedrock-call` scores all
+42 rows in `tests/ai-evals/driver_replies.jsonl` with the real model. It is
+opt-in: without the flag it makes no AWS call. The report is a live model
+score, separate from the offline fake. It prints the model id, prompt version,
+predicted category, validity, ASL route, and token or latency counts. It does
+not print reply text, prompts, or raw model output. `--fail-under` is a manual
+gate. One run is 42 model invocations.
+
+No live baseline has been measured yet. Record the first opted-in score here
+when an authorized run finishes. Do not copy the offline fake's perfect score
+into that line.
 
 A live dev/model acceptance rehearsal remains pending authorized dev access, a deployed runtime, and authoritative tenant fault-code catalog provisioning. Model enablement is documented in [bedrock-access.md](bedrock-access.md).

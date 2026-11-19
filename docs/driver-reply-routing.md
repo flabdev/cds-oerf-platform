@@ -84,15 +84,26 @@ missing-catalog paths. Those paths clarify and do not consume the response.
 
 ## Fail-closed catalog condition
 
-At present there is no authoritative per-tenant catalog provisioned for these
-codes. Accordingly, in production any answer proposal containing a fault code
-(DR-001–DR-011) validates as `clarify` and routes through `ResetLadder`, not
-`AcknowledgeReply` / `Answered`. The offline report's 25 consumed rows assume the
-synthetic fixture catalog above; with no catalog those code rows instead clarify,
-and `scripts.eval_driver_replies` run with a missing catalog marks them
-fail-closed. `tests/unit/evals/test_driver_reply_routing.py` checks both the
-positive synthetic-catalog paths above and these missing-catalog failure paths.
-Never treat the synthetic fixture as a production allow-list.
+Interpret and the AgentCore runtime read `TENANT#{tenant_id}` / `FAULTCODE#{code}`
+for the tenant on the reply. No authoritative owner has confirmed E17, E05, E22,
+or E09, and no seed file writes those rows. Until that source is confirmed,
+any answer proposal containing a fault code (DR-001–DR-011) validates as
+`clarify` and routes through `ResetLadder`, not `AcknowledgeReply` / `Answered`.
+OERF-214 verified-code success cases stay blocked. The offline report's consumed
+rows assume the synthetic fixture catalog above; with no catalog those code rows
+instead clarify, and `scripts.eval_driver_replies` run with a missing catalog
+marks them fail-closed. `tests/unit/evals/test_driver_reply_routing.py` checks
+both the positive synthetic-catalog paths above and these missing-catalog
+failure paths. Never treat the synthetic fixture as a production allow-list.
+
+A live model score is a separate command and is not a substitute for this
+offline report:
+
+```bash
+python -m scripts.eval_driver_replies_live --confirm-bedrock-call
+```
+
+That command refuses to run without the flag. No live baseline is recorded yet.
 
 Classifier errors, malformed or low-confidence proposals, and any unmatched
 intent follow the same safe clarification route. ASL routing receives only the

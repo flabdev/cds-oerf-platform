@@ -121,6 +121,9 @@ class AgentCoreRuntime(Construct):
                 "GUARDRAIL_VERSION": guardrail_version,
                 "INCIDENT_TABLE_NAME": incident_table.table_name,
                 "TENANT_TABLE_NAME": tenant_table.table_name,
+                "CLASSIFIER_CONNECT_TIMEOUT": "1",
+                "CLASSIFIER_READ_TIMEOUT": "6",
+                "CLASSIFIER_MAX_ATTEMPTS": "1",
             },
             logging_configs=[
                 agentcore.LoggingConfig(

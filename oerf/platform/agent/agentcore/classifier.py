@@ -27,6 +27,8 @@ import time
 from collections.abc import Mapping
 from typing import Any, Literal
 
+from botocore.config import Config
+
 from oerf.platform.evidence.policy import EvidencePolicy
 from oerf.platform.observability.ai_trace import TraceRejected, record_invocation
 from oerf.platform.observability.logging import get_logger, log
@@ -38,6 +40,12 @@ logger.setLevel(logging.INFO)
 DEFAULT_MODEL_ID = "amazon.nova-lite-v1:0"
 #: Enough for one small JSON object, and nothing near a chat draft.
 MAX_TOKENS = 256
+#: Identifies the prompt and closed schema. The live scorer reports this, not the prompt.
+PROMPT_VERSION = "interpret-proposal-v1"
+#: One Bedrock attempt of at most ``1 + 6`` seconds, inside one AgentCore read of 10 seconds.
+_CLASSIFIER_CONNECT_TIMEOUT = 1
+_CLASSIFIER_READ_TIMEOUT = 6
+_CLASSIFIER_MAX_ATTEMPTS = 1
 #: The inbound cap from ``docs/interfaces.md`` §5, restated for this image.
 MAX_REPLY_CHARS = 4_000
 #: The corpus ``expected_intent`` labels (``response.category``).
@@ -66,6 +74,56 @@ def model_id() -> str:
     """The configured model id, defaulting to Nova Lite."""
 
     return os.environ.get("BEDROCK_MODEL_ID", DEFAULT_MODEL_ID)
+
+
+def bedrock_client_config() -> Config:
+    """Bound the model call so one attempt finishes inside the AgentCore read timeout."""
+
+    return Config(
+        connect_timeout=_bounded_int(
+            "CLASSIFIER_CONNECT_TIMEOUT", _CLASSIFIER_CONNECT_TIMEOUT, low=1, high=2
+        ),
+        read_timeout=_bounded_int(
+            "CLASSIFIER_READ_TIMEOUT", _CLASSIFIER_READ_TIMEOUT, low=1, high=6
+        ),
+        retries={
+            "max_attempts": _bounded_int(
+                "CLASSIFIER_MAX_ATTEMPTS", _CLASSIFIER_MAX_ATTEMPTS, low=1, high=1
+            ),
+            "mode": "standard",
+        },
+    )
+
+
+def bedrock_model_kwargs(*, model: str | None = None) -> dict[str, Any]:
+    """The BedrockModel arguments, including the bounded client config."""
+
+    kwargs: dict[str, Any] = {
+        "model_id": model or model_id(),
+        "max_tokens": MAX_TOKENS,
+        "boto_client_config": bedrock_client_config(),
+    }
+    region = os.environ.get("AWS_REGION", "")
+    if region:
+        kwargs["region_name"] = region
+    guardrail_id = os.environ.get("GUARDRAIL_ID", "")
+    if guardrail_id:
+        kwargs["guardrail_id"] = guardrail_id
+        kwargs["guardrail_version"] = os.environ.get("GUARDRAIL_VERSION", "")
+    return kwargs
+
+
+def _bounded_int(name: str, default: int, *, low: int, high: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    if value < low or value > high:
+        return default
+    return value
 
 
 def _proposal_model() -> Any:
@@ -120,16 +178,8 @@ def build_agent(*, model: str | None = None) -> Any | None:
         )
         return None
 
-    kwargs: dict[str, Any] = {"model_id": model or model_id(), "max_tokens": MAX_TOKENS}
-    region = os.environ.get("AWS_REGION", "")
-    if region:
-        kwargs["region_name"] = region
-    guardrail_id = os.environ.get("GUARDRAIL_ID", "")
-    if guardrail_id:
-        kwargs["guardrail_id"] = guardrail_id
-        kwargs["guardrail_version"] = os.environ.get("GUARDRAIL_VERSION", "")
     try:
-        bedrock = BedrockModel(**kwargs)
+        bedrock = BedrockModel(**bedrock_model_kwargs(model=model))
         return Agent(model=bedrock, system_prompt=SYSTEM_PROMPT)
     except Exception:  # noqa: BLE001 - an agent that cannot start is a fallback
         log(
