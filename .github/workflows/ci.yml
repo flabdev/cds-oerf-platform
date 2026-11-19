@@ -39,6 +39,11 @@ jobs:
     env:
       CDK_DEFAULT_ACCOUNT: "000000000000"
       CDK_DEFAULT_REGION: us-east-1
+      # cdk synth replaces CDK_DEFAULT_REGION with AWS_REGION before it starts
+      # the app. Hosted runners set AWS_REGION to the runner region, which made
+      # this job synthesize in us-west-2 and reject the us-east-1 guardrail ARN.
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
       AWS_EC2_METADATA_DISABLED: "true"
 
     steps:
