@@ -6,6 +6,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from oerf.platform.cadence.engage import compute_rung
 from oerf.platform.cadence.engagement_lifecycle import reset_ladder
 from oerf.platform.cadence.interpret import interpret_workflow
@@ -111,6 +113,18 @@ def _clarify_path(workflow: dict, reply_text: str) -> dict:
     return reset_ladder(workflow)
 
 
+def _response_intent(workflow: dict) -> str | None:
+    """The intent the live sender reads after the ladder reset. No injected value."""
+
+    response = workflow.get("response")
+    if not isinstance(response, dict):
+        return None
+    intent = response.get("intent")
+    if not isinstance(intent, str) or not intent.strip():
+        return None
+    return intent.strip()
+
+
 def test_driver_accept_clarify_then_running() -> None:
     store, registry, recipient, workflow = _ports(
         "critical_field",
@@ -134,7 +148,7 @@ def test_driver_accept_clarify_then_running() -> None:
         token="token-2",
         rung=workflow["cadence"]["next_rung"],
         template=workflow["cadence"]["message"],
-        response_intent="clarify",
+        response_intent=_response_intent(workflow),
     )
     saved = store.get(workflow["tenant_id"], workflow["incident_id"], workflow["engagement_id"])
     assert saved.status == "WAITING"
@@ -175,7 +189,7 @@ def test_facility_running_clarify_then_decline() -> None:
         token="fac-2",
         rung=workflow["cadence"]["next_rung"],
         template=workflow["cadence"]["message"],
-        response_intent="clarify",
+        response_intent=_response_intent(workflow),
     )
 
     workflow = interpret_workflow({**workflow, "reply": {"text": "Decline"}}, enabled=False)
@@ -211,7 +225,7 @@ def test_two_clarifies_then_cadence_exhausts() -> None:
             token=token,
             rung=workflow["cadence"]["next_rung"],
             template=workflow["cadence"]["message"],
-            response_intent="clarify",
+            response_intent=_response_intent(workflow),
         )
     else:
         _inbound_answered(store, workflow)
@@ -219,3 +233,148 @@ def test_two_clarifies_then_cadence_exhausts() -> None:
         exhausted_at = START + timedelta(minutes=5)
         workflow = compute_rung(workflow, exhausted_at)
         assert workflow["cadence"]["exhausted"] is True
+
+
+def test_keyword_answer_stays_valid_and_does_not_reopen() -> None:
+    store, registry, recipient, workflow = _ports(
+        "critical_field",
+        role="driver",
+        ask="diagnose",
+        template="driver_checkin",
+        contact="C-T1-DRV",
+    )
+    _send(store, registry, recipient, workflow, token="token-1", rung=1, template="driver_checkin")
+    _inbound_answered(store, workflow)
+
+    answered = interpret_workflow({**workflow, "reply": {"text": "Running"}}, enabled=False)
+    assert answered["response"]["intent"] == "unit_running"
+    assert answered["response"]["valid"] is True
+    with pytest.raises(ValueError, match="only a WAITING engagement"):
+        _send(
+            store,
+            registry,
+            recipient,
+            answered,
+            token="token-2",
+            rung=2,
+            template="driver_reminder",
+            response_intent=_response_intent(answered),
+        )
+    assert (
+        store.get(workflow["tenant_id"], workflow["incident_id"], workflow["engagement_id"]).status
+        == "ANSWERED"
+    )
+
+
+def test_model_answer_stays_valid_and_model_clarify_reopens() -> None:
+    store, registry, recipient, workflow = _ports(
+        "critical_field",
+        role="driver",
+        ask="diagnose",
+        template="driver_checkin",
+        contact="C-T1-DRV",
+    )
+    _send(store, registry, recipient, workflow, token="token-1", rung=1, template="driver_checkin")
+    _inbound_answered(store, workflow)
+
+    def answer(_tenant: str, _incident: str, _text: str, _policy: str | None) -> dict:
+        return {
+            "category": "answer",
+            "intent": "unit_running",
+            "fields": {},
+            "confidence": 0.91,
+        }
+
+    accepted = interpret_workflow(
+        {**workflow, "reply": {"text": "The refrigeration unit is running."}},
+        enabled=True,
+        classify=answer,
+        confidence_floor=0.8,
+    )
+    assert accepted["response"]["intent"] == "unit_running"
+    assert accepted["response"]["valid"] is True
+    with pytest.raises(ValueError, match="only a WAITING engagement"):
+        _send(
+            store,
+            registry,
+            recipient,
+            accepted,
+            token="token-2",
+            rung=2,
+            template="driver_reminder",
+            response_intent=_response_intent(accepted),
+        )
+
+    def unclear(_tenant: str, _incident: str, _text: str, _policy: str | None) -> dict:
+        return {
+            "category": "help",
+            "intent": "clarify",
+            "fields": {},
+            "confidence": 0.95,
+        }
+
+    clarified = interpret_workflow(
+        {**workflow, "reply": {"text": "Can you tell me what to check?"}},
+        enabled=True,
+        classify=unclear,
+        confidence_floor=0.8,
+    )
+    assert clarified["response"]["intent"] == "clarify"
+    assert clarified["response"]["valid"] is False
+    reask = reset_ladder(clarified)
+    assert "reply" not in reask
+    reask = compute_rung(reask, START + timedelta(seconds=30))
+    _send(
+        store,
+        registry,
+        recipient,
+        reask,
+        token="token-3",
+        rung=reask["cadence"]["next_rung"],
+        template=reask["cadence"]["message"],
+        response_intent=_response_intent(reask),
+    )
+    saved = store.get(workflow["tenant_id"], workflow["incident_id"], workflow["engagement_id"])
+    assert saved is not None and saved.status == "WAITING"
+    assert saved.task_token == "token-3"
+
+
+def test_model_failure_clarify_still_reopens() -> None:
+    store, registry, recipient, workflow = _ports(
+        "critical_field",
+        role="driver",
+        ask="diagnose",
+        template="driver_checkin",
+        contact="C-T1-DRV",
+    )
+    _send(store, registry, recipient, workflow, token="token-1", rung=1, template="driver_checkin")
+    _inbound_answered(store, workflow)
+
+    def down(_tenant: str, _incident: str, _text: str, _policy: str | None) -> dict:
+        raise RuntimeError("runtime down")
+
+    failed = interpret_workflow(
+        {**workflow, "reply": {"text": "The unit looks normal to me."}},
+        enabled=True,
+        classify=down,
+        confidence_floor=0.8,
+    )
+    assert failed["response"] == {
+        "intent": "clarify",
+        "valid": False,
+        "fields": {},
+        "evidence_refs": [],
+    }
+    reask = compute_rung(reset_ladder(failed), START + timedelta(seconds=30))
+    _send(
+        store,
+        registry,
+        recipient,
+        reask,
+        token="token-2",
+        rung=reask["cadence"]["next_rung"],
+        template=reask["cadence"]["message"],
+        response_intent=_response_intent(reask),
+    )
+    saved = store.get(workflow["tenant_id"], workflow["incident_id"], workflow["engagement_id"])
+    assert saved is not None and saved.status == "WAITING"

@@ -34,21 +34,29 @@ def test_handle_callback_uses_tenant_mapping_and_keeps_original_deadline(monkeyp
     assert workflow["deadline"] == deadline.isoformat()
 
 
-def test_ladder_reset_drops_stale_response_but_preserves_deadline() -> None:
+def test_ladder_reset_drops_the_reply_and_keeps_clarify_for_the_reask() -> None:
     workflow = {
         "deadline": NOW.isoformat(),
         "history": [{"rung": 2, "sent_at": NOW.isoformat()}],
         "reply": {"text": "stale"},
-        "response": {"intent": "clarify"},
+        "response": {"intent": "clarify", "category": "help", "confidence": 0.4},
         "rung_timeout": {"error": "timeout"},
     }
 
     result = lifecycle.reset_ladder(workflow)
 
     assert result["history"] == []
-    assert not {"reply", "response", "rung_timeout"} & result.keys()
+    assert "reply" not in result
+    assert "rung_timeout" not in result
+    assert result["response"] == {
+        "intent": "clarify",
+        "valid": False,
+        "fields": {},
+        "evidence_refs": [],
+    }
     assert result["deadline"] == workflow["deadline"]
     assert workflow["reply"]["text"] == "stale"
+    assert workflow["response"]["category"] == "help"
 
 
 def test_final_question_prepares_router_payload_with_deadline_bounded_wait() -> None:
