@@ -9,9 +9,11 @@ and do not imply that any real tenant has approved those codes.
 
 `answer` rows use `unit_running` as a deterministic valid example of the
 permitted `unit_running` / `unit_stopped` / `unknown` answer intents; the corpus
-labels do not themselves encode unit status. `decline` uses `decline`, and
-`call-me` uses `call_me`. `help`, `concern`, and `unrelated` are rejected as
-answer intents and clarify.
+labels do not themselves encode unit status. `call-me` uses `call_me`. A
+classifier `decline` on `critical_field` is not a diagnosis, so it clarifies.
+`help`, `concern`, and `unrelated` are rejected as answer intents and clarify.
+A facility `decline` word on `partner_request` stays a keyword answer and is
+not a row in this driver corpus.
 
 | Row | Corpus category (`expected_intent`) | Fixture validated / clarify intent | ASL route | Outcome |
 | --- | --- | --- | --- | --- |
@@ -51,8 +53,8 @@ answer intents and clarify.
 | DR-034 | unrelated (`unrelated`) | clarify | ResetLadder | not consumed |
 | DR-035 | unrelated (`unrelated`) | clarify | ResetLadder | not consumed |
 | DR-036 | unrelated (`unrelated`) | clarify | ResetLadder | not consumed |
-| DR-037 | decline (`decline`) | decline | AcknowledgeReply → Answered | consumed |
-| DR-038 | decline (`decline`) | decline | AcknowledgeReply → Answered | consumed |
+| DR-037 | decline (`decline`) | clarify | ResetLadder | not consumed |
+| DR-038 | decline (`decline`) | clarify | ResetLadder | not consumed |
 | DR-039 | driving_safety (`help`) | clarify | ResetLadder | not consumed |
 | DR-040 | driving_safety (`help`) | clarify | ResetLadder | not consumed |
 | DR-041 | driving_safety (`help`) | clarify | ResetLadder | not consumed |

@@ -81,7 +81,12 @@ def test_no_confidence_floor_or_disabled_classifier_fails_closed() -> None:
     def classify(*_args: object) -> object:
         return _proposal()
 
-    workflow = {"tenant_id": "t1", "incident_id": "i1", "reply": {"text": "Sounds on"}}
+    workflow = {
+        "tenant_id": "t1",
+        "incident_id": "i1",
+        "policy_id": "critical_field",
+        "reply": {"text": "Sounds on"},
+    }
     accepted = interpret_workflow(workflow, enabled=True, classify=classify, confidence_floor=0.8)[
         "response"
     ]
@@ -107,7 +112,12 @@ def test_empty_nonstring_and_oversized_text_never_reach_classifier() -> None:
 
     for text in (None, "", "  ", 42, "x" * (MAX_REPLY_TEXT + 1)):
         response = interpret_workflow(
-            {"tenant_id": "t1", "incident_id": "i1", "reply": {"text": text}},
+            {
+                "tenant_id": "t1",
+                "incident_id": "i1",
+                "policy_id": "critical_field",
+                "reply": {"text": text},
+            },
             enabled=True,
             classify=classify,
             confidence_floor=0.8,
@@ -122,7 +132,12 @@ def test_classifier_exception_does_not_crash_or_leak_exception_text() -> None:
         raise RuntimeError("private reply and model output")
 
     response = interpret_workflow(
-        {"tenant_id": "t1", "incident_id": "i1", "reply": {"text": "private reply"}},
+        {
+            "tenant_id": "t1",
+            "incident_id": "i1",
+            "policy_id": "critical_field",
+            "reply": {"text": "private reply"},
+        },
         enabled=True,
         classify=broken,
         confidence_floor=0.8,
@@ -211,7 +226,12 @@ def test_free_form_text_fails_closed_without_confidence_policy() -> None:
         return {"category": "answer", "intent": "unit_running", "fields": {}, "confidence": 0.99}
 
     result = interpret_workflow(
-        {"tenant_id": "t1", "incident_id": "INC-000001", "reply": {"text": "door is open"}},
+        {
+            "tenant_id": "t1",
+            "incident_id": "INC-000001",
+            "policy_id": "critical_field",
+            "reply": {"text": "door is open"},
+        },
         enabled=True,
         classify=classify,
         confidence_floor=None,
@@ -232,7 +252,12 @@ def test_a_proposal_below_the_default_floor_fails_closed() -> None:
     def classify(*_args: object) -> object:
         return {"category": "answer", "intent": "unit_running", "fields": {}, "confidence": 0.79}
 
-    workflow = {"tenant_id": "t1", "incident_id": "INC-000001", "reply": {"text": "maybe on"}}
+    workflow = {
+        "tenant_id": "t1",
+        "incident_id": "INC-000001",
+        "policy_id": "critical_field",
+        "reply": {"text": "maybe on"},
+    }
 
     # No explicit floor: the module default (0.8) applies.
     below = interpret_workflow(workflow, enabled=True, classify=classify)["response"]
@@ -371,6 +396,7 @@ def _free_text_event() -> dict:
         "workflow": {
             "tenant_id": "t1",
             "incident_id": "INC-1",
+            "policy_id": "critical_field",
             "reply": {"text": "the unit is running"},
         }
     }
@@ -527,3 +553,100 @@ def test_agentcore_client_timeouts_stay_inside_the_lambda_budget(
     bounded = interpret.agentcore_client_config()
     assert bounded.read_timeout == 10
     assert bounded.retries["max_attempts"] == 2
+
+
+def test_only_critical_field_free_text_calls_the_classifier() -> None:
+    """Facility free text, and a reply with no policy, never reach the model."""
+
+    calls: list[str | None] = []
+
+    def classify(_tenant: str, _incident: str, _text: str, policy: str | None) -> object:
+        calls.append(policy)
+        return _proposal()
+
+    facility = interpret_workflow(
+        {
+            "tenant_id": "t1",
+            "incident_id": "INC-1",
+            "policy_id": "partner_request",
+            "reply": {"text": "we can take the truck this afternoon"},
+        },
+        enabled=True,
+        classify=classify,
+        confidence_floor=0.8,
+    )
+    missing = interpret_workflow(
+        {
+            "tenant_id": "t1",
+            "incident_id": "INC-1",
+            "reply": {"text": "we can take the truck this afternoon"},
+        },
+        enabled=True,
+        classify=classify,
+        confidence_floor=0.8,
+    )
+
+    assert calls == []
+    assert facility["response"]["intent"] == "clarify" and facility["response"]["valid"] is False
+    assert missing["response"]["intent"] == "clarify" and missing["response"]["valid"] is False
+
+
+def test_critical_field_accepts_an_answer_and_a_callback_but_not_a_decline() -> None:
+    def propose(category: str, intent: str):
+        def classify(*_args: object) -> object:
+            return {
+                "category": category,
+                "intent": intent,
+                "fields": {},
+                "confidence": 0.95,
+            }
+
+        return classify
+
+    workflow = {
+        "tenant_id": "t1",
+        "incident_id": "INC-1",
+        "policy_id": "critical_field",
+        "reply": {"text": "the panel is hard to read"},
+    }
+    answer = interpret_workflow(
+        workflow, enabled=True, classify=propose("answer", "unit_stopped"), confidence_floor=0.8
+    )["response"]
+    callback = interpret_workflow(
+        workflow, enabled=True, classify=propose("call-me", "call_me"), confidence_floor=0.8
+    )["response"]
+    declined = interpret_workflow(
+        workflow, enabled=True, classify=propose("decline", "decline"), confidence_floor=0.8
+    )["response"]
+
+    assert answer["intent"] == "unit_stopped" and answer["valid"] is True
+    assert callback["intent"] == "call_me" and callback["valid"] is True
+    assert declined["category"] == "decline"
+    assert declined["intent"] == "clarify" and declined["valid"] is False
+    assert declined["fields"] == {}
+
+
+def test_handler_skips_the_tenant_table_unless_the_policy_is_critical_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from oerf.platform.cadence import interpret
+
+    monkeypatch.setenv("AGENTCORE_ENABLED", "true")
+
+    def refuse_policy(_tenant: str) -> object:
+        raise AssertionError("tenant table must stay unread")
+
+    def refuse_classifier(*_args: object) -> object:
+        raise AssertionError("classifier must stay uncalled")
+
+    monkeypatch.setattr(interpret, "_tenant_policy", refuse_policy)
+    monkeypatch.setattr(interpret, "_runtime_classifier", refuse_classifier)
+
+    for policy_id in (None, "partner_request", "approval_fast"):
+        event = _free_text_event()
+        if policy_id is None:
+            event["workflow"].pop("policy_id")
+        else:
+            event["workflow"]["policy_id"] = policy_id
+        response = interpret.handler(event, None)["response"]
+        assert response["intent"] == "clarify" and response["valid"] is False

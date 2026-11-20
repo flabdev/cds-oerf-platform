@@ -71,9 +71,9 @@ def test_each_corpus_row_takes_its_documented_asl_route(row: dict) -> None:
         expected_intent = "unit_running"
         stop_at = frozenset()
     elif category == "decline":
-        expected_state = "Answered"
-        expected_intent = "decline"
-        stop_at = frozenset()
+        expected_state = "ResetLadder"
+        expected_intent = "clarify"
+        stop_at = frozenset({"ResetLadder"})
     elif category == "call-me":
         expected_state = "HandleCallback"
         expected_intent = "call_me"
@@ -94,7 +94,7 @@ def test_each_corpus_row_takes_its_documented_asl_route(row: dict) -> None:
 
     assert expected_state in visited, row["id"]
     assert observed[0]["intent"] == expected_intent, row["id"]
-    assert observed[0]["valid"] is (category in {"answer", "decline", "call-me"}), row["id"]
+    assert observed[0]["valid"] is (category in {"answer", "call-me"}), row["id"]
     if expected_state == "Answered":
         assert visited[-1] == "Answered"
         assert "AcknowledgeReply" in visited

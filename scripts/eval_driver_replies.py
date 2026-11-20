@@ -131,7 +131,8 @@ def _breakdown(
 def _expected_route(expected: str) -> str:
     if expected == "call-me":
         return "HandleCallback"
-    if expected in {"answer", "decline"}:
+    # A driver ``decline`` proposal is not a diagnosis. It clarifies.
+    if expected == "answer":
         return "AcknowledgeReply → Answered"
     return "ResetLadder"
 
@@ -139,7 +140,7 @@ def _expected_route(expected: str) -> str:
 def _expected_outcome(expected: str) -> str:
     if expected == "call-me":
         return "callback requested; not consumed"
-    return "consumed" if expected in {"answer", "decline"} else "not consumed"
+    return "consumed" if expected == "answer" else "not consumed"
 
 
 def main(argv: list[str] | None = None) -> int:
