@@ -1,4 +1,4 @@
-"""Confirm the demo device and contact seed is on the deployed tables.
+"""Confirm the demo device, contact, and fault-code seed is on the deployed tables.
 
 Operator tool. It does not write. After a deploy with ``demo:seedDevices=true``
 and ``python -m scripts.seed_runtime --yes``, this command should exit 0.
@@ -16,7 +16,13 @@ import boto3
 
 from oerf.platform.channels.devices import verify_demo_devices
 from scripts._stage import add_stage_argument, remember_stage, require_stack, resolve_stage
-from scripts.seed_runtime import REGION, table_names, tenants_for, verify_opt_in_contacts
+from scripts.seed_runtime import (
+    REGION,
+    table_names,
+    tenants_for,
+    verify_fault_codes,
+    verify_opt_in_contacts,
+)
 
 
 def verify_seed(client: Any, tenant_table: str, routing_table: str, tenant_id: str) -> list[str]:
@@ -27,6 +33,8 @@ def verify_seed(client: Any, tenant_table: str, routing_table: str, tenant_id: s
         gaps.append(f"device {device_id}")
     for contact_id in verify_opt_in_contacts(client, tenant_table, tenant_id):
         gaps.append(f"contact {contact_id}")
+    for code in verify_fault_codes(client, tenant_table, tenant_id):
+        gaps.append(f"fault code {code}")
     return gaps
 
 

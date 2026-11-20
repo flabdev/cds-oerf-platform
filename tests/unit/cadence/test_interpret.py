@@ -650,3 +650,60 @@ def test_handler_skips_the_tenant_table_unless_the_policy_is_critical_field(
             event["workflow"]["policy_id"] = policy_id
         response = interpret.handler(event, None)["response"]
         assert response["intent"] == "clarify" and response["valid"] is False
+
+
+def test_seeded_t1_fault_codes_are_visible_to_both_readers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AgentCore ``policy_for`` and Interpret's tenant read see the same t1 rows."""
+
+    import boto3
+
+    from oerf.platform.agent.agentcore.decision import policy_for
+    from oerf.platform.cadence import interpret
+    from oerf.platform.evidence.policy import dynamo_readers
+    from scripts.seed_runtime import seed_runtime
+    from tests.unit.support.fake_dynamo import FakeDynamoClient
+
+    client = FakeDynamoClient()
+    seed_runtime(client, "tenant", "t1", apply=True)
+    seed_runtime(client, "tenant", "t2", apply=True)
+    tenant_reader, config_reader = dynamo_readers(client, "tenant")
+    t1_policy = policy_for("t1", tenant=tenant_reader, config=config_reader)
+    t2_policy = policy_for("t2", tenant=tenant_reader, config=config_reader)
+    assert t1_policy.known_fault_codes == frozenset({"E17", "E05", "E22", "E09"})
+    assert t1_policy.knows_fault_code("e17") is True
+    assert t1_policy.knows_fault_code("E99") is False
+    assert t2_policy.known_fault_codes == frozenset()
+
+    monkeypatch.setenv("TENANT_TABLE_NAME", "tenant")
+    monkeypatch.setenv("AGENTCORE_ENABLED", "true")
+    monkeypatch.setattr(boto3, "client", lambda *_args, **_kwargs: client)
+    loaded = interpret._tenant_policy("t1")
+    assert interpret._policy_knows(loaded, "t1", "E17") is True
+    assert interpret._policy_knows(loaded, "t1", "E99") is False
+    assert interpret._policy_knows(interpret._tenant_policy("t2"), "t2", "E17") is False
+
+    def proposal(code: str) -> dict:
+        return {
+            "category": "answer",
+            "intent": "unit_running",
+            "fields": {"fault_code": code},
+            "confidence": 0.93,
+        }
+
+    monkeypatch.setattr(interpret, "_runtime_classifier", lambda *_args: proposal("E17"))
+    accepted = interpret.handler(_free_text_event(), None)["response"]
+    assert accepted["valid"] is True
+    assert accepted["intent"] == "unit_running"
+    assert accepted["fields"] == {"fault_code": "E17"}
+
+    monkeypatch.setattr(interpret, "_runtime_classifier", lambda *_args: proposal("E99"))
+    unknown = interpret.handler(_free_text_event(), None)["response"]
+    assert unknown["intent"] == "clarify" and unknown["fields"] == {}
+
+    other = _free_text_event()
+    other["workflow"]["tenant_id"] = "t2"
+    monkeypatch.setattr(interpret, "_runtime_classifier", lambda *_args: proposal("E17"))
+    denied = interpret.handler(other, None)["response"]
+    assert denied["intent"] == "clarify" and denied["fields"] == {}

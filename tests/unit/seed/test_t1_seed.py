@@ -110,6 +110,15 @@ def test_t1_seed_contains_shipment_roles_and_facilities() -> None:
     assert facility_b["drive_min"] == 21
     assert facility_b["distance_km"] == 14
     assert facility_b["emergency_fee_usd"] == 300
+    codes = {row["code"]: row for row in seed["faultcodes"]}
+    assert set(codes) == {"E17", "E05", "E22", "E09"}
+    assert codes["E17"]["SK"] == "FAULTCODE#E17"
+    assert codes["E17"]["label"] == "compressor fault"
+    assert codes["E05"]["label"] == "E05"
+    assert codes["E22"]["label"] == "E22"
+    assert codes["E09"]["label"] == "E09"
+    assert all(row["synthetic_demo"] is True for row in codes.values())
+    assert all("not an authoritative catalog" in row["note"] for row in codes.values())
     _assert_tenant_owned(seed)
 
 

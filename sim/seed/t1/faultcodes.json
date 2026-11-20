@@ -1,0 +1,38 @@
+[
+  {
+    "tenant_id": "t1",
+    "PK": "TENANT#t1",
+    "SK": "FAULTCODE#E17",
+    "code": "E17",
+    "label": "compressor fault",
+    "synthetic_demo": true,
+    "note": "Synthetic demo data, not an authoritative catalog."
+  },
+  {
+    "tenant_id": "t1",
+    "PK": "TENANT#t1",
+    "SK": "FAULTCODE#E05",
+    "code": "E05",
+    "label": "E05",
+    "synthetic_demo": true,
+    "note": "Synthetic demo data, not an authoritative catalog."
+  },
+  {
+    "tenant_id": "t1",
+    "PK": "TENANT#t1",
+    "SK": "FAULTCODE#E22",
+    "code": "E22",
+    "label": "E22",
+    "synthetic_demo": true,
+    "note": "Synthetic demo data, not an authoritative catalog."
+  },
+  {
+    "tenant_id": "t1",
+    "PK": "TENANT#t1",
+    "SK": "FAULTCODE#E09",
+    "code": "E09",
+    "label": "E09",
+    "synthetic_demo": true,
+    "note": "Synthetic demo data, not an authoritative catalog."
+  }
+]

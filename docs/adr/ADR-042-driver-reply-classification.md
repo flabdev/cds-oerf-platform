@@ -21,7 +21,7 @@ The existing inbound handler correlates a driver reply to one engagement and res
 
 - Existing task-token lifecycle, correlation, and state-machine structure remain unchanged. Unclear replies use `clarify` and the existing reset/retry behavior.
 - The classifier may be unavailable or return unusable output without advancing an engagement on an unsupported answer; Interpret fails closed to clarification.
-- E17/E05/E22/E09 are not asserted to exist in a tenant catalog. They cannot be accepted as verified unless an authoritative tenant source supplies the corresponding `FAULTCODE#` rows.
+- Tenant t1's seed includes a synthetic demo catalog for E17, E05, E22, and E09 (`sim/seed/t1/faultcodes.json`). It is not an authoritative catalog. Other tenants still have no `FAULTCODE#` rows, so a code proposal for them fails closed. There is no global allow-list.
 - OERF-210–214 implement and validate the contract; the interface and runtime changes remain subject to their owners' sign-off.
 
 ## Alternatives considered
