@@ -1335,9 +1335,12 @@ def test_engagement_free_text_takes_clarify_and_resets_the_ladder() -> None:
     )
 
     assert "ResetLadder" in visited
-    # A reset clears the stale reply and loops back to ComputeNextRung.
+    # The reply text is cleared. The clarify signal stays so the next send can reopen.
     assert states["ResetLadder"]["Next"] == "ComputeNextRung"
-    assert "response" not in final and "reply" not in final
+    assert "reply" not in final
+    assert final["response"]["intent"] == "clarify"
+    assert final["response"]["valid"] is False
+    assert "just some words" not in str(final)
 
 
 def test_cancelled_input_terminates_without_running_business_steps() -> None:

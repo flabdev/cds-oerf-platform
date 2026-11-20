@@ -149,7 +149,10 @@ def test_classifier_failures_clarify_and_reset_without_consuming(failure: str) -
     assert "ResetLadder" in visited
     assert "AcknowledgeReply" not in visited
     assert "Answered" not in visited
-    assert "response" not in final and "reply" not in final
+    assert "reply" not in final
+    assert final["response"]["intent"] == "clarify"
+    assert final["response"]["valid"] is False
+    assert "the unit seems to be running" not in str(final)
 
 
 @pytest.mark.parametrize(
@@ -177,6 +180,8 @@ def test_code_answers_fail_closed_without_tenant_catalog(row: dict) -> None:
     assert "ResetLadder" in visited
     assert observed[0]["intent"] == "clarify"
     assert observed[0]["valid"] is False
-    assert "response" not in final and "reply" not in final
+    assert "reply" not in final
+    assert final["response"]["intent"] == "clarify"
+    assert final["response"]["valid"] is False
     assert "AcknowledgeReply" not in visited
     assert "Answered" not in visited

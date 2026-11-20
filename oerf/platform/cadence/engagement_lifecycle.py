@@ -52,12 +52,23 @@ def handle_callback(workflow: dict[str, Any], *, now: datetime | None = None) ->
 
 
 def reset_ladder(workflow: dict[str, Any]) -> dict[str, Any]:
-    """Clear a stale reply and start another deterministic clarification ladder."""
+    """Clear a stale reply and start another deterministic clarification ladder.
+
+    The driver's text is dropped. A minimal ``clarify`` response stays, because
+    the next send reopens an answered engagement only when that intent is still
+    present. Keyword answers and accepted model answers never reach this step.
+    """
 
     updated = dict(workflow)
     updated["history"] = []
     for name in ("reply", "response", "rung_timeout", "final_question_timeout"):
         updated.pop(name, None)
+    updated["response"] = {
+        "intent": "clarify",
+        "valid": False,
+        "fields": {},
+        "evidence_refs": [],
+    }
     return updated
 
 
