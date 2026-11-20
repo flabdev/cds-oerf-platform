@@ -11,11 +11,13 @@ the stored numbers already match the seed files.
         --live-contacts --roles driver,qa
 
 This writes tenant META, the seed shipment, the two facilities, the contact
-rows, the ``PHONE#`` index on the routing table, and publishes the cold-chain
-config when no config is stored or ``PP-2-8-45`` is not already 45 minutes.
-Contact phones come from ``SYNTHETIC_E164`` (the fictional 555-01xx range).
-It does not read SSM, write a real number, write fault codes or incidents, or
-publish readings unless ``--live-contacts`` is set. That flag reads one stage
+rows, the ``PHONE#`` index on the routing table, any ``faultcodes.json`` rows,
+and publishes the cold-chain config when no config is stored or ``PP-2-8-45``
+is not already 45 minutes. Only t1 has those fault-code rows, and they are
+synthetic demo data, not an authoritative catalog. Contact phones come from
+``SYNTHETIC_E164`` (the fictional 555-01xx range). It does not read SSM, write
+a real number, or write incidents. It does not publish readings unless
+``--live-contacts`` is set. That flag reads one stage
 prefix for every role: ``{prefix}/{tenant}/driver/{contact_id}`` for drivers
 and ``{prefix}/{tenant}/{role}`` for everyone else. The prefix is the stage
 (``/oerf/demo-numbers`` or ``/oerf/dev/demo-numbers``). ``DEMO_NUMBERS_PREFIX``
@@ -67,7 +69,7 @@ SYNTHETIC_E164_BY_CONTACT = {
     "C-T1-DRV-ANANDA": "+15550100011",
     "C-T1-DRV-VIVEK": "+15550100012",
 }
-_KINDS = ("meta", "shipments", "facilities", "contacts", "phones", "config")
+_KINDS = ("meta", "shipments", "facilities", "contacts", "phones", "faultcodes", "config")
 _SKIP = frozenset({"PK", "SK", "pk", "sk"})
 _DRAFT_SKIP = frozenset(
     {
@@ -126,6 +128,10 @@ def seed_runtime(
         ),
         "contacts": sum(
             _put(client, table_name, _contact_item(row), apply=apply) for row in contacts
+        ),
+        "faultcodes": sum(
+            _put(client, table_name, _record_item(row), apply=apply)
+            for row in seed.get("faultcodes") or []
         ),
         "phones": (
             0
@@ -199,6 +205,35 @@ def verify_opt_in_contacts(client: Any, table_name: str, tenant_id: str) -> list
         wanted = "true" if row.get("opt_in") is True else "false"
         if not item or text(item["opt_in"]) != wanted:
             missing.append(contact_id)
+    return missing
+
+
+def verify_fault_codes(client: Any, table_name: str, tenant_id: str) -> list[str]:
+    """Return seed fault codes whose ``FAULTCODE#`` row is missing or mismatched.
+
+    A tenant with no ``faultcodes`` file has nothing to check. The rows are
+    synthetic demo data; this only confirms the seeder wrote them.
+    """
+
+    if tenant_id not in DEMO_TENANTS:
+        raise ValueError(f"unknown tenant {tenant_id!r}")
+    missing: list[str] = []
+    for row in load_seed(tenant_id).get("faultcodes") or []:
+        code = str(row.get("code") or "")
+        sk = str(row["SK"])
+        loaded = client.get_item(
+            TableName=table_name,
+            Key=key(f"TENANT#{tenant_id}", sk),
+        )
+        item = loaded.get("Item")
+        stored = text(item["code"]) if item and "code" in item else ""
+        if (
+            not item
+            or not sk.startswith("FAULTCODE#")
+            or stored.upper() != code.upper()
+            or sk != f"FAULTCODE#{code}"
+        ):
+            missing.append(code or sk)
     return missing
 
 

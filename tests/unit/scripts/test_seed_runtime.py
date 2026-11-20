@@ -25,6 +25,7 @@ from scripts.seed_runtime import (
     seed_live_contacts,
     seed_runtime,
     tenants_for,
+    verify_fault_codes,
     verify_opt_in_contacts,
 )
 from scripts.verify_seed import verify_seed
@@ -49,6 +50,7 @@ def test_seed_round_trip_matches_the_workflow_readers() -> None:
         "facilities": 2,
         "contacts": 7,
         "phones": 0,
+        "faultcodes": 4,
         "config": 1,
     }
     repository = DynamoConfigRepository(client, TABLE)
@@ -105,6 +107,7 @@ def test_second_seed_writes_nothing() -> None:
         "facilities": 0,
         "contacts": 0,
         "phones": 0,
+        "faultcodes": 0,
         "config": 0,
     }
     assert client.writes == writes
@@ -135,6 +138,7 @@ def test_equivalent_decimals_count_as_unchanged() -> None:
         "facilities": 0,
         "contacts": 0,
         "phones": 0,
+        "faultcodes": 0,
         "config": 0,
     }
     assert client.writes == writes
@@ -170,6 +174,7 @@ def test_dry_run_reads_and_does_not_write() -> None:
         "facilities": 2,
         "contacts": 7,
         "phones": 7,
+        "faultcodes": 4,
         "config": 1,
     }
     assert client.reads > 0
@@ -189,6 +194,7 @@ def test_main_dry_run_prints_counts(
     assert "would change t1 facilities 2" in out
     assert "would change t1 contacts 7" in out
     assert "would change t1 phones 7" in out
+    assert "would change t1 faultcodes 4" in out
     assert "would change t1 config 1" in out
     assert client.reads > 0
 
@@ -202,6 +208,8 @@ def test_mocked_driver_address_matches_the_router() -> None:
 
     seed_demo_devices(client, "routing")
     assert verify_seed(client, TABLE, "routing", "t1") == []
+    assert verify_fault_codes(client, TABLE, "t1") == []
+    assert verify_fault_codes(client, TABLE, "t2") == []
     registry = DynamoPhoneRegistry(client, "routing", TABLE)
 
     contact = registry.get_contact("t1", "C-T1-DRV")
@@ -246,6 +254,27 @@ def test_mocked_driver_address_matches_the_router() -> None:
     assert owned.unknown is False
     assert owned.matches[0].contact_id == "C-T1-DRV"
     assert owned.matches[0].e164 == "+15550100001"
+
+
+def test_a_missing_t1_fault_code_is_reported_and_other_tenants_have_none() -> None:
+    from sim.seed.load import load_seed
+
+    client = FakeDynamoClient()
+    seed_runtime(client, TABLE, "t1", apply=True, routing_table="routing")
+    from oerf.platform.channels.devices import seed_demo_devices
+
+    seed_demo_devices(client, "routing")
+    client.delete_item(TableName=TABLE, Key=key("TENANT#t1", "FAULTCODE#E17"))
+
+    assert verify_fault_codes(client, TABLE, "t1") == ["E17"]
+    assert "fault code E17" in verify_seed(client, TABLE, "routing", "t1")
+
+    other = FakeDynamoClient()
+    counts = seed_runtime(other, TABLE, "t2", apply=True)
+    assert counts["faultcodes"] == 0
+    assert verify_fault_codes(other, TABLE, "t2") == []
+    assert "faultcodes" not in load_seed("t2")
+    assert "faultcodes" not in load_seed("sbx")
 
 
 def test_written_numbers_stay_in_the_fictional_range() -> None:

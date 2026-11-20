@@ -9,9 +9,11 @@ and do not imply that any real tenant has approved those codes.
 
 `answer` rows use `unit_running` as a deterministic valid example of the
 permitted `unit_running` / `unit_stopped` / `unknown` answer intents; the corpus
-labels do not themselves encode unit status. `decline` uses `decline`, and
-`call-me` uses `call_me`. `help`, `concern`, and `unrelated` are rejected as
-answer intents and clarify.
+labels do not themselves encode unit status. `call-me` uses `call_me`. A
+classifier `decline` on `critical_field` is not a diagnosis, so it clarifies.
+`help`, `concern`, and `unrelated` are rejected as answer intents and clarify.
+A facility `decline` word on `partner_request` stays a keyword answer and is
+not a row in this driver corpus.
 
 | Row | Corpus category (`expected_intent`) | Fixture validated / clarify intent | ASL route | Outcome |
 | --- | --- | --- | --- | --- |
@@ -51,8 +53,8 @@ answer intents and clarify.
 | DR-034 | unrelated (`unrelated`) | clarify | ResetLadder | not consumed |
 | DR-035 | unrelated (`unrelated`) | clarify | ResetLadder | not consumed |
 | DR-036 | unrelated (`unrelated`) | clarify | ResetLadder | not consumed |
-| DR-037 | decline (`decline`) | decline | AcknowledgeReply → Answered | consumed |
-| DR-038 | decline (`decline`) | decline | AcknowledgeReply → Answered | consumed |
+| DR-037 | decline (`decline`) | clarify | ResetLadder | not consumed |
+| DR-038 | decline (`decline`) | clarify | ResetLadder | not consumed |
 | DR-039 | driving_safety (`help`) | clarify | ResetLadder | not consumed |
 | DR-040 | driving_safety (`help`) | clarify | ResetLadder | not consumed |
 | DR-041 | driving_safety (`help`) | clarify | ResetLadder | not consumed |
@@ -85,16 +87,18 @@ missing-catalog paths. Those paths clarify and do not consume the response.
 ## Fail-closed catalog condition
 
 Interpret and the AgentCore runtime read `TENANT#{tenant_id}` / `FAULTCODE#{code}`
-for the tenant on the reply. No authoritative owner has confirmed E17, E05, E22,
-or E09, and no seed file writes those rows. Until that source is confirmed,
-any answer proposal containing a fault code (DR-001–DR-011) validates as
-`clarify` and routes through `ResetLadder`, not `AcknowledgeReply` / `Answered`.
-OERF-214 verified-code success cases stay blocked. The offline report's consumed
-rows assume the synthetic fixture catalog above; with no catalog those code rows
-instead clarify, and `scripts.eval_driver_replies` run with a missing catalog
-marks them fail-closed. `tests/unit/evals/test_driver_reply_routing.py` checks
-both the positive synthetic-catalog paths above and these missing-catalog
-failure paths. Never treat the synthetic fixture as a production allow-list.
+for the tenant on the reply. Tenant t1's seed writes a synthetic demo catalog
+for E17, E05, E22, and E09 (`sim/seed/t1/faultcodes.json`). That file is not an
+authoritative catalog. Other tenants still have no rows, so a code proposal for
+them fails closed. There is no global allow-list.
+
+The offline report's consumed rows assume the synthetic fixture catalog above,
+which is separate from the t1 seed. With no catalog those code rows instead
+clarify, and `scripts.eval_driver_replies` run with a missing catalog marks
+them fail-closed. `tests/unit/evals/test_driver_reply_routing.py` checks both
+the positive synthetic-catalog paths above and these missing-catalog failure
+paths. Never treat the synthetic fixture, or the t1 demo seed, as a production
+allow-list.
 
 A live model score is a separate command and is not a substitute for this
 offline report:

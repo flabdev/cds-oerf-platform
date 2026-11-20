@@ -74,14 +74,23 @@ def _resolve_account(app: cdk.App) -> str:
     return os.environ.get("CDK_DEFAULT_ACCOUNT") or SYNTH_PLACEHOLDER_ACCOUNT
 
 
+def _resolve_region(app: cdk.App) -> str:
+    """Context ``region`` wins over ``CDK_DEFAULT_REGION``.
+
+    ``cdk synth -c region=us-east-1`` stays on us-east-1 even when the CDK
+    CLI injects another region into the environment.
+    """
+
+    context_region = app.node.try_get_context("region")
+    if isinstance(context_region, str) and context_region.strip():
+        return context_region.strip()
+    return os.environ.get("CDK_DEFAULT_REGION") or DEFAULT_REGION
+
+
 app = cdk.App()
 
 account = _resolve_account(app)
-region = (
-    os.environ.get("CDK_DEFAULT_REGION")
-    or app.node.try_get_context("region")
-    or DEFAULT_REGION
-)
+region = _resolve_region(app)
 
 cdk_env = cdk.Environment(account=account, region=region)
 stage = Stage.from_context(app.node.try_get_context("stage"))

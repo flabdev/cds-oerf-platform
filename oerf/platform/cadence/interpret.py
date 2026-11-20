@@ -79,8 +79,11 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     policy_id = workflow.get("policy_id")
     policy_id = policy_id if isinstance(policy_id, str) else None
     # Buttons and known words never call the model, so they never read the catalog.
+    # Only driver diagnose (``critical_field``) classifies free text. Any other
+    # policy, or a missing one, clarifies without a model call or a tenant read.
     needs_policy = (
         enabled
+        and policy_id == "critical_field"
         and isinstance(tenant_id, str)
         and map_reply(text if isinstance(text, str) else None, policy_id) is None
     )
@@ -154,6 +157,9 @@ def _classify_reply(
     confidence_floor: float | None,
     knows_fault_code: Callable[[str, str], bool] | None,
 ) -> dict[str, Any]:
+    # Facility, approval, and every unnamed policy stay on the keyword map.
+    if policy_id != "critical_field":
+        return _clarification()
     tenant_id, incident_id = workflow.get("tenant_id"), workflow.get("incident_id")
     if (
         not isinstance(text, str)
@@ -211,9 +217,10 @@ def validate_proposal(
         or not _valid_fields(fields, tenant_id, knows_fault_code)
     ):
         return fallback
+    # ``critical_field`` accepts a unit answer or a callback. A decline proposal
+    # is not a diagnosis, so it clarifies instead of taking the answer path.
     expected = {
         "answer": {"unit_running", "unit_stopped", "unknown"},
-        "decline": {"decline"},
         "call-me": {"call_me"},
     }
     if intent not in expected.get(safe_category, set()):

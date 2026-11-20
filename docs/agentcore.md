@@ -59,12 +59,14 @@ prompt marks the reply as untrusted data, and the existing Bedrock Guardrail
 applies. The model call is traced with the allow-listed fields only; the reply
 text, the prompt, and the raw model output are never logged or traced.
 
-Fault codes stay unverified until a named owner confirms an authoritative
-catalog. The row shape is `TENANT#{tenant_id}` / `FAULTCODE#{code}` (pattern 5).
-The runtime and the Interpret Lambda both read that tenant's rows and fail
-closed when the catalog is missing or unreadable. No seed file writes those
-rows, and E17, E05, E22, and E09 are not confirmed, so OERF-214 verified-code
-success cases stay blocked. There is no global allow-list.
+Fault codes stay unverified until that tenant's own `FAULTCODE#` catalog
+contains them. The row shape is `TENANT#{tenant_id}` / `FAULTCODE#{code}`
+(pattern 5). The runtime and the Interpret Lambda both read that tenant's rows
+and fail closed when the catalog is missing or unreadable. Tenant t1's seed
+writes a synthetic demo catalog for E17, E05, E22, and E09
+(`sim/seed/t1/faultcodes.json`). It is not an authoritative catalog. Other
+tenants still have no rows, so a code proposal for them fails closed. There is
+no global allow-list.
 
 ### Timeouts
 
@@ -114,7 +116,7 @@ This rehearsal used synthetic proposals through the production `interpret_workfl
 | Ambiguous / below confidence floor | `answer` proposal rejected | `clarify` | no | `ResetLadder` (not consumed) |
 | Runtime unavailable / exception | no usable proposal | `clarify` | no | `ResetLadder` (not consumed) |
 
-The synthetic table validates deterministic mapping and route wiring, not model quality. The separate 42-row offline evaluator is also a fixture/evaluator contract check only. Fault-code answers are **not** accepted by this rehearsal: there is no authoritative tenant `FAULTCODE#` catalog or dev seed for E17/E05/E22/E09, and such proposals fail closed. Do not report code-bearing answer rows as passing until that prerequisite is installed and tested.
+The synthetic table validates deterministic mapping and route wiring, not model quality. The separate 42-row offline evaluator is also a fixture/evaluator contract check only. Tenant t1 now has a seeded synthetic catalog for E17, E05, E22, and E09; it is demo data, not an authoritative catalog. Other tenants still fail closed. The offline evaluator keeps its own fixture catalog and does not read that seed.
 
 ### Defect found and fixed during rehearsal (2026-11-18)
 

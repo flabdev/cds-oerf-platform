@@ -137,6 +137,36 @@ def test_real_context_account_is_not_the_placeholder(tmp_path):
     assert "Refusing to deploy with the synth placeholder account" not in template
 
 
+_CI_GUARDRAIL = (
+    "arn:aws:bedrock:us-east-1:000000000000:guardrail/ciplaceholder1"
+)
+_OIDC_ARN = (
+    "arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com"
+)
+
+
+def test_context_region_overrides_cdk_default_region_for_ci_synth(tmp_path):
+    """``-c region=us-east-1`` wins when the CDK CLI sets CDK_DEFAULT_REGION elsewhere."""
+
+    result = run_app(
+        tmp_path,
+        CDK_DEFAULT_REGION="us-west-2",
+        CDK_CONTEXT_JSON=json.dumps(
+            {
+                "account": "000000000000",
+                "region": REGION,
+                "stage": "dev",
+                "ci:deployRoleStack": "true",
+                "github:oidcProviderArn": _OIDC_ARN,
+                "dev:guardrailArn": _CI_GUARDRAIL,
+            }
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert (tmp_path / "OerfCiStack-dev.template.json").is_file()
+
+
 def test_waba_app_gives_each_lambda_one_errors_alarm(tmp_path):
     result = run_app(
         tmp_path,
