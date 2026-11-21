@@ -301,6 +301,16 @@ def test_nested_engagement_is_a_token_waiting_state_machine_and_runs_before_asse
     assert states["SendViaRouter"]["Resource"].endswith(".waitForTaskToken")
     assert states["InterpretResult"]["Choices"][0]["Next"] == "HandleCallback"
     assert states["SendViaRouter"]["Catch"][0]["Next"] == "AdvanceRung"
+    assert states["AwaitReply?"]["Default"] == "RecallAnswer"
+    assert states["RecallAnswer"]["Resource"] == "arn:aws:states:::lambda:invoke"
+    assert states["RecallAnswer"]["Parameters"]["Payload"]["step_name"] == "EngagementSendViaRouter"
+    assert "task_token" not in states["RecallAnswer"]["Parameters"]["Payload"]
+    assert states["RecallAnswer"]["ResultSelector"]["status.$"] == "$.Payload.status"
+    assert states["RecallAnswer"]["ResultSelector"]["reply.$"] == "$.Payload.reply"
+    assert states["RecallAnswer"]["Next"] == "AlreadyAnswered?"
+    assert states["UseStoredReply"]["InputPath"] == "$.recall.reply"
+    assert states["UseStoredReply"]["ResultPath"] == "$.reply"
+    assert states["UseStoredReply"]["Next"] == "Interpret"
     assert states["CallbackPause"]["Next"] == "ComputeNextRung"
     assert states["Answered"]["Parameters"]["status"] == "answered"
     assert states["Exhausted"]["Parameters"]["status"] == "exhausted"
@@ -905,6 +915,22 @@ def _assign(data: dict, path: str, value: object) -> None:
     node[parts[-1]] = value
 
 
+def _apply_pass(state: dict, data: dict) -> dict:
+    """Apply a non-terminal Pass. ``InputPath`` selects, ``ResultPath`` merges."""
+
+    selected: object = data
+    if "InputPath" in state:
+        selected = _path_value(data, state["InputPath"])
+    path = state.get("ResultPath", "$")
+    if path == "$":
+        if not isinstance(selected, dict):
+            raise AssertionError("Pass InputPath must yield an object when ResultPath is $")
+        return selected
+    updated = dict(data)
+    _assign(updated, path, selected)
+    return updated
+
+
 def _path_value(data: dict, path: str) -> object:
     node: object = data
     for part in _json_path_parts(path):
@@ -1147,8 +1173,14 @@ def test_engagement_missing_paths_take_the_safe_branch() -> None:
 
     # No exhausted flag, and a rung is still planned: keep waiting, do not exhaust.
     assert evaluate_choice(states["CheckStop"], {"cadence": {"next_rung": 1}}) == "WaitUntilDue"
-    # No awaits_reply flag: wait for a person instead of sending one-way.
-    assert evaluate_choice(states["AwaitReply?"], {"cadence": {}}) == "SendViaRouter"
+    # No awaits_reply flag: look for a stored reply before opening another wait.
+    assert evaluate_choice(states["AwaitReply?"], {"cadence": {}}) == "RecallAnswer"
+    assert evaluate_choice(
+        states["AlreadyAnswered?"], {"recall": {"status": "already_answered"}}
+    ) == "UseStoredReply"
+    assert evaluate_choice(
+        states["AlreadyAnswered?"], {"recall": {"status": "pending"}}
+    ) == "SendViaRouter"
     # A reply that never produced response: clarify, do not treat it as valid.
     assert evaluate_choice(states["InterpretResult"], {"reply": {"text": "Running"}}) == "Clarify"
 
@@ -1176,8 +1208,12 @@ def test_ph2841_engagement_happy_path_reaches_answered() -> None:
     for _ in range(20):
         visited.append(current)
         state = states[current]
-        if state["Type"] == "Pass" and state.get("End"):
-            break
+        if state["Type"] == "Pass":
+            if state.get("End") or "Next" not in state:
+                break
+            data = _apply_pass(state, data)
+            current = state["Next"]
+            continue
         if state["Type"] == "Choice":
             current = evaluate_choice(state, data)
             continue
@@ -1201,6 +1237,14 @@ def test_ph2841_engagement_happy_path_reaches_answered() -> None:
             _assign(data, state.get("ResultPath") or "$.one_way", {"status": "simulated"})
             current = state["Next"]
             continue
+        elif step_name == "EngagementSendViaRouter":
+            _assign(
+                data,
+                state.get("ResultPath") or "$.recall",
+                {"status": "pending", "reply": None},
+            )
+            current = state["Next"]
+            continue
         else:
             raise AssertionError(step_name)
         current = state["Next"]
@@ -1212,6 +1256,8 @@ def test_ph2841_engagement_happy_path_reaches_answered() -> None:
         "CheckStop",
         "WaitUntilDue",
         "AwaitReply?",
+        "RecallAnswer",
+        "AlreadyAnswered?",
         "SendViaRouter",
         "Interpret",
         "InterpretResult",
@@ -1254,7 +1300,10 @@ def _walk_engagement(
         elif state["Type"] == "Wait":
             current = state["Next"]
         elif state["Type"] == "Pass":
-            return visited, data
+            if state.get("End") or "Next" not in state:
+                return visited, data
+            data = _apply_pass(state, data)
+            current = state["Next"]
         elif state["Type"] == "Task":
             if state["Resource"].endswith(".waitForTaskToken"):
                 data = dict(data)
@@ -1276,6 +1325,12 @@ def _walk_engagement(
                     data = lifecycle_handler(payload, None)
                 elif step_name == "EngagementSendOneWay":
                     _assign(data, state.get("ResultPath") or "$.one_way", {"status": "simulated"})
+                elif step_name == "EngagementSendViaRouter":
+                    _assign(
+                        data,
+                        state.get("ResultPath") or "$.recall",
+                        {"status": "pending", "reply": None},
+                    )
                 else:
                     raise AssertionError(step_name)
                 current = state["Next"]

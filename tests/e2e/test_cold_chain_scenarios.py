@@ -397,6 +397,14 @@ def _engage(
             continue
 
         step_name = state["Parameters"]["Payload"]["step_name"]
+        if step_name == "EngagementSendViaRouter":
+            _assign(
+                data,
+                state.get("ResultPath") or "$.recall",
+                {"status": "pending", "reply": None},
+            )
+            current = state["Next"]
+            continue
         if step_name == "EngagementComputeNextRung":
             result = cadence_handler(
                 {"step_name": step_name, "workflow": data}, None

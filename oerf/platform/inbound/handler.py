@@ -942,7 +942,7 @@ def _resume(
     except Exception as exc:
         code = _error_code(exc)
         if code in _LATE_TOKEN:
-            # The wait already ended. Close the row and acknowledge the record.
+            # The wait already ended. Close the row, keep the reply, and acknowledge.
             log(
                 logger,
                 logging.INFO,
@@ -953,7 +953,10 @@ def _resume(
                 outcome="ignored",
             )
             dependencies.engagements.answer(
-                engagement.tenant_id, engagement.incident_id, engagement.engagement_id
+                engagement.tenant_id,
+                engagement.incident_id,
+                engagement.engagement_id,
+                reply=resumed,
             )
             return "late"
         if _transient_callback(exc):

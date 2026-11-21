@@ -86,6 +86,22 @@ def test_answered_reply_returns_none(store) -> None:
     assert engagements.correlate("wamid-1") is None
 
 
+def test_answer_keeps_a_reply_and_reopen_clears_it(store) -> None:
+    engagements, _clock = store
+    _open(engagements)
+    reply = {"text": "Running", "channel": "whatsapp", "type": "text"}
+
+    answered = engagements.answer("t1", "INC-000001", "eng-1", reply=reply)
+
+    assert answered.status == "ANSWERED"
+    assert answered.reply == reply
+    stored = engagements.get("t1", "INC-000001", "eng-1")
+    assert stored is not None and stored.reply == reply
+    reopened = engagements.reopen_for_clarify("t1", "INC-000001", "eng-1")
+    assert reopened is not None and reopened.status == "WAITING"
+    assert reopened.reply is None
+
+
 def test_reopen_for_clarify_returns_waiting(store) -> None:
     engagements, _clock = store
     _open(engagements)
