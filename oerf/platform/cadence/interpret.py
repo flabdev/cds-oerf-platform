@@ -24,6 +24,9 @@ CLASSIFIER_CONFIDENCE_FLOOR: float | None = 0.8
 _AGENTCORE_CONNECT_TIMEOUT = 1
 _AGENTCORE_READ_TIMEOUT = 10
 _AGENTCORE_MAX_ATTEMPTS = 2
+#: Jev answers in well under a second. The tenant read (3 s), the key read
+#: (3 s), and one Jev call (at most 5 s) stay far under the 30-second Lambda.
+_JEV_TIMEOUT = 3
 CATEGORIES = frozenset({"answer", "decline", "help", "concern", "call-me", "unrelated"})
 INTENTS = frozenset({"unit_running", "unit_stopped", "unknown", "decline", "call_me", "clarify"})
 _PROPOSAL_KEYS = frozenset({"category", "intent", "fields", "confidence"})
@@ -72,7 +75,8 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     workflow = event.get("workflow")
     if not isinstance(workflow, dict):
         raise ValueError("interpret needs a workflow")
-    enabled = os.environ.get("AGENTCORE_ENABLED", "false").strip().lower() == "true"
+    backend = classifier_backend()
+    enabled = _backend_enabled(backend)
     tenant_id = workflow.get("tenant_id")
     reply = workflow.get("reply")
     text = reply.get("text") if isinstance(reply, dict) else None
@@ -88,12 +92,86 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         and map_reply(text if isinstance(text, str) else None, policy_id) is None
     )
     policy = _tenant_policy(tenant_id) if needs_policy else None
+
+    def knows_fault_code(checked: str, code: str) -> bool:
+        return _policy_knows(policy, checked, code)
+
+    classify: Classifier = (
+        _jev_classifier(knows_fault_code) if backend == "jev" else _runtime_classifier
+    )
     return interpret_workflow(
         workflow,
         enabled=enabled,
-        classify=_runtime_classifier,
+        classify=classify,
         confidence_floor=_floor_from_policy(policy),
-        knows_fault_code=lambda checked, code: _policy_knows(policy, checked, code),
+        knows_fault_code=knows_fault_code,
+    )
+
+
+def classifier_backend() -> str:
+    """``agentcore`` (the default) or ``jev``. Any other value disables free text."""
+
+    return os.environ.get("INTERPRET_CLASSIFIER", "agentcore").strip().lower() or "agentcore"
+
+
+def _backend_enabled(backend: str) -> bool:
+    if backend == "agentcore":
+        return os.environ.get("AGENTCORE_ENABLED", "false").strip().lower() == "true"
+    if backend == "jev":
+        return bool(os.environ.get("JEV_API_KEY_PARAM", "").strip())
+    return False
+
+
+def _jev_classifier(knows_fault_code: Callable[[str, str], bool]) -> Classifier:
+    """The Jev classifier for this invocation, with the tenant catalog check."""
+
+    from oerf.platform.agent.jev import DEFAULT_ENDPOINT, DEFAULT_MODEL
+    from oerf.platform.cadence.jev_classifier import JevReplyClassifier
+
+    return JevReplyClassifier(
+        api_key=_jev_api_key,
+        knows_fault_code=knows_fault_code,
+        model=os.environ.get("JEV_MODEL", "").strip() or DEFAULT_MODEL,
+        endpoint=os.environ.get("JEV_ENDPOINT", "").strip() or DEFAULT_ENDPOINT,
+        timeout=float(_bounded_int("JEV_TIMEOUT_SECONDS", _JEV_TIMEOUT, low=1, high=5)),
+    )
+
+
+_jev_key_cache: dict[str, str] = {}
+
+
+def _jev_api_key() -> str:
+    """The Jev key from the SecureString ``JEV_API_KEY_PARAM`` names, cached per process.
+
+    A failed or empty read raises and is not cached, so Interpret clarifies and
+    the next invocation reads SSM again.
+    """
+
+    name = os.environ.get("JEV_API_KEY_PARAM", "").strip()
+    if not name:
+        raise RuntimeError("JEV_API_KEY_PARAM is not set")
+    cached = _jev_key_cache.get(name)
+    if cached:
+        return cached
+    import boto3
+
+    response = boto3.client("ssm", config=ssm_client_config()).get_parameter(
+        Name=name, WithDecryption=True
+    )
+    value = (response.get("Parameter") or {}).get("Value")
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError("the Jev API key parameter is empty")
+    _jev_key_cache[name] = value.strip()
+    return _jev_key_cache[name]
+
+
+def ssm_client_config() -> Config:
+    """One short read for the Jev key, inside the Interpret budget."""
+
+    return Config(
+        connect_timeout=1,
+        read_timeout=2,
+        retries={"max_attempts": 1, "mode": "standard"},
     )
 
 
