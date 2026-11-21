@@ -153,7 +153,8 @@ def _route(response: dict[str, Any]) -> str:
 def _expected_route(expected: str) -> str:
     if expected == "call-me":
         return "HandleCallback"
-    if expected in {"answer", "decline"}:
+    # A driver ``decline`` is not a diagnosis on critical_field (v1.58). It clarifies.
+    if expected == "answer":
         return "AcknowledgeReply → Answered"
     return "ResetLadder"
 
