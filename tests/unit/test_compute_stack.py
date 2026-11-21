@@ -1696,3 +1696,44 @@ def test_main_and_a_bad_shared_inbound_arn_fail_synthesis() -> None:
             )
     finally:
         _restore_env(saved)
+
+
+def test_jev_stays_off_in_the_default_synth(template: Template) -> None:
+    interpret = functions_by_name(template)["oerf-engage-interpret"]
+    variables = interpret["Environment"]["Variables"]
+
+    assert not {"INTERPRET_CLASSIFIER", "JEV_API_KEY_PARAM", "JEV_MODEL"} & set(variables)
+    assert "ssm:GetParameter" not in role_actions(template, "oerf-engage-interpret")
+
+
+def test_jev_flag_selects_jev_and_scopes_the_key_read() -> None:
+    saved = _without_synth_env()
+    try:
+        _stack, enabled = synthesize(context={"jev:enabled": "true"})
+    finally:
+        _restore_env(saved)
+
+    interpret = functions_by_name(enabled)["oerf-engage-interpret"]
+    variables = interpret["Environment"]["Variables"]
+    assert variables["INTERPRET_CLASSIFIER"] == "jev"
+    assert variables["JEV_API_KEY_PARAM"] == "/oerf/jev/api-key"
+    assert variables["JEV_MODEL"] == "jev-1.14.0"
+    assert variables["JEV_TIMEOUT_SECONDS"] == "3"
+    assert "AGENT_RUNTIME_ARN" not in variables
+
+    statements = statements_for_role(enabled, role_logical_id(interpret))
+    [read] = _statements_with_action(statements, "ssm:GetParameter")
+    assert _resource_list(read["Resource"]) == [
+        f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/oerf/jev/api-key"
+    ]
+    assert enabled.find_resources("AWS::SSM::Parameter") == {}
+    assert enabled.find_resources("AWS::BedrockAgentCore::Runtime") == {}
+
+
+def test_jev_and_agentcore_cannot_both_classify() -> None:
+    saved = _without_synth_env()
+    try:
+        with pytest.raises(ValueError, match="enable only one"):
+            synthesize(context={"jev:enabled": "true", "agentcore:enabled": "true"})
+    finally:
+        _restore_env(saved)
