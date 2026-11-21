@@ -1,6 +1,8 @@
 # OERF interface contract
 
-**FROZEN v1.64** — authored 2026-10-18 by OERF-304 (Ananda).
+**FROZEN v1.65** — authored 2026-10-18 by OERF-304 (Ananda).
+
+- v1.65 (2026-11-23, ADR-043) Interpret takes `INTERPRET_CLASSIFIER` (`agentcore`, the default, or `jev`); any other value disables free-text classification. With `jev`, the `critical_field` proposer is the Jev decision model (`oerf/platform/cadence/jev_classifier.py`, pinned `JEV_MODEL`, default `jev-1.14.0`) and the proposal shape, validation, floor, and routing above are unchanged. Jev receives only the reply text and the question. A fault code is proposed only when exactly one pattern candidate is in the tenant catalog; `setpoint_temp_c` is not proposed. The key is the SecureString named by `JEV_API_KEY_PARAM` (`/oerf[/dev]/jev/api-key`); unset means off. Worst case adds a 3-second key read and a 3-second Jev call (`JEV_TIMEOUT_SECONDS`, 1–5) to the tenant read, under the 30-second Interpret timeout. Assess now requires approval only when the recommended option's action (`facility` → `divert`, `continue`) is in `approval.required_for` and the pre-approved limits do not cover it: an approved facility whose `emergency_fee_usd` is known and at most `max_spend` (USD). GatherContext copies `emergency_fee_usd` onto the facility candidate when the row has it.
 
 - v1.64 (2026-11-22) `critical_field` has no rung after `supervisor_escalation`. The next `ComputeNextRung` is exhaustion. `CheckStop` then runs `RecallBeforeExhaust`, the same no-token `EngagementSendViaRouter` read as `RecallAnswer`. A stored reply returns `{status: already_answered, reply}`, `UseStoredReply` places it at `$.reply`, and `Interpret` runs. No stored reply continues to `HasFinalQuestion` and `ApplyExhaustAction`. The recall does not send.
 
