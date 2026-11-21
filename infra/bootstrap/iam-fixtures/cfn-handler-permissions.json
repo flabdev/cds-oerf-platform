@@ -959,6 +959,21 @@
       "lambda:UpdateEventSourceMapping"
     ]
   },
+  "AWS::Lambda::LayerVersion": {
+    "create": [
+      "lambda:PublishLayerVersion"
+    ],
+    "delete": [
+      "lambda:DeleteLayerVersion"
+    ],
+    "list": [],
+    "read": [
+      "lambda:GetLayerVersion"
+    ],
+    "update": [
+      "lambda:PublishLayerVersion"
+    ]
+  },
   "AWS::Lambda::Function": {
     "create": [
       "ec2:DescribeSecurityGroups",

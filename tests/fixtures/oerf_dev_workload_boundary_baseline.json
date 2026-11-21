@@ -8,6 +8,19 @@
       "Resource": "*"
     },
     {
+      "Sid": "ACL",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:PublishLayerVersion",
+        "lambda:DeleteLayerVersion",
+        "lambda:GetLayerVersion"
+      ],
+      "Resource": [
+        "arn:aws:lambda:*:000000000000:layer:*AwsCliLayer*",
+        "arn:aws:lambda:*:000000000000:layer:*AwsCliLayer*:*"
+      ]
+    },
+    {
       "Sid": "NOD",
       "Effect": "Deny",
       "NotAction": [
@@ -53,6 +66,7 @@
         "arn:aws:events:*:000000000000:*-dev-*",
         "arn:aws:kinesis:*:000000000000:*-dev-*",
         "arn:aws:lambda:*:000000000000:*-dev-*",
+        "arn:aws:lambda:*:000000000000:layer:*AwsCliLayer*",
         "arn:aws:logs:*:000000000000:*-dev-*",
         "arn:aws:sns:*:000000000000:*-dev-*",
         "arn:aws:sqs:*:000000000000:*-dev-*",

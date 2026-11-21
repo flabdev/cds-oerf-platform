@@ -59,6 +59,13 @@ def _baseline_statements() -> list[dict]:
     return json.loads(_FIXTURE.read_text(encoding="utf-8"))["Statement"]
 
 
+def _baseline_statement(sid: str) -> dict:
+    for statement in _baseline_statements():
+        if statement.get("Sid") == sid:
+            return statement
+    raise KeyError(sid)
+
+
 def _compressed_statements() -> list[dict]:
     return boundary_policy(
         _ACCOUNT, _REGION, evaluation_guardrail_arn(_ACCOUNT, _REGION)
@@ -118,7 +125,7 @@ def _is_agentcore_runtime_log_tightening(
 
 
 def _baseline_nod_not_action() -> list[str]:
-    return json.loads(_FIXTURE.read_text(encoding="utf-8"))["Statement"][1]["NotAction"]
+    return _baseline_statement("NOD")["NotAction"]
 
 
 def _baseline_notaction_verbatim() -> set[str]:
@@ -159,9 +166,7 @@ def test_notaction_exemption_patterns_do_not_widen_baseline() -> None:
         for pattern in _baseline_nod_not_action()
         if _glob(pattern, action)
     }
-    baseline_nmt = json.loads(_FIXTURE.read_text(encoding="utf-8"))["Statement"][2][
-        "NotAction"
-    ]
+    baseline_nmt = _baseline_statement("NMT")["NotAction"]
     nmt_baseline = {
         action
         for action in actions
