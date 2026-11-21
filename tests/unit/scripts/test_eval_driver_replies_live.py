@@ -74,3 +74,65 @@ def test_a_driver_decline_is_scored_against_the_clarify_route() -> None:
     [row] = report["results"]
     assert row["asl_route"] == "ResetLadder"
     assert row["route_correct"] is True
+
+
+def test_jev_needs_its_own_confirmation_and_a_key(monkeypatch) -> None:
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+
+    assert main(["--backend", "jev", "--confirm-bedrock-call"]) == 2
+    assert main(["--backend", "jev", "--confirm-jev-call"]) == 2
+
+
+def test_the_report_bands_confidence_for_calibration() -> None:
+    rows = [
+        {"id": f"DR-{index}", "text": "t", "lang": "en", "expected_intent": "answer"}
+        for index in range(3)
+    ]
+    answers = iter([("answer", 0.95), ("concern", 0.92), ("answer", 0.5)])
+
+    def classify(_text: str) -> tuple[dict, dict]:
+        category, confidence = next(answers)
+        intent = "unit_running" if category == "answer" else "clarify"
+        proposal = {
+            "category": category,
+            "intent": intent,
+            "fields": {},
+            "confidence": confidence,
+        }
+        return proposal, {"latency_ms": 1, "input_tokens": 1, "output_tokens": 0}
+
+    report = score_rows(rows, classify, model_id="m", prompt_version="v")
+
+    assert report["by_confidence"][">=0.9"] == {"count": 2, "correct": 1, "accuracy": 0.5}
+    assert report["by_confidence"]["<0.8"] == {"count": 1, "correct": 1, "accuracy": 1.0}
+
+
+def test_the_jev_backend_scores_the_corpus_through_the_same_gate(monkeypatch, capsys) -> None:
+    from oerf.platform.agent import jev
+
+    sent: list[dict] = []
+
+    def fake_send(_url, body, _headers, _timeout):
+        request = json.loads(body)
+        sent.append(request)
+        reply = request["state"]["reply"]
+        choice = "call_me" if "call" in reply else "unit_running"
+        answer = {"type": "choice", "choice": choice, "confidence": 0.97}
+        payload = {
+            "model": jev.DEFAULT_MODEL,
+            "answers": {"reply": answer},
+            "usage": {"input_tokens": 50, "output_tokens": 0},
+        }
+        return 200, json.dumps(payload).encode()
+
+    monkeypatch.setenv("JEV_API_KEY", "test-key")
+    monkeypatch.setattr(jev, "_urllib_send", fake_send)
+
+    assert main(["--backend", "jev", "--confirm-jev-call", "--json"]) == 0
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["model_id"] == jev.DEFAULT_MODEL
+    assert report["prompt_version"] == "jev-reply-choice-v1"
+    assert report["invocations"] == len(sent) == report["count"]
+    assert report["results"][0]["input_tokens"] == 50
+    assert "test-key" not in json.dumps(report)

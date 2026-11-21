@@ -41,6 +41,8 @@ from oerf.platform.observability.logging import get_logger, log
 logger = get_logger(__name__)
 
 QUESTION = "reply"
+#: Identifies the question, options, and mapping below. Scorers report this.
+PROMPT_VERSION = "jev-reply-choice-v1"
 
 #: What the driver was asked. Jev reads it with the reply as the state.
 ASKED = (
