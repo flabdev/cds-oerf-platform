@@ -84,6 +84,7 @@ _DEV_APP_TEMPLATE_TYPES: frozenset[str] = frozenset(
         "AWS::IAM::Role",
         "AWS::Lambda::EventSourceMapping",
         "AWS::Lambda::Function",
+        "AWS::Lambda::LayerVersion",
         "AWS::Lambda::Permission",
         "AWS::Logs::Delivery",
         "AWS::Logs::DeliveryDestination",
@@ -255,6 +256,7 @@ _CFN_RESOURCE_TYPE_HINT: dict[str, str] = {
     "AWS::IAM::Role": "role",
     "AWS::Lambda::EventSourceMapping": "eventSourceMapping",
     "AWS::Lambda::Function": "function",
+    "AWS::Lambda::LayerVersion": "layer",
     "AWS::Lambda::Permission": "function",
     "AWS::Logs::Delivery": "delivery",
     "AWS::Logs::DeliveryDestination": "deliveryDestination",
@@ -938,6 +940,11 @@ def probe_resource_for_handler(
 
     account = values["account"]
     region = values["region"]
+    if cfn_type == "AWS::Lambda::LayerVersion" and action.startswith("lambda:"):
+        return (
+            f"arn:aws:lambda:{region}:{account}:layer:"
+            "DeskAssetsDeploymentAwsCliLayer00000001:1"
+        )
     if action == "iam:CreateServiceLinkedRole":
         return (
             f"arn:aws:iam::{account}:role/aws-service-role/"

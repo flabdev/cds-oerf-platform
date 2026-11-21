@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import aws_cdk as cdk
+import pytest
 from aws_cdk.assertions import Template
 
 from infra.cfn_handler_permission_tests import (
@@ -27,13 +28,25 @@ ACCOUNT = "000000000000"
 REGION = "us-east-1"
 
 
-def test_dev_templates_match_handler_fixture_types() -> None:
+def _write_desk_dist(tmp_path: Path) -> Path:
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html></html>", encoding="utf-8")
+    (dist / "assets" / "app.js").write_text("export {}", encoding="utf-8")
+    return dist
+
+
+def test_dev_templates_match_handler_fixture_types(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Fail when a new CFN resource type is added without a handler JSON."""
 
+    monkeypatch.setattr("infra.stacks.api_stack.DESK_DIST", _write_desk_dist(tmp_path))
     merged = {
         "dashboard:enabled": "true",
         "agentcore:enabled": "true",
         "demo:seedDevices": "true",
+        "desk:publish": "true",
     }
     app = cdk.App(context=merged)
     env = cdk.Environment(account=ACCOUNT, region=REGION)
@@ -64,6 +77,7 @@ def test_dev_templates_match_handler_fixture_types() -> None:
         template = Template.from_stack(stack).to_json()
         for resource in template.get("Resources", {}).values():
             synth_types.add(resource["Type"])
+    synth_types = {item for item in synth_types if not item.startswith("Custom::")}
 
     assert synth_types == _DEV_APP_TEMPLATE_TYPES, (
         "Update infra/cfn_handler_permission_tests._DEV_APP_TEMPLATE_TYPES and add "
@@ -103,11 +117,15 @@ def test_handler_files_cover_at_least_one_action_or_are_custom_resource_empty() 
             assert actions, f"{cfn_type} has no handler actions"
 
 
-def test_dev_policies_allow_all_handler_permissions() -> None:
+def test_dev_policies_allow_all_handler_permissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("infra.stacks.api_stack.DESK_DIST", _write_desk_dist(tmp_path))
     merged = {
         "dashboard:enabled": "true",
         "agentcore:enabled": "true",
         "demo:seedDevices": "true",
+        "desk:publish": "true",
     }
     app = cdk.App(context=merged)
     env = cdk.Environment(account=ACCOUNT, region=REGION)

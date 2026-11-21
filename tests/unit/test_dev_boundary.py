@@ -14,6 +14,7 @@ from aws_cdk.assertions import Template
 
 from infra.dev_boundary import (
     _ROLE_MUTATIONS,
+    AWS_CLI_LAYER_ACTIONS,
     BOUNDARY_POLICY_NAME,
     EXEC_DENY_POLICY_NAME,
     EXEC_POLICY2_NAME,
@@ -23,8 +24,11 @@ from infra.dev_boundary import (
     STAR_ACTION_REASONS,
     _glob,
     apply_to_stack,
+    aws_cli_layer_resource_patterns,
     bootstrap_ssm_parameter_arn,
+    boundary_permits,
     dev_name_patterns,
+    intersection_allows,
     is_workload_permissions_boundary,
     nonwhitespace_size,
     runtime_violations,
@@ -263,7 +267,9 @@ def test_policy_documents_fit_the_managed_policy_quota() -> None:
     assert 6144 - exec_size >= 500, f"OerfDevCfnExecPolicy slack too low: {6144 - exec_size}"
     assert 6144 - exec2_size >= 500, f"OerfDevCfnExecPolicy2 slack too low: {6144 - exec2_size}"
     slack = 6144 - boundary_size
-    assert slack >= 440, f"OerfDevWorkloadBoundary slack below 440 chars: {slack}"
+    assert slack >= 140, (
+        f"OerfDevWorkloadBoundary slack below 140 chars (AwsCliLayer ACL): {slack}"
+    )
 
 
 def test_exec_policy_resource_star_rows_cover_u_ec2d_kfh() -> None:
@@ -318,6 +324,35 @@ def test_desk_publish_roles_have_the_boundary(tmp_path, monkeypatch) -> None:
             if "BucketDeployment" in logical_id:
                 deployment_roles.append(logical_id)
     assert deployment_roles
+
+
+def test_api_stack_aws_cli_layers_match_dev_boundary(tmp_path, monkeypatch) -> None:
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html></html>", encoding="utf-8")
+    (dist / "assets" / "app.js").write_text("export {}", encoding="utf-8")
+    monkeypatch.setattr("infra.stacks.api_stack.DESK_DIST", dist)
+    templates = _app_templates(
+        tmp_path / "out",
+        {**_DEV_OFF, "desk:publish": "true", "demo:seedDevices": "false"},
+        desk_dist=dist,
+    )
+    api = templates["OerfApiStack-dev"]
+    layers = [
+        logical_id
+        for logical_id, resource in api["Resources"].items()
+        if resource["Type"] == "AWS::Lambda::LayerVersion"
+    ]
+    assert len(layers) == 3
+    patterns = aws_cli_layer_resource_patterns(ACCOUNT)
+    for logical_id in layers:
+        assert "AwsCliLayer" in logical_id, logical_id
+        base = f"arn:aws:lambda:{REGION}:{ACCOUNT}:layer:{logical_id}"
+        for arn in (base, f"{base}:1"):
+            assert any(_glob(pattern, arn) for pattern in patterns), arn
+            for action in AWS_CLI_LAYER_ACTIONS:
+                assert boundary_permits(action, arn, ACCOUNT, REGION), (action, arn)
+                assert intersection_allows(action, arn, ACCOUNT, REGION), (action, arn)
 
 
 def test_dev_templates_have_no_admin_identity(dev_off, dev_on, dev_min) -> None:
@@ -432,9 +467,11 @@ def test_ci_stack_policies_and_github_role_untouched() -> None:
     boundary_doc = policies[BOUNDARY_POLICY_NAME]["Properties"]["PolicyDocument"]
     bootstrap = bootstrap_ssm_parameter_arn(ACCOUNT, REGION)
     assert "BS" in json.dumps(exec_doc)
+    assert "ACL" in json.dumps(exec_doc)
     assert "KFH" in json.dumps(exec_doc)
     assert "U" in json.dumps(exec2_doc)
     assert bootstrap in json.dumps(boundary_doc)
+    assert "ACL" in json.dumps(boundary_doc)
     _assert_role_mutation_conditions(exec_doc)
     _assert_required_denies(deny_doc)
     _assert_required_denies(boundary_doc)

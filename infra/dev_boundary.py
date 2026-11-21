@@ -72,6 +72,13 @@ _SHARED_EVENTS_RULE = "StepFunctionsGetEventsForStepFunctionsExecutionRule"
 _MAIN_INBOUND_TOPIC_SUFFIX = "OerfComputeStack-InboundTopic*"
 _ASSET_KEY_ALIAS = "alias/cdk-oerfdev-assets-key"
 _LAMBDA_ENV_KEY_ALIAS = "alias/aws/lambda"
+# CDK ``BucketDeployment`` publishes a construct-named layer (``*AwsCliLayer*``) that
+# does not include ``-dev-``; see docs/security/iam-exceptions.md.
+AWS_CLI_LAYER_ACTIONS: tuple[str, ...] = (
+    "lambda:PublishLayerVersion",
+    "lambda:DeleteLayerVersion",
+    "lambda:GetLayerVersion",
+)
 # Customer CMKs are out of scope for dev; block key administration on any key.
 _KMS_KEY_ADMIN_DENY_ACTIONS: tuple[str, ...] = (
     "kms:Schedule*",
@@ -457,6 +464,11 @@ def execution_policy(account: str, region: str, guardrail_arn: str) -> dict[str,
                 _role_pattern(account),
                 condition={"StringEquals": {"iam:PassedToService": _PASS_TO_SERVICES}},
             ),
+            _allow(
+                "ACL",
+                list(AWS_CLI_LAYER_ACTIONS),
+                aws_cli_layer_resource_patterns(account),
+            ),
         ],
     }
     _check_size(document, EXEC_POLICY_NAME)
@@ -521,6 +533,11 @@ def boundary_policy(account: str, region: str, guardrail_arn: str) -> dict[str, 
         "Version": "2012-10-17",
         "Statement": [
             _allow(None, "*", "*"),
+            _allow(
+                "ACL",
+                list(AWS_CLI_LAYER_ACTIONS),
+                aws_cli_layer_resource_patterns(account),
+            ),
             _outside_dev_deny(account, region),
             {
                 "Effect": "Deny",
@@ -781,6 +798,7 @@ def _not_resources(account: str, region: str) -> list[str]:
 
     return [
         *dev_name_patterns(account),
+        *aws_cli_layer_nod_patterns(account),
         _main_topic(account, region),
         _arn("events", region, account, f"rule/{_SHARED_EVENTS_RULE}"),
         _arn("execute-api", region, account, "*"),
@@ -1209,6 +1227,21 @@ def _main_topic(account: str, region: str) -> str:
 def _asset_bucket_arns(account: str, region: str) -> list[str]:
     bucket = f"arn:aws:s3:::cdk-oerfdev-assets-{account}-{region}"
     return [bucket, f"{bucket}/*"]
+
+
+def aws_cli_layer_resource_patterns(account: str) -> list[str]:
+    """Lambda layer ARNs for CDK ``BucketDeployment`` AwsCli bundles."""
+
+    return [
+        f"arn:aws:lambda:*:{account}:layer:*AwsCliLayer*",
+        f"arn:aws:lambda:*:{account}:layer:*AwsCliLayer*:*",
+    ]
+
+
+def aws_cli_layer_nod_patterns(account: str) -> list[str]:
+    """``NOD`` ``NotResource`` entries for AwsCli layers (one pattern covers versions)."""
+
+    return [f"arn:aws:lambda:*:{account}:layer:*AwsCliLayer*"]
 
 
 def _check_size(document: dict[str, Any], name: str) -> None:
