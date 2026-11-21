@@ -49,6 +49,8 @@ class Engagement(BaseModel):
     status: EngagementStatus
     rung: int = Field(ge=1)
     deadline: datetime
+    # Sanitized callback object kept when a reply arrives with no live wait.
+    reply: dict[str, Any] | None = None
 
 
 class EngagementStore(Protocol):
@@ -103,8 +105,15 @@ class EngagementStore(Protocol):
     def stop(self, tenant_id: str, incident_id: str, engagement_id: str) -> Engagement | None:
         """Mark an active engagement STOPPED. A second stop is a no-op."""
 
-    def answer(self, tenant_id: str, incident_id: str, engagement_id: str) -> Engagement:
-        """Mark a WAITING engagement ANSWERED."""
+    def answer(
+        self,
+        tenant_id: str,
+        incident_id: str,
+        engagement_id: str,
+        *,
+        reply: dict[str, Any] | None = None,
+    ) -> Engagement:
+        """Mark a WAITING engagement ANSWERED. Keep ``reply`` on the row when given."""
 
     def reopen_for_clarify(
         self, tenant_id: str, incident_id: str, engagement_id: str
@@ -245,11 +254,21 @@ class MemoryEngagementStore:
         self._engagements[(updated.tenant_id, updated.incident_id, updated.engagement_id)] = updated
         return updated
 
-    def answer(self, tenant_id: str, incident_id: str, engagement_id: str) -> Engagement:
+    def answer(
+        self,
+        tenant_id: str,
+        incident_id: str,
+        engagement_id: str,
+        *,
+        reply: dict[str, Any] | None = None,
+    ) -> Engagement:
         current = self.get(tenant_id, incident_id, engagement_id)
         if current is None or current.status != "WAITING":
             raise ValueError("only a WAITING engagement can be answered")
-        updated = current.model_copy(update={"status": "ANSWERED"})
+        updates: dict[str, Any] = {"status": "ANSWERED"}
+        if reply is not None:
+            updates["reply"] = dict(reply)
+        updated = current.model_copy(update=updates)
         self._engagements[(updated.tenant_id, updated.incident_id, updated.engagement_id)] = updated
         return updated
 
@@ -259,7 +278,7 @@ class MemoryEngagementStore:
         current = self.get(tenant_id, incident_id, engagement_id)
         if current is None or current.status != "ANSWERED":
             return current
-        updated = current.model_copy(update={"status": "WAITING"})
+        updated = current.model_copy(update={"status": "WAITING", "reply": None})
         self._engagements[(updated.tenant_id, updated.incident_id, updated.engagement_id)] = updated
         return updated
 
@@ -543,9 +562,21 @@ class DynamoEngagementStore:
     def stop(self, tenant_id: str, incident_id: str, engagement_id: str) -> Engagement | None:
         return self._set_status(tenant_id, incident_id, engagement_id, "STOPPED", ACTIVE_STATUSES)
 
-    def answer(self, tenant_id: str, incident_id: str, engagement_id: str) -> Engagement:
+    def answer(
+        self,
+        tenant_id: str,
+        incident_id: str,
+        engagement_id: str,
+        *,
+        reply: dict[str, Any] | None = None,
+    ) -> Engagement:
         updated = self._set_status(
-            tenant_id, incident_id, engagement_id, "ANSWERED", frozenset({"WAITING"})
+            tenant_id,
+            incident_id,
+            engagement_id,
+            "ANSWERED",
+            frozenset({"WAITING"}),
+            reply=reply,
         )
         if updated is None or updated.status != "ANSWERED":
             raise ValueError("only a WAITING engagement can be answered")
@@ -555,7 +586,12 @@ class DynamoEngagementStore:
         self, tenant_id: str, incident_id: str, engagement_id: str
     ) -> Engagement | None:
         updated = self._set_status(
-            tenant_id, incident_id, engagement_id, "WAITING", frozenset({"ANSWERED"})
+            tenant_id,
+            incident_id,
+            engagement_id,
+            "WAITING",
+            frozenset({"ANSWERED"}),
+            clear_reply=True,
         )
         if updated is None:
             return self.get(tenant_id, incident_id, engagement_id)
@@ -589,11 +625,19 @@ class DynamoEngagementStore:
         engagement_id: str,
         status: EngagementStatus,
         from_statuses: frozenset[str],
+        *,
+        reply: dict[str, Any] | None = None,
+        clear_reply: bool = False,
     ) -> Engagement | None:
         current = self.get(tenant_id, incident_id, engagement_id)
         if current is None or current.status == status or current.status not in from_statuses:
             return current
-        updated = current.model_copy(update={"status": status})
+        changes: dict[str, Any] = {"status": status}
+        if reply is not None:
+            changes["reply"] = dict(reply)
+        elif clear_reply:
+            changes["reply"] = None
+        updated = current.model_copy(update=changes)
         names = {"#status": "status", "#document": "document"}
         values = {":document": s(updated.model_dump_json()), ":status": s(status)}
         allowed = " OR ".join(f"#status = :from{index}" for index, _ in enumerate(from_statuses))

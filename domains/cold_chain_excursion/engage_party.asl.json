@@ -33,7 +33,32 @@
     "AwaitReply?": {
       "Type": "Choice",
       "Choices": [{"And": [{"Variable": "$.cadence.awaits_reply", "IsPresent": true}, {"Variable": "$.cadence.awaits_reply", "BooleanEquals": false}], "Next": "SendOneWay"}],
+      "Default": "RecallAnswer"
+    },
+    "RecallAnswer": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CHANNEL_ROUTER_ARN__",
+        "Payload": {"step_name": "EngagementSendViaRouter", "workflow.$": "$"}
+      },
+      "ResultSelector": {"status.$": "$.Payload.status", "reply.$": "$.Payload.reply"},
+      "ResultPath": "$.recall",
+      "TimeoutSeconds": 30,
+      "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "EngagementFailed"}],
+      "Next": "AlreadyAnswered?"
+    },
+    "AlreadyAnswered?": {
+      "Type": "Choice",
+      "Choices": [{"And": [{"Variable": "$.recall.status", "IsPresent": true}, {"Variable": "$.recall.status", "StringEquals": "already_answered"}], "Next": "UseStoredReply"}],
       "Default": "SendViaRouter"
+    },
+    "UseStoredReply": {
+      "Type": "Pass",
+      "InputPath": "$.recall.reply",
+      "ResultPath": "$.reply",
+      "Next": "Interpret"
     },
     "SendOneWay": {
       "Type": "Task",

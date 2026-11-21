@@ -119,6 +119,7 @@ def test_valid_reply_resumes_correlated_engagement_with_sanitized_output(setup_i
     assert "tenant_id" not in payload and "task_token" not in payload
     answered = engagements.get(opened.tenant_id, opened.incident_id, opened.engagement_id)
     assert answered is not None and answered.status == "ANSWERED"
+    assert answered.reply is None
 
 
 def test_resume_output_is_the_task_result_not_a_lambda_response_envelope(setup_inbound) -> None:
@@ -633,6 +634,7 @@ def test_expired_task_token_is_acknowledged_without_a_second_call(setup_inbound)
     assert len(callbacks.calls) == 1
     closed = engagements.get(opened.tenant_id, opened.incident_id, opened.engagement_id)
     assert closed is not None and closed.status != "WAITING"
+    assert closed.reply is not None and closed.reply["text"] == "yes"
     assert process_message(_provider("incoming-2"), deps) == "ignored"
 
 
@@ -659,6 +661,7 @@ def test_a_late_token_is_acknowledged_and_named(
     assert "Running" not in text
     closed = engagements.get(opened.tenant_id, opened.incident_id, opened.engagement_id)
     assert closed is not None and closed.status != "WAITING"
+    assert closed.reply is not None and closed.reply["text"] == "Running"
 
 
 def test_a_throttled_callback_is_retried(setup_inbound) -> None:

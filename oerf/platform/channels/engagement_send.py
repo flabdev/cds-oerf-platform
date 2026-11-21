@@ -8,44 +8,72 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from importlib.resources import files
 from typing import Any
 
 from oerf.platform.channels.address import resolve_party_address
-from oerf.platform.channels.engagement_workflow import send_rung
+from oerf.platform.channels.engagement_workflow import AlreadyAnswered, PendingSend, send_rung
 from oerf.platform.channels.router import OutboundRequest
 
 _ROLE = "role"
 
 
 def send_engagement(event: dict[str, Any], *, ports: Any | None = None) -> dict[str, Any]:
-    """Store the token, then send the rung. The return is not the task success."""
+    """Store the token, then send the rung. The return is not the task success.
+
+    A recall with no task token does not send. It returns
+    ``already_answered`` when the row holds a reply, or ``pending`` when the
+    caller should open the wait.
+    """
 
     workflow = event.get("workflow")
     token = event.get("task_token")
     if not isinstance(workflow, dict):
         raise ValueError("engagement send needs a workflow")
-    if not isinstance(token, str) or not token.strip():
-        raise ValueError("engagement send needs a task token")
     built = ports if ports is not None else _ports()
+    token_text = token.strip() if isinstance(token, str) else ""
+    if not token_text:
+        result = send_rung(
+            _ids_request(workflow),
+            ask=_text(workflow, "ask"),
+            policy_id=_text(workflow, "policy_id"),
+            task_token="",
+            rung=1,
+            deadline=datetime(2026, 1, 1, tzinfo=UTC),
+            engagements=built.engagements,
+            registry=built.registry,
+            providers=built.providers,
+            messages=built.messages,
+            response_intent=_response_intent(workflow),
+        )
+        if not isinstance(result, (AlreadyAnswered, PendingSend)):
+            raise RuntimeError("a recall without a task token must not send")
+        return _public(result)
     request, rung, deadline = _request(workflow, built)
-    response = workflow.get("response")
-    intent = response.get("intent") if isinstance(response, dict) else None
-    response_intent = intent.strip() if isinstance(intent, str) and intent.strip() else None
     result = send_rung(
         request,
         ask=_text(workflow, "ask"),
         policy_id=_text(workflow, "policy_id"),
-        task_token=token.strip(),
+        task_token=token_text,
         rung=rung,
         deadline=deadline,
         engagements=built.engagements,
         registry=built.registry,
         providers=built.providers,
         messages=built.messages,
-        response_intent=response_intent,
+        response_intent=_response_intent(workflow),
     )
+    return _public(result)
+
+
+def _public(result: Any) -> dict[str, Any]:
+    """The Lambda body. A recall result includes ``reply`` so the state machine can select it."""
+
+    if isinstance(result, AlreadyAnswered):
+        return {"status": "already_answered", "reply": result.reply}
+    if isinstance(result, PendingSend):
+        return {"status": "pending", "reply": None}
     return {
         "delivered": result.delivered,
         "simulated": result.simulated,
@@ -53,6 +81,27 @@ def send_engagement(event: dict[str, Any], *, ports: Any | None = None) -> dict[
         "channel": result.channel,
         "engagement_id": result.engagement_id,
     }
+
+
+def _response_intent(workflow: dict[str, Any]) -> str | None:
+    response = workflow.get("response")
+    intent = response.get("intent") if isinstance(response, dict) else None
+    return intent.strip() if isinstance(intent, str) and intent.strip() else None
+
+
+def _ids_request(workflow: dict[str, Any]) -> OutboundRequest:
+    """Ids only. A recall returns before this request is delivered."""
+
+    return OutboundRequest(
+        tenant_id=_text(workflow, "tenant_id"),
+        incident_id=_text(workflow, "incident_id"),
+        engagement_id=_text(workflow, "engagement_id"),
+        role=_text(workflow, "role"),
+        template_id="unused",
+        contact_id="unused",
+        recipient="+10000000000",
+        channels=("whatsapp",),
+    )
 
 
 def _request(workflow: dict[str, Any], ports: Any) -> tuple[OutboundRequest, int, datetime]:
