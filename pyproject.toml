@@ -13,6 +13,9 @@ dependencies = [
     "boto3>=1.34",
     "constructs>=10.0.0,<11.0.0",
     "jsonschema>=4",
+    # Synth vendors Lambda wheels with ``python -m pip`` (infra/runtime_asset.py).
+    # uv-created environments do not include pip, so declare it.
+    "pip>=23",
     "pydantic>=2",
 ]
 
