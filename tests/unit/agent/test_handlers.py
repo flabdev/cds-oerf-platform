@@ -157,6 +157,106 @@ def test_assess_escalates_when_no_option_is_feasible() -> None:
     assert dependencies.incidents.get(TENANT, INCIDENT_ID).state == "ESCALATED"
 
 
+def _assess_with_facility(
+    facility: dict[str, Any], *, intent: str = "unit_stopped", **config: Any
+) -> dict[str, Any]:
+    """Assess one nearby facility six minutes into the excursion.
+
+    A stopped unit makes ``continue`` infeasible, so the facility is the
+    recommendation and the approval rules apply to it.
+    """
+    dependencies = _dependencies("DIAGNOSING")
+    incident = dependencies.incidents.get(TENANT, INCIDENT_ID)
+    incident.config_snapshot["approval"].update(config)
+    envelope = _envelope(
+        "Assess",
+        workflow={
+            "ship_time": "2026-10-20T10:10:00Z",
+            "diagnosis": {"engagement_result": {"intent": intent}},
+            "context": {
+                "range_c": [2, 8],
+                "allowance_minutes": 45,
+                "trigger": {"temperature_c": 8.5},
+                "facilities": [
+                    {"id": "FAC-A", "drive_min": 9, "capacity_available": True, **facility}
+                ],
+            },
+        },
+    )
+    result = HANDLERS["Assess"](envelope, dependencies)
+    assert result.decision is not None
+    return result.decision
+
+
+def test_assess_auto_proceeds_a_divert_inside_the_pre_approved_limits() -> None:
+    decision = _assess_with_facility({"approved": True, "emergency_fee_usd": 250})
+
+    assert decision["recommended_option"] == "FAC-A"
+    assert decision["needs_approval"] is False
+    assert decision["route"] == "auto_proceed"
+
+
+@pytest.mark.parametrize(
+    "facility",
+    [
+        pytest.param({"approved": True, "emergency_fee_usd": 900}, id="fee-over-max-spend"),
+        pytest.param({"approved": True}, id="fee-unknown"),
+        pytest.param({"approved": False, "emergency_fee_usd": 250}, id="facility-not-approved"),
+    ],
+)
+def test_assess_asks_for_approval_when_a_divert_is_outside_the_limits(
+    facility: dict[str, Any],
+) -> None:
+    decision = _assess_with_facility(facility)
+
+    assert decision["recommended_option"] == "FAC-A"
+    assert decision["needs_approval"] is True
+    assert decision["route"] == "approval"
+
+
+def test_assess_asks_for_approval_when_auto_proceed_is_off() -> None:
+    decision = _assess_with_facility(
+        {"approved": True, "emergency_fee_usd": 250}, auto_proceed_if_within_limits=False
+    )
+
+    assert decision["route"] == "approval"
+
+
+def test_assess_skips_approval_when_divert_is_not_in_required_for() -> None:
+    decision = _assess_with_facility(
+        {"approved": True, "emergency_fee_usd": 900}, required_for=[]
+    )
+
+    assert decision["needs_approval"] is False
+    assert decision["route"] == "auto_proceed"
+
+
+def test_assess_never_asks_approval_to_continue_on_route() -> None:
+    decision = _assess_with_facility(
+        {"approved": True, "emergency_fee_usd": 900}, intent="unit_running"
+    )
+
+    assert decision["recommended_option"] == "continue"
+    assert decision["route"] == "auto_proceed"
+
+
+def test_gather_context_carries_the_facility_fee() -> None:
+    from oerf.platform.agent.handlers import _facility_candidate
+
+    row = {
+        "facility_id": "FAC-A",
+        "drive_min": 9,
+        "capacity_available": True,
+        "approved": True,
+        "emergency_fee_usd": 250,
+    }
+
+    assert _facility_candidate(row)["emergency_fee_usd"] == 250.0
+    assert "emergency_fee_usd" not in _facility_candidate(
+        {key: value for key, value in row.items() if key != "emergency_fee_usd"}
+    )
+
+
 def test_qa_reads_the_reviewer_callback_result() -> None:
     dependencies = _dependencies("AWAITING_DISPOSITION")
     envelope = _envelope("QA", qa_review={

@@ -22,6 +22,7 @@ Two interfaces are owned elsewhere and are noted here so they are not missed:
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import Any
@@ -266,6 +267,9 @@ def _facility_candidate(row: Mapping[str, Any]) -> dict[str, Any]:
     contact_id = text(row, "contact_id")
     if contact_id is not None:
         candidate["contact_id"] = contact_id
+    fee = field(row, "emergency_fee_usd")
+    if not isinstance(fee, bool) and isinstance(fee, (int, float)):
+        candidate["emergency_fee_usd"] = float(fee)
     return candidate
 
 
@@ -400,15 +404,49 @@ def _recovery_options(
     return options
 
 
-def _within_pre_approved_limits(resolved: Any) -> bool:
-    """Whether an approved recovery needs no human sign-off."""
-    approval = resolved.approval
-    if "recovery_option" not in approval.required_for:
-        return True
-    if not approval.auto_proceed_if_within_limits:
+#: ``approval.required_for`` names actions, not option kinds. A facility option
+#: diverts the shipment; ``continue`` keeps it on its route.
+_ACTION_FOR_KIND = {"facility": "divert", "continue": "continue"}
+
+
+def _needs_approval(
+    resolved: Any, option: Mapping[str, Any] | None, facility: Mapping[str, Any] | None
+) -> bool:
+    """Whether the recommended recovery needs a human before it runs.
+
+    Approval is required when the option's action is in ``required_for`` and
+    the pinned pre-approved limits do not cover it. An action outside
+    ``required_for`` never needs approval.
+    """
+    if option is None:
         return False
-    limits = approval.pre_approved
-    return limits.max_spend > 0 and limits.currency != ""
+    approval = resolved.approval
+    action = _ACTION_FOR_KIND.get(text(option, "kind") or "facility", "divert")
+    if action not in approval.required_for:
+        return False
+    if not approval.auto_proceed_if_within_limits:
+        return True
+    return not _within_pre_approved_limits(approval.pre_approved, facility)
+
+
+def _within_pre_approved_limits(limits: Any, facility: Mapping[str, Any] | None) -> bool:
+    """Whether a facility diversion sits inside the pinned pre-approved limits.
+
+    The facility must be approved when the limits say so, and its emergency fee
+    must be known and no more than ``max_spend``. Facility fees are recorded in
+    USD, so another limit currency cannot be compared and is not covered. An
+    unknown fee is not covered either: spend that cannot be checked needs a human.
+    """
+    if facility is None:
+        return False
+    if limits.facility_must_be_approved and field(facility, "approved") is not True:
+        return False
+    if limits.currency.strip().upper() != "USD":
+        return False
+    fee = field(facility, "emergency_fee_usd")
+    if isinstance(fee, bool) or not isinstance(fee, (int, float)) or not math.isfinite(fee):
+        return False
+    return 0 <= float(fee) <= float(limits.max_spend)
 
 
 def _engagement_intent(workflow: Mapping[str, Any]) -> str | None:
@@ -483,7 +521,17 @@ def assess(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnvelo
 
     ranked = rank_options(projection, options, continue_feasible=not stopped)
     feasible = [option for option in ranked.options if option.feasible]
-    needs_approval = bool(feasible) and not _within_pre_approved_limits(resolved)
+    recommended = next(
+        (option for option in ranked.options if option.id == ranked.recommended_option), None
+    )
+    recommended_option = recommended.model_dump() if recommended is not None else None
+    needs_approval = bool(feasible) and _needs_approval(
+        resolved,
+        recommended_option,
+        _facility_for(context, recommended_option, envelope.step)
+        if recommended_option is not None
+        else None,
+    )
     if not feasible:
         route = "escalate"
     elif needs_approval:
@@ -726,7 +774,8 @@ def approval(envelope: StepEnvelope, dependencies: StepDependencies) -> StepEnve
         load_policies(),
     )
     assessment = mapping(workflow, "assessment") or {}
-    within_limits = _within_pre_approved_limits(resolved)
+    # Assess already applied the pre-approved limits to the recommended option.
+    within_limits = text(assessment, "route") == "auto_proceed"
     verdict = _approval_verdict(workflow, envelope)
     if verdict is None:
         if (
