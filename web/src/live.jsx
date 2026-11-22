@@ -11,6 +11,12 @@ import {
   subscribeBody,
 } from "./deskEvents.js";
 import {
+  initialDeskRefresh,
+  noteDeskMessage,
+  socketPresenceFromRefs,
+  takeDeskPoll,
+} from "./deskRefresh.js";
+import {
   ACCESS_TOKEN_KEY,
   ID_TOKEN_KEY,
   VERIFIER_KEY,
@@ -35,12 +41,17 @@ export function LiveDesk({ config }) {
   const [principal, setPrincipal] = useState(() => principalFromIdToken(tokenFromStorage()));
   const [incidents, setIncidents] = useState(null);
   const [watchId, setWatchId] = useState("");
-  const [connected, setConnected] = useState(false);
+  const [presence, setPresence] = useState("");
   const [expired, setExpired] = useState(false);
   const incidentsRef = useRef(incidents);
   const signingOut = useRef(false);
   const socketRef = useRef([]);
+  const watchRef = useRef(watchId);
+  const tokenRef = useRef(idToken);
+  const refreshRef = useRef(null);
   incidentsRef.current = incidents;
+  watchRef.current = watchId;
+  tokenRef.current = idToken;
   const redirectUri = window.location.origin;
 
   const expireSession = useCallback(() => {
@@ -51,7 +62,7 @@ export function LiveDesk({ config }) {
     setIdToken("");
     setAccessToken("");
     setWatchId("");
-    setConnected(false);
+    setPresence("");
     setIncidents(null);
     setPrincipal(principalFromIdToken(""));
     setExpired(true);
@@ -128,7 +139,7 @@ export function LiveDesk({ config }) {
       setIdToken("");
       setAccessToken("");
       setWatchId("");
-      setConnected(false);
+      setPresence("");
       setIncidents(null);
       setPrincipal(principalFromIdToken(""));
     }
@@ -137,35 +148,109 @@ export function LiveDesk({ config }) {
   }, []);
 
   useEffect(() => {
+    if (!principal.authenticated || !idToken) {
+      refreshRef.current = null;
+      return undefined;
+    }
+    let cancel = false;
+    let timer = 0;
+    let state = initialDeskRefresh(Date.now());
+
+    function arm() {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(run, Math.max(0, state.nextPollAt - Date.now()));
+    }
+
+    function run() {
+      const now = Date.now();
+      const next = takeDeskPoll(state, now);
+      if (next === null) {
+        arm();
+        return;
+      }
+      state = next;
+      refreshOpen().finally(() => {
+        if (!cancel) {
+          arm();
+        }
+      });
+    }
+
+    async function refreshOpen() {
+      if (signingOut.current) {
+        return;
+      }
+      const token = tokenRef.current;
+      const openId = watchRef.current;
+      const seen = state.lastMessageAt;
+      if (!token) {
+        return;
+      }
+      try {
+        const pending = [
+          loadIncidents(config.apiUrl, token),
+          openId ? loadIncident(config.apiUrl, token, openId) : Promise.resolve(null),
+        ];
+        const [rows, detail] = await Promise.all(pending);
+        if (cancel || signingOut.current || state.lastMessageAt !== seen) {
+          return;
+        }
+        setIncidents((current) => {
+          const base = Array.isArray(rows) ? rows : current;
+          return detail ? replaceIncidentRow(base, detail) : base;
+        });
+      } catch (error) {
+        if (!cancel && authFailure(error)) {
+          expireSession();
+        }
+      }
+    }
+
+    refreshRef.current = (at) => {
+      state = noteDeskMessage(state, at);
+      arm();
+    };
+    arm();
+    return () => {
+      cancel = true;
+      window.clearTimeout(timer);
+      refreshRef.current = null;
+    };
+  }, [config.apiUrl, expireSession, idToken, principal.authenticated]);
+
+  useEffect(() => {
     if (!shouldOpenSocket({
       signingOut: signingOut.current,
       authenticated: principal.authenticated,
       accessToken,
       wsUrl: config.wsUrl,
     })) {
+      setPresence("");
       return undefined;
     }
     const pending = new Set();
     let cancel = false;
+    function syncSocketPresence() {
+      if (!cancel && !signingOut.current) {
+        setPresence(socketPresenceFromRefs(socketRef.current));
+      }
+    }
+    setPresence("reconnecting");
     const sockets = deskSubscriptions(watchId).map((subscription) => {
       let opened = false;
       const socket = new WebSocket(`${config.wsUrl}?token=${encodeURIComponent(accessToken)}`);
       socket.addEventListener("open", () => {
         opened = true;
-        if (!cancel && !signingOut.current) {
-          setConnected(true);
-        }
         if (signingOut.current) {
           socket.close(1000);
           return;
         }
         socket.send(JSON.stringify(subscribeBody(subscription.scope, subscription.incidentId)));
+        syncSocketPresence();
       });
       socket.addEventListener("close", (event) => {
         socketRef.current = socketRef.current.filter((item) => item !== socket);
-        if (!cancel && socketRef.current.length === 0) {
-          setConnected(false);
-        }
+        syncSocketPresence();
         if (socketAuthFailed({
           opened,
           code: event.code,
@@ -175,6 +260,7 @@ export function LiveDesk({ config }) {
         }
       });
       socket.addEventListener("message", (message) => {
+      refreshRef.current?.(Date.now());
       const accepted = acceptDeskEvent(message.data, {
         tenantId: principal.tenantId,
         scope: subscription.scope,
@@ -231,7 +317,6 @@ export function LiveDesk({ config }) {
     socketRef.current = sockets;
     return () => {
       cancel = true;
-      setConnected(false);
       socketRef.current = [];
       for (const socket of sockets) {
         socket.close(1000);
@@ -268,7 +353,7 @@ export function LiveDesk({ config }) {
     clearStoredSession();
     setIncidents(null);
     setWatchId("");
-    setConnected(false);
+    setPresence("");
     setIdToken("");
     setAccessToken("");
     setPrincipal(principalFromIdToken(""));
@@ -372,7 +457,7 @@ export function LiveDesk({ config }) {
       onSelect={select}
       onSignOut={signOut}
       onRefresh={refreshIncident}
-      live={connected}
+      presence={presence}
     />
   );
 }

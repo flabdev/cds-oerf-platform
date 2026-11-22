@@ -27,9 +27,9 @@ const PRIVATE_KEYS = new Set([
 
 export function subscribeBody(scope, incidentId) {
   if (scope === "incident") {
-    return { scope: "incident", incident_id: incidentId };
+    return { action: "subscribe", scope: "incident", incident_id: incidentId };
   }
-  return { scope: "tenant" };
+  return { action: "subscribe", scope: "tenant" };
 }
 
 /** One connection is one scope. The list stays subscribed while an incident is open. */

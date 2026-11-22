@@ -158,6 +158,34 @@ def test_subscribe_uses_connection_tenant_not_client_requested_tenant():
 
 
 @pytest.mark.security
+def test_subscribe_accepts_action_subscribe_for_route_selection():
+    table = FakeTable({("WS#conn-1", "METADATA"): {"tenant_id": "tenant-1"}})
+
+    response = ws_handler.handle_subscribe(
+        table,
+        {"body": json.dumps({"action": "subscribe", "scope": "tenant"})},
+        "conn-1",
+        12345,
+    )
+
+    assert response["statusCode"] == 200
+    assert table.put_items[-1]["scope"] == "tenant"
+
+
+def test_subscribe_rejects_unknown_action():
+    table = FakeTable({("WS#conn-1", "METADATA"): {"tenant_id": "tenant-1"}})
+
+    response = ws_handler.handle_subscribe(
+        table,
+        {"body": json.dumps({"action": "ping", "scope": "tenant"})},
+        "conn-1",
+        12345,
+    )
+
+    assert response["statusCode"] == 400
+    assert table.put_items == []
+
+
 def test_subscribe_rejects_all_and_stores_a_tenant_scope():
     table = FakeTable({("WS#conn-1", "METADATA"): {"tenant_id": "tenant-1"}})
 

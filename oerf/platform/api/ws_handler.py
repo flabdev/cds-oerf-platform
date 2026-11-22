@@ -1,7 +1,9 @@
 """WebSocket API Connection & Subscription Handler (ADR-010, ADR-011).
 
 Manages client subscriptions for live incident dashboard updates.
-Routes: $connect, $disconnect, subscribe.
+Routes: $connect, $disconnect, subscribe. The route selection expression is
+``$request.body.action``. The subscribe body has no ``action``, so both the
+tenant and incident frames arrive on ``$default`` and are stored there.
 
 The tenant a connection may stream is resolved by ``ws_authorizer`` from a
 verified Cognito token at ``$connect`` and stored with the connection metadata.
@@ -82,7 +84,10 @@ def parse_subscription(event: dict[str, Any]) -> dict[str, str] | None:
         body = json.loads(event.get("body") or "{}")
     except (TypeError, ValueError):
         return None
-    if not isinstance(body, dict) or set(body) - {"scope", "incident_id"}:
+    if not isinstance(body, dict) or set(body) - {"scope", "incident_id", "action"}:
+        return None
+    action = body.get("action")
+    if action is not None and action != "subscribe":
         return None
     scope = body.get("scope")
     if scope == "tenant":
@@ -237,7 +242,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return {"statusCode": 200, "body": "Disconnected"}
         return handle_disconnect(table, connection_id)
 
-    if route_key == "subscribe":
+    # $request.body.action does not match the contract body, so API Gateway
+    # delivers tenant and incident subscribe frames on $default.
+    if route_key == "subscribe" or (
+        route_key == "$default" and parse_subscription(event) is not None
+    ):
         if not connection_id:
             return {"statusCode": 401, "body": "Unauthorized"}
         return handle_subscribe(table, event, connection_id, connection_ttl())

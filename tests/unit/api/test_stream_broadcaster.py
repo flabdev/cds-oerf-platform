@@ -12,7 +12,7 @@ import pytest
 from boto3.dynamodb.types import TypeSerializer
 from botocore.exceptions import ClientError
 
-from oerf.platform.api import stream_broadcaster as broadcaster
+from oerf.platform.api import stream_broadcaster as broadcaster, ws_handler
 from oerf.platform.api.stream_broadcaster import subscription_targets
 
 PHONE = "+910000000101"
@@ -485,6 +485,100 @@ def test_event_rows_are_not_delivered(monkeypatch) -> None:
 
     assert result == {"batchItemFailures": []}
     assert api.sent == []
+
+
+class _Routing:
+    """Routing table the handler writes and the broadcaster queries."""
+
+    def __init__(self) -> None:
+        self.items: dict[tuple[str, str], dict] = {}
+        self.queried: list[str] = []
+
+    def get_item(self, Key: dict) -> dict:
+        return {"Item": self.items.get((Key["pk"], Key["sk"]))}
+
+    def put_item(self, Item: dict) -> None:
+        self.items[(Item["pk"], Item["sk"])] = Item
+
+    def delete_item(self, Key: dict) -> None:
+        self.items.pop((Key["pk"], Key["sk"]), None)
+
+    def query(self, **kwargs):
+        pk = kwargs["ExpressionAttributeValues"][":pk"]
+        self.queried.append(pk)
+        return {"Items": [item for item in self.items.values() if item.get("pk") == pk]}
+
+
+def _connect(table: _Routing, connection_id: str) -> None:
+    response = ws_handler.handler(
+        {
+            "requestContext": {
+                "routeKey": "$connect",
+                "connectionId": connection_id,
+                "authorizer": {"tenant_id": "tenant-a", "role": "ops_user", "sub": "user-1"},
+            }
+        },
+        None,
+    )
+    assert response["statusCode"] == 200
+
+
+def _default(table: _Routing, connection_id: str, body: str) -> dict:
+    return ws_handler.handler(
+        {
+            "requestContext": {"routeKey": "$default", "connectionId": connection_id},
+            "body": body,
+        },
+        None,
+    )
+
+
+def test_default_subscribe_rows_match_the_broadcaster_lookup(monkeypatch) -> None:
+    """$connect stores no scope. $default stores the row the lookup reads."""
+
+    table = _Routing()
+    monkeypatch.setattr(ws_handler, "get_table", lambda: table)
+    monkeypatch.setattr(ws_handler.time, "time", lambda: 1_700_000_000)
+    _connect(table, "conn-tenant")
+    _connect(table, "conn-incident")
+    _connect(table, "conn-bare")
+    _connect(table, "conn-action")
+
+    assert _default(table, "conn-tenant", '{"scope":"tenant"}')["statusCode"] == 200
+    assert (
+        _default(table, "conn-incident", '{"scope":"incident","incident_id":"INC-X"}')["statusCode"]
+        == 200
+    )
+    action = '{"action":"subscribe","scope":"tenant"}'
+    assert _default(table, "conn-action", action)["statusCode"] == 200
+    assert _default(table, "conn-bare", "")["statusCode"] == 200
+
+    binding = table.items[("WS#conn-tenant", "METADATA")]
+    assert binding["tenant_id"] == "tenant-a"
+    assert "scope" not in binding
+    tenant_row = table.items[("WS_SUB#tenant-a", "CONN#conn-tenant")]
+    incident_row = table.items[("WS_SUB#tenant-a", "CONN#conn-incident")]
+    assert tenant_row["scope"] == "tenant"
+    assert "incident_id" not in tenant_row
+    assert incident_row["scope"] == "incident"
+    assert incident_row["incident_id"] == "INC-X"
+    assert ("WS_SUB#tenant-a", "CONN#conn-bare") not in table.items
+    action_row = table.items[("WS_SUB#tenant-a", "CONN#conn-action")]
+    assert action_row["scope"] == "tenant"
+
+    api = _Api()
+    _wire(monkeypatch, table, api)
+    result = broadcaster.handler({"Records": [_record(_meta())]}, None)
+
+    assert result == {"batchItemFailures": []}
+    assert table.queried == ["WS_SUB#tenant-a"]
+    sent = {connection_id: payload for connection_id, payload in api.sent}
+    assert set(sent) == {"conn-tenant", "conn-incident", "conn-action"}
+    assert sent["conn-tenant"]["event_type"] == "INCIDENT_SUMMARY"
+    assert sent["conn-tenant"]["data"]["state"] == "VERIFYING"
+    assert sent["conn-incident"]["event_type"] == "INCIDENT_UPDATE"
+    assert sent["conn-incident"]["incident_id"] == "INC-X"
+    assert "conn-bare" not in sent
 
 
 def test_item_tenant_that_contradicts_the_incident_key_is_dropped(monkeypatch) -> None:

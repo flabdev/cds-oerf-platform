@@ -4,6 +4,7 @@ import { ActivityFeed } from "./components/ActivityFeed.jsx";
 import { StageStepper } from "./components/StageStepper.jsx";
 import { StatePill } from "./components/StatePill.jsx";
 import { TemperatureChart } from "./components/TemperatureChart.jsx";
+import { socketPresenceLabel } from "./deskRefresh.js";
 import { buildDesk, heroNote } from "./deskView.js";
 import {
   actionNotice,
@@ -237,7 +238,7 @@ function MeterTicks({ total }) {
   );
 }
 
-export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignOut, onRefresh, live }) {
+export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignOut, onRefresh, presence }) {
   const session = sessionView(principal);
   const [selectedTenant, setSelectedTenant] = useState(session.tenantId || "t1");
   const [allowance, setAllowance] = useState(45);
@@ -628,10 +629,10 @@ export function App({ principal, incidents = SAMPLE, onSubmit, onSelect, onSignO
               Incidents
               {list.state === "ready" ? <span className="head-count">{rows.length}</span> : null}
             </h1>
-            {typeof live === "boolean" ? (
-              <span className={live ? "live on" : "live"}>
+            {socketPresenceLabel(presence) ? (
+              <span className={presence === "live" ? "live on" : "live"}>
                 <span className="live-dot" aria-hidden="true" />
-                {live ? "Live" : "Offline"}
+                {socketPresenceLabel(presence)}
               </span>
             ) : null}
           </div>
