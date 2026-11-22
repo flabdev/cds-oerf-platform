@@ -606,8 +606,20 @@ def route_outbound(
             except MissingTemplate:
                 attempts.append(_attempt(request, channel, delivered=False, reason="no_template"))
                 continue
-            except MissingFacts:
-                raise
+            except MissingFacts as exc:
+                log(
+                    logger,
+                    logging.WARNING,
+                    f"missing_facts {exc}",
+                    channel=channel.upper(),
+                    outcome="error",
+                    tenant_id=request.tenant_id,
+                    engagement_id=request.engagement_id,
+                )
+                attempts.append(
+                    _attempt(request, channel, delivered=False, reason="missing_facts")
+                )
+                continue
         if channel == "voice" and "WhatsApp" not in body:
             body = f"{body}{_VOICE_REPLY}"
         provider = providers.get(channel)

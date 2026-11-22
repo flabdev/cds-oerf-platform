@@ -308,6 +308,12 @@ def test_nested_engagement_is_a_token_waiting_state_machine_and_runs_before_asse
     assert states["RecallAnswer"]["ResultSelector"]["status.$"] == "$.Payload.status"
     assert states["RecallAnswer"]["ResultSelector"]["reply.$"] == "$.Payload.reply"
     assert states["RecallAnswer"]["Next"] == "AlreadyAnswered?"
+    assert states["RecallBeforeExhaust"]["Parameters"]["Payload"]["step_name"] == (
+        "EngagementSendViaRouter"
+    )
+    assert "task_token" not in states["RecallBeforeExhaust"]["Parameters"]["Payload"]
+    assert states["RecallBeforeExhaust"]["Next"] == "ExhaustAnswered?"
+    assert states["ExhaustAnswered?"]["Default"] == "HasFinalQuestion"
     assert states["UseStoredReply"]["InputPath"] == "$.recall.reply"
     assert states["UseStoredReply"]["ResultPath"] == "$.reply"
     assert states["UseStoredReply"]["Next"] == "Interpret"
@@ -318,6 +324,10 @@ def test_nested_engagement_is_a_token_waiting_state_machine_and_runs_before_asse
     assert states["SendOneWay"]["Parameters"]["FunctionName"] == "__CHANNEL_ROUTER_ARN__"
     assert states["SendOneWay"]["ResultPath"] == "$.one_way"
     assert states["SendOneWay"]["Catch"][0]["Next"] == "AdvanceRung"
+    one_way = states["SendOneWay"]["Parameters"]["Payload"]
+    assert one_way["role.$"] == "$.cadence.send_role"
+    assert one_way["engagement_started_at.$"] == "$.engagement_started_at"
+    assert "task_token" not in one_way
     assert states["InterpretResult"]["Choices"][2]["Next"] == "AcknowledgeType?"
     assert states["AcknowledgeType?"]["Default"] == "AcknowledgeReply"
     assert states["AcknowledgeType?"]["Choices"] == [
@@ -1173,6 +1183,16 @@ def test_engagement_missing_paths_take_the_safe_branch() -> None:
 
     # No exhausted flag, and a rung is still planned: keep waiting, do not exhaust.
     assert evaluate_choice(states["CheckStop"], {"cadence": {"next_rung": 1}}) == "WaitUntilDue"
+    assert evaluate_choice(
+        states["CheckStop"], {"cadence": {"exhausted": True}}
+    ) == "RecallBeforeExhaust"
+    assert evaluate_choice(
+        states["ExhaustAnswered?"], {"recall": {"status": "pending", "reply": None}}
+    ) == "HasFinalQuestion"
+    assert evaluate_choice(
+        states["ExhaustAnswered?"],
+        {"recall": {"status": "already_answered", "reply": {"text": "Running"}}},
+    ) == "UseStoredReply"
     # No awaits_reply flag: look for a stored reply before opening another wait.
     assert evaluate_choice(states["AwaitReply?"], {"cadence": {}}) == "RecallAnswer"
     assert evaluate_choice(
@@ -1181,6 +1201,17 @@ def test_engagement_missing_paths_take_the_safe_branch() -> None:
     assert evaluate_choice(
         states["AlreadyAnswered?"], {"recall": {"status": "pending"}}
     ) == "SendViaRouter"
+    assert evaluate_choice(
+        states["AlreadyAnswered?"],
+        {"recall": {"status": "pending"}, "cadence": {"awaits_reply": False}},
+    ) == "SendOneWay"
+    assert evaluate_choice(
+        states["AlreadyAnswered?"],
+        {
+            "recall": {"status": "already_answered", "reply": {"text": "Running"}},
+            "cadence": {"awaits_reply": False},
+        },
+    ) == "UseStoredReply"
     # A reply that never produced response: clarify, do not treat it as valid.
     assert evaluate_choice(states["InterpretResult"], {"reply": {"text": "Running"}}) == "Clarify"
 

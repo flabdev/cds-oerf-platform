@@ -132,7 +132,7 @@ def _walk(mode: str, text: str, *, reask: bool = False) -> dict[str, Any]:
         {"Error": {"Code": "TaskTimedOut", "Message": "the wait ended"}},
         "SendTaskSuccess",
     )
-    callbacks = _Callbacks(error=late if mode == "between" else None)
+    callbacks = _Callbacks(error=None if mode == "live" else late)
     deps = _deps(store, registry, callbacks)
     states = ASL["States"]
     current = ASL["StartAt"]
@@ -150,17 +150,22 @@ def _walk(mode: str, text: str, *, reask: bool = False) -> dict[str, Any]:
         nonlocal answered
         assert quoted is not None, "the check-in never produced a message id to quote"
         outcome = process_message(_reply(text, quoted), deps)
-        assert outcome == ("late" if mode == "between" else "resumed")
+        assert outcome == ("resumed" if mode == "live" else "late")
         answered = True
 
-    for _ in range(48):
+    for _ in range(96):
         visited.append(current)
         state = states[current]
         if state["Type"] == "Choice":
             current = evaluate_choice(state, data)
             continue
         if state["Type"] == "Wait":
-            if current == "WaitUntilDue" and seen_one_way and not answered:
+            if (
+                current == "WaitUntilDue"
+                and seen_one_way
+                and not answered
+                and mode != "after_last"
+            ):
                 answer_now()
             current = state["Next"]
             continue
@@ -265,6 +270,12 @@ def _walk(mode: str, text: str, *, reask: bool = False) -> dict[str, Any]:
             _assign(data, state.get("ResultPath") or "$.one_way", outcome)
             seen_one_way = True
             current = state["Next"]
+            if (
+                mode == "after_last"
+                and data["cadence"]["message"] == "supervisor_escalation"
+                and not answered
+            ):
+                answer_now()
             continue
         if current == "AcknowledgeReply":
             outcome = send_one_way(
@@ -369,6 +380,23 @@ def test_reply_during_a_live_wait_still_resumes_the_token() -> None:
     assert saved.reply is None
     assert _templates(result) == ["driver_checkin"]
     assert any(body.startswith("Thanks, noted: Running") for body in _bodies(result))
+
+
+def test_a_reply_after_the_last_rung_is_interpreted_before_exhaustion() -> None:
+    result = _walk("after_last", "Running")
+
+    assert result["one_ways"] == ["driver_call", "supervisor_escalation"]
+    assert "ApplyExhaustAction" not in result["visited"]
+    assert "Exhausted" not in result["visited"]
+    assert result["visited"].index("SendOneWay") < result["visited"].index("RecallBeforeExhaust")
+    assert result["visited"].index("RecallBeforeExhaust") < result["visited"].index("Interpret")
+    assert result["interpreted"] == ["Running"]
+    assert result["terminal"]["status"] == "answered"
+    assert result["terminal"]["intent"] == "unit_running"
+    saved = result["store"].get("t1", "INC-000130", "ENG-INC-000130-driver-diagnose")
+    assert saved is not None and saved.status == "ANSWERED"
+    assert saved.reply is not None and saved.reply["text"] == "Running"
+    assert "supervisor_escalation" not in _templates(result)
 
 
 def test_recall_choice_routes_a_stored_reply_to_interpret() -> None:

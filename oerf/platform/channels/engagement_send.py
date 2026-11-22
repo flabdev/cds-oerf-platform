@@ -50,7 +50,7 @@ def send_engagement(event: dict[str, Any], *, ports: Any | None = None) -> dict[
         if not isinstance(result, (AlreadyAnswered, PendingSend)):
             raise RuntimeError("a recall without a task token must not send")
         return _public(result)
-    request, rung, deadline = _request(workflow, built)
+    request, rung, deadline = _request(workflow, built, now=datetime.now(UTC))
     result = send_rung(
         request,
         ask=_text(workflow, "ask"),
@@ -104,7 +104,12 @@ def _ids_request(workflow: dict[str, Any]) -> OutboundRequest:
     )
 
 
-def _request(workflow: dict[str, Any], ports: Any) -> tuple[OutboundRequest, int, datetime]:
+def _request(
+    workflow: dict[str, Any],
+    ports: Any,
+    *,
+    now: datetime | None = None,
+) -> tuple[OutboundRequest, int, datetime]:
     cadence = workflow.get("cadence")
     if not isinstance(cadence, dict):
         raise ValueError("engagement send needs cadence")
@@ -132,6 +137,16 @@ def _request(workflow: dict[str, Any], ports: Any) -> tuple[OutboundRequest, int
         raise ValueError("engagement send needs cadence.message and cadence.channel")
     if not isinstance(rung, int) or not isinstance(deadline, str):
         raise ValueError("engagement send needs cadence.next_rung and cadence.deadline")
+    rendered = _render_facts(facts)
+    if message == "supervisor_escalation":
+        # Drive time and other callers use minutes for a different fact.
+        # This rung's minutes is only the silence, so a copied value is dropped
+        # when the engagement has no start time.
+        silence = _silence_minutes(workflow, now if now is not None else datetime.now(UTC))
+        if silence is None:
+            rendered.pop("minutes", None)
+        else:
+            rendered["minutes"] = silence
     return (
         OutboundRequest(
             tenant_id=_text(workflow, "tenant_id"),
@@ -139,7 +154,7 @@ def _request(workflow: dict[str, Any], ports: Any) -> tuple[OutboundRequest, int
             engagement_id=_text(workflow, "engagement_id"),
             role=role,
             template_id=message,
-            facts=_render_facts(facts),
+            facts=rendered,
             contact_id=contact_id.strip(),
             recipient=recipient,
             channels=(channel,),
@@ -148,6 +163,41 @@ def _request(workflow: dict[str, Any], ports: Any) -> tuple[OutboundRequest, int
         rung,
         datetime.fromisoformat(deadline.replace("Z", "+00:00")),
     )
+
+
+def _silence_minutes(workflow: dict[str, Any], now: datetime) -> int | None:
+    """Whole minutes since the engagement's first message, rounded down.
+
+    ``engagement_started_at`` is the first cadence plan, which is when the
+    first message is due. The supervisor template's second parameter is this
+    silence at send time, so the wait before the rung is included. A clock
+    behind that start is zero. No start time leaves the fact unset.
+    """
+
+    origin = _timestamp(workflow.get("engagement_started_at"))
+    if origin is None:
+        history = workflow.get("history")
+        first = history[0] if isinstance(history, list) and history else None
+        sent_at = first.get("sent_at") if isinstance(first, dict) else None
+        origin = _timestamp(sent_at)
+    if origin is None:
+        return None
+    elapsed = (now - origin).total_seconds()
+    if elapsed < 0:
+        return 0
+    return int(elapsed // 60)
+
+
+def _timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed
 
 
 def _render_facts(facts: dict[str, Any]) -> dict[str, Any]:

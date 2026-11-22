@@ -20,8 +20,8 @@
       "Type": "Choice",
       "Choices": [
         {"Variable": "$.stop_reason", "IsPresent": true, "Next": "Stopped"},
-        {"And": [{"Variable": "$.cadence.exhausted", "IsPresent": true}, {"Variable": "$.cadence.exhausted", "BooleanEquals": true}], "Next": "HasFinalQuestion"},
-        {"Variable": "$.cadence.next_rung", "IsPresent": false, "Next": "HasFinalQuestion"}
+        {"And": [{"Variable": "$.cadence.exhausted", "IsPresent": true}, {"Variable": "$.cadence.exhausted", "BooleanEquals": true}], "Next": "RecallBeforeExhaust"},
+        {"Variable": "$.cadence.next_rung", "IsPresent": false, "Next": "RecallBeforeExhaust"}
       ],
       "Default": "WaitUntilDue"
     },
@@ -32,7 +32,7 @@
     },
     "AwaitReply?": {
       "Type": "Choice",
-      "Choices": [{"And": [{"Variable": "$.cadence.awaits_reply", "IsPresent": true}, {"Variable": "$.cadence.awaits_reply", "BooleanEquals": false}], "Next": "SendOneWay"}],
+      "Choices": [{"And": [{"Variable": "$.cadence.awaits_reply", "IsPresent": true}, {"Variable": "$.cadence.awaits_reply", "BooleanEquals": false}], "Next": "RecallAnswer"}],
       "Default": "RecallAnswer"
     },
     "RecallAnswer": {
@@ -51,7 +51,10 @@
     },
     "AlreadyAnswered?": {
       "Type": "Choice",
-      "Choices": [{"And": [{"Variable": "$.recall.status", "IsPresent": true}, {"Variable": "$.recall.status", "StringEquals": "already_answered"}], "Next": "UseStoredReply"}],
+      "Choices": [
+        {"And": [{"Variable": "$.recall.status", "IsPresent": true}, {"Variable": "$.recall.status", "StringEquals": "already_answered"}], "Next": "UseStoredReply"},
+        {"And": [{"Variable": "$.cadence.awaits_reply", "IsPresent": true}, {"Variable": "$.cadence.awaits_reply", "BooleanEquals": false}], "Next": "SendOneWay"}
+      ],
       "Default": "SendViaRouter"
     },
     "UseStoredReply": {
@@ -69,10 +72,11 @@
           "step_name": "EngagementSendOneWay",
           "tenant_id.$": "$.tenant_id",
           "incident_id.$": "$.incident_id",
-          "role.$": "$.role",
+          "role.$": "$.cadence.send_role",
           "message.$": "$.cadence.message",
           "channel.$": "$.cadence.channel",
           "facts.$": "$.facts",
+          "engagement_started_at.$": "$.engagement_started_at",
           "dedupe_key.$": "States.Format('{}:{}:{}', $.incident_id, $.cadence.message, $.cadence.next_rung)"
         }
       },
@@ -218,6 +222,25 @@
       "Next": "Answered"
     },
     "Answered": {"Type": "Pass", "Parameters": {"status": "answered", "intent.$": "$.response.intent", "fields.$": "$.response.fields", "evidence_refs.$": "$.response.evidence_refs", "engagement_id.$": "$.engagement_id"}, "End": true},
+    "RecallBeforeExhaust": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CHANNEL_ROUTER_ARN__",
+        "Payload": {"step_name": "EngagementSendViaRouter", "workflow.$": "$"}
+      },
+      "ResultSelector": {"status.$": "$.Payload.status", "reply.$": "$.Payload.reply"},
+      "ResultPath": "$.recall",
+      "TimeoutSeconds": 30,
+      "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 2, "BackoffRate": 2}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "EngagementFailed"}],
+      "Next": "ExhaustAnswered?"
+    },
+    "ExhaustAnswered?": {
+      "Type": "Choice",
+      "Choices": [{"And": [{"Variable": "$.recall.status", "IsPresent": true}, {"Variable": "$.recall.status", "StringEquals": "already_answered"}], "Next": "UseStoredReply"}],
+      "Default": "HasFinalQuestion"
+    },
     "HasFinalQuestion": {
       "Type": "Choice",
       "Choices": [{"Variable": "$.cadence.final_question", "IsPresent": true, "Next": "PrepareFinalQuestion"}],

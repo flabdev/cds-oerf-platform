@@ -70,6 +70,7 @@ def compute_rung(workflow: dict[str, Any], now: datetime) -> dict[str, Any]:
     updated = dict(workflow)
     updated["engagement_started_at"] = started.isoformat()
     updated["cadence"] = _cadence(decision)
+    _mark_role_notification(updated)
     action = decision.get("exhaust_action")
     if decision.get("exhausted") and action is not None:
         updated["exhaust_action"] = action
@@ -93,6 +94,27 @@ def advance_rung(workflow: dict[str, Any], now: datetime) -> dict[str, Any]:
     updated.pop("response", None)
     updated.pop("rung_timeout", None)
     return updated
+
+
+def _mark_role_notification(workflow: dict[str, Any]) -> None:
+    """A rung addressed to someone else is a one-way notice, not a new wait.
+
+    The engagement role stays the original party. ``send_role`` is who
+    ``SendOneWay`` addresses. A matching ``to_role`` keeps the reply wait.
+    """
+
+    cadence = workflow.get("cadence")
+    if not isinstance(cadence, dict):
+        return
+    party = workflow.get("role")
+    party_name = party.strip() if isinstance(party, str) else ""
+    notify = cadence.get("to_role")
+    notify_name = notify.strip() if isinstance(notify, str) else ""
+    if notify_name and notify_name != party_name:
+        cadence["awaits_reply"] = False
+        cadence["send_role"] = notify_name
+    elif party_name:
+        cadence["send_role"] = party_name
 
 
 def _started(workflow: dict[str, Any], now: datetime) -> datetime:
