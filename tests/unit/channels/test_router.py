@@ -11,7 +11,6 @@ from oerf.platform.channels.providers.aws import WhatsAppProvider
 from oerf.platform.channels.providers.fake import FakeProvider
 from oerf.platform.channels.registry import MemoryPhoneRegistry
 from oerf.platform.channels.router import OutboundRequest, route_outbound
-from oerf.platform.channels.templates import MissingFacts
 
 MESSAGES = {
     "messages": {
@@ -74,21 +73,42 @@ def test_opted_out_contact_never_reaches_a_provider() -> None:
     assert engagements.correlate("whatsapp-1") is None
 
 
-def test_missing_facts_fail_before_a_provider_call() -> None:
+def test_missing_facts_fail_that_channel_and_fall_through(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     registry, engagements = _open()
     whatsapp = FakeProvider("whatsapp")
-    request = _request().model_copy(update={"facts": {}})
+    sms = FakeProvider("sms")
+    request = _request().model_copy(update={"facts": {}, "channels": ("whatsapp", "sms")})
+    messages = {
+        "messages": {
+            "driver_checkin": {
+                "whatsapp": "Check {shipment_id} on WhatsApp.",
+                "sms": "Temperature alert.",
+            }
+        }
+    }
 
-    with pytest.raises(MissingFacts):
-        route_outbound(
-            request,
-            registry=registry,
-            engagements=engagements,
-            providers={"whatsapp": whatsapp},
-            messages=MESSAGES,
-        )
+    result = route_outbound(
+        request,
+        registry=registry,
+        engagements=engagements,
+        providers={"whatsapp": whatsapp, "sms": sms},
+        messages=messages,
+    )
 
+    assert result.delivered is True
+    assert result.channel == "sms"
+    assert [(item.channel, item.delivered, item.reason) for item in result.attempts] == [
+        ("whatsapp", False, "missing_facts"),
+        ("sms", True, None),
+    ]
     assert whatsapp.calls == []
+    assert sms.calls
+    text = capsys.readouterr().out
+    assert '"msg":"missing_facts' in text
+    assert "shipment_id" in text
+    assert "+910000000101" not in text
 
 
 def test_voice_body_directs_the_reply_to_whatsapp() -> None:

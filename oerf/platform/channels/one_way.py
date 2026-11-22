@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from oerf.platform.channels.address import AddressError, resolve_party_address
+from oerf.platform.channels.engagement_send import _silence_minutes
 from oerf.platform.channels.router import OutboundRequest, route_outbound
 from oerf.platform.observability.logging import get_logger, log
 from oerf.platform.storage.dynamo import epoch_seconds, is_conditional_failure, key, n, s, text
@@ -172,18 +173,23 @@ class DynamoFacilityReader:
         return row
 
 
-def send_one_way(event: dict[str, Any], *, ports: Any | None = None) -> dict[str, Any]:
+def send_one_way(
+    event: dict[str, Any],
+    *,
+    ports: Any | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     """Send one message, or return failed. This function does not raise for a send error."""
 
     built = ports if ports is not None else _ports()
     try:
-        return _send(event, built)
+        return _send(event, built, now or datetime.now(UTC))
     except Exception as exc:
         _log_failure(event, exc)
         return _outcome("failed", None)
 
 
-def _send(event: dict[str, Any], ports: Any) -> dict[str, Any]:
+def _send(event: dict[str, Any], ports: Any, now: datetime) -> dict[str, Any]:
     tenant_id = _text(event, "tenant_id")
     incident_id = _text(event, "incident_id")
     role = _text(event, "role")
@@ -209,7 +215,7 @@ def _send(event: dict[str, Any], ports: Any) -> dict[str, Any]:
         stored = existing.get("provider_msg_id")
         return _outcome("skipped", stored if isinstance(stored, str) else None)
     contact_id = _contact_id(facts, role)
-    if contact_id is None and message == "reopen_alert":
+    if contact_id is None:
         resolver = getattr(ports.registry, "get_unique_contact_for_role", None)
         contact = resolver(tenant_id, role) if callable(resolver) else None
         contact_id = contact.contact_id if contact is not None else None
@@ -230,6 +236,18 @@ def _send(event: dict[str, Any], ports: Any) -> dict[str, Any]:
     template_facts = _template_facts(message, facts, tenant_id, ports)
     if template_facts is None:
         return _outcome("failed", None)
+    if message == "supervisor_escalation":
+        silence = _silence_minutes(
+            {
+                "engagement_started_at": event.get("engagement_started_at"),
+                "history": event.get("history"),
+            },
+            now,
+        )
+        if silence is None:
+            template_facts.pop("minutes", None)
+        else:
+            template_facts["minutes"] = silence
     result = route_outbound(
         OutboundRequest(
             tenant_id=tenant_id,

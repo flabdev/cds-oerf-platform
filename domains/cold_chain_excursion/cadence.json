@@ -12,7 +12,7 @@
         { "after": "PT1M", "anchor": "engagement_start", "action": "send", "channel": "whatsapp", "message": "driver_reminder" },
         { "after": "PT90S", "anchor": "engagement_start", "action": "send", "channel": "sms", "message": "driver_reminder" },
         { "after": "PT2M", "anchor": "engagement_start", "action": "call", "channel": "voice", "message": "driver_call" },
-        { "after": "PT3M", "anchor": "engagement_start", "action": "escalate", "channel": "whatsapp", "message": "supervisor_escalation", "to_role": "fleet_supervisor" }
+        { "after": "PT3M", "anchor": "engagement_start", "action": "escalate", "channel": "whatsapp", "message": "supervisor_escalation", "to_role": "ops_manager" }
       ]
     },
     {

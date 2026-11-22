@@ -52,12 +52,11 @@ Drivers are **one parameter per contact**: `{prefix}/{tenant}/driver/{contact_id
 | Driver Mudita (`C-T1-DRV`) | `/oerf/dev/demo-numbers/t1/driver/C-T1-DRV` | walks on `PH-2841` |
 | Driver Ananda (`C-T1-DRV-ANANDA`) | `/oerf/dev/demo-numbers/t1/driver/C-T1-DRV-ANANDA` | walks on Ananda's shipment (below) |
 | Driver Vivek (`C-T1-DRV-VIVEK`) | `/oerf/dev/demo-numbers/t1/driver/C-T1-DRV-VIVEK` | three-driver rehearsal only |
-| Ops manager | `/oerf/dev/demo-numbers/t1/ops_manager` | ops notices (scenario 1) |
+| Ops manager | `/oerf/dev/demo-numbers/t1/ops_manager` | ops notices (scenario 1) and the silent-driver escalation (scenario 3) |
 | QA | `/oerf/dev/demo-numbers/t1/<qa role>` | QA notices, if sent on WhatsApp |
 | Facility | `/oerf/dev/demo-numbers/t1/facility` | facility notices (scenario 2) |
-| Fleet supervisor | `/oerf/dev/demo-numbers/t1/<supervisor role>` | escalation rung (scenario 3) |
 
-Fill in the exact QA and supervisor role names from `sim/seed/t1/contacts.json` before the rehearsal. Facility A and B are separate contacts but share the facility role parameter.
+Fill in the QA role name from `sim/seed/t1/contacts.json` before the rehearsal. Facility A and B are separate contacts but share the facility role parameter. The silent-driver escalation uses the ops manager parameter above. It does not read a fleet-supervisor parameter.
 
 Put a number in once. The value is read without echo and is never committed. Use the type of the existing parameters (`SecureString`):
 
@@ -203,20 +202,22 @@ Capture it once, on a spare incident. Publish the shared sensor and do not answe
 
 The rungs, from the start of the engagement:
 
-| After | Channel | Message |
-| --- | --- | --- |
-| 0s | WhatsApp | `oerf_driver_checkin` |
-| 90s | SMS | driver reminder |
-| 1 min | WhatsApp | `oerf_driver_reminder` |
-| 2 min | voice | `driver_call` (the router does not place a call) |
-| 3 min | WhatsApp | `oerf_supervisor_escalation` to the fleet supervisor |
-| 4 min | | exhausted, `continue_without`, cause `cause_unknown` |
+| After | Channel | Message | Who |
+| --- | --- | --- | --- |
+| 0s | WhatsApp | `oerf_driver_checkin` | driver |
+| 1 min | WhatsApp | `oerf_driver_reminder` | driver |
+| 90s | SMS | driver reminder | driver |
+| 2 min | voice | `driver_call` (the router does not place a call) | driver |
+| 3 min | WhatsApp | `oerf_supervisor_escalation`, one-way, no reply wait | ops manager |
+| 4 min | | exhausted, `continue_without`, cause `cause_unknown` | |
+
+The driver engagement stays the driver's. A later driver reply still matches that engagement. A reply from the ops manager to the escalation does not resume it. There is no rung after the supervisor notice: the next plan exhausts. A driver reply stored after that notice and before exhaustion is interpreted. A missing reply exhausts.
 
 On a live router:
 
 - The SMS rung fails while the SNS account is in the SMS sandbox, unless the driver's number is verified there. Expect an error line on that rung; note it on the screenshot.
 - The voice rung records the attempt but places no call. Note it on the screenshot.
-- The supervisor escalation needs the fleet supervisor's parameter (see "Live numbers").
+- The supervisor escalation uses the ops manager parameter (see "Live numbers"). The driver does not receive that message.
 
 After exhaustion the parent leaves the driver engagement and runs Assess. A missing answer keeps continue.
 
