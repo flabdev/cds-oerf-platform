@@ -79,7 +79,7 @@ The reset stops that tenant's `RUNNING` executions of `oerf-engage-party` and th
 
 ## demo-sensor
 
-Publishes two `TemperatureReading` events on the stage bus (`oerf-events` on main, `oerf-dev-events` on dev), source `sim.reefer`: 8.1 °C, then 8.6 °C. Event time is thirty seconds apart. Wall time is four seconds apart. Two readings above 8 °C open the incident. One reading opens nothing.
+Publishes two `TemperatureReading` events on the stage bus (`oerf-events` on main, `oerf-dev-events` on dev), source `sim.reefer`: 8.1 °C, then 8.6 °C. Each reading is stamped when it is published. The default pause is four seconds, so the two readings are four seconds apart. `--backdate` stamps them thirty seconds apart, ending when the command starts, and the pause only spaces the publishes. Two readings above 8 °C open the incident. One reading opens nothing.
 
 The command then waits up to 30 seconds for a new `{tenant}-INC-*` execution on `oerf-cold-chain`. Each run uses a new EventBridge id. Replaying the same id is ignored for 7 days, and prep does not clear those `INGEST#` rows.
 

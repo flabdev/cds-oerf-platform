@@ -101,12 +101,12 @@ The commands below use `PH-2841` / `RF-7781`. For a walk on Ananda's phone, use 
 
 ## Shared sensor
 
-Two readings above 8 °C open the incident. One reading opens nothing. `SCENARIO=excursion` ends on a single reading above 8 °C, so it does not open `PH-2841`. Publish temperatures instead. Event times are 30 seconds apart and end when the command starts. Twelve readings at 5.2 °C cover the 5-minute in-range window Verify uses (`stable_in_range` is 5 minutes, range 2–8 °C).
+Two readings above 8 °C open the incident. One reading opens nothing. `SCENARIO=excursion` ends on a single reading above 8 °C, so it does not open `PH-2841`. Publish temperatures instead. Each reading is stamped when it is published, and `--pause` is the gap Verify reads. `--backdate` stamps the series 30 seconds apart, ending when the command starts, and `--pause` only spaces the publishes. Twelve readings at 5.2 °C on that grid cover the 5-minute in-range window Verify uses (`stable_in_range` is 5 minutes, range 2–8 °C).
 
 ```text
 STAGE=dev .venv/bin/python -m scripts.demo sensor \
   --stage dev --profile <aws-profile> --account <account-id> \
-  --tenant t1 --shipment PH-2841 --device RF-7781 \
+  --tenant t1 --shipment PH-2841 --device RF-7781 --backdate \
   --temps 8.1,8.6,5.2,5.2,5.2,5.2,5.2,5.2,5.2,5.2,5.2,5.2,5.2,5.2
 ```
 

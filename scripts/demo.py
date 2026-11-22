@@ -169,6 +169,7 @@ def main(
                     now,
                     pause_for,
                     event_bus=target.event_bus,
+                    backdate=args.backdate,
                 )
         elif args.command == "reply":
             post_driver_reply(
@@ -201,6 +202,7 @@ def main(
                 clock=now,
                 sleep=pause_for,
                 send_reply=sender,
+                backdate=args.backdate,
             )
         else:
             raise DemoError(f"unknown command {args.command}")
@@ -386,7 +388,10 @@ def cleanup(
 
 
 def event_moments(end: datetime, count: int) -> list[datetime]:
-    """Event times ending at ``end``, thirty seconds apart."""
+    """Backdated event times ending at ``end``, thirty seconds apart.
+
+    ``--backdate`` uses this grid. The default stamps each reading when it is published.
+    """
 
     if count < 1:
         raise DemoError("at least one reading is required")
@@ -439,8 +444,15 @@ def publish_excursion(
     sleep: Sleeper,
     timeout: float = SENSOR_TIMEOUT,
     event_bus: str | None = None,
+    backdate: bool = False,
 ) -> str:
-    """Publish the readings and wait until a new cold-chain execution exists."""
+    """Publish the readings and wait until a new cold-chain execution exists.
+
+    Each reading is stamped with ``clock()`` at the moment it is published, and
+    ``pause`` is the wait between publishes, so that wait is the gap between
+    stamps. ``backdate`` restores the older grid: thirty seconds apart, ending
+    when the command starts, and ``pause`` only spaces the publishes.
+    """
 
     bus = event_bus if event_bus is not None else resolve_stage().event_bus
     low, high = safe_range(clients.dynamodb, clients.tenant_table, tenant_id, shipment_id)
@@ -449,8 +461,7 @@ def publish_excursion(
         f"tenant {tenant_id} · shipment {shipment_id} · device {device_id} · "
         f"safe range {range_text(low, high)}"
     )
-    end = clock()
-    moments = event_moments(end, len(temps))
+    moments = event_moments(clock(), len(temps)) if backdate else None
     known = {
         item.name
         for item in _for_tenant(
@@ -459,7 +470,8 @@ def publish_excursion(
         )
     }
     last = len(temps) - 1
-    for index, (temperature, moment) in enumerate(zip(temps, moments, strict=True)):
+    for index, temperature in enumerate(temps):
+        moment = moments[index] if moments is not None else clock()
         accept_reading(
             events,
             reading_entry(
@@ -647,6 +659,7 @@ def rehearse(
     clock: Clock,
     sleep: Sleeper,
     send_reply: ReplySender,
+    backdate: bool = False,
 ) -> None:
     """Prep, publish the excursion, post the mocked reply, then print status."""
 
@@ -662,6 +675,7 @@ def rehearse(
         pause,
         clock,
         sleep,
+        backdate=backdate,
     )
     if not live:
         functions = _client(session, "lambda")
@@ -1319,9 +1333,16 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("preflight", parents=[common], help="Check the demo account before a run.")
     commands.add_parser("prep", parents=[common], help="Reset, reseed, and write runtime rows.")
-    sensor = commands.add_parser("sensor", parents=[common], help="Publish the excursion readings.")
-    sensor.add_argument("--temps", default="8.1,8.6")
-    sensor.add_argument("--pause", type=float, default=4)
+    sensor = commands.add_parser(
+        "sensor",
+        parents=[common],
+        help="Publish the excursion readings.",
+        description=(
+            "Publish --temps on the stage bus. Each reading is stamped when it is "
+            "published, and --pause is the gap between those stamps."
+        ),
+    )
+    _add_reading_arguments(sensor)
     sensor.add_argument(
         "--scenario",
         default=None,
@@ -1340,10 +1361,33 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("status", parents=[common], help="Print the execution and incident.")
     commands.add_parser("cleanup", parents=[common], help="Reset the tenant and require zero.")
     run = commands.add_parser("run", parents=[common], help="Prep, sensor, mocked reply, status.")
-    run.add_argument("--temps", default="8.1,8.6")
-    run.add_argument("--pause", type=float, default=4)
+    _add_reading_arguments(run)
     run.add_argument("--button", default="running", choices=("running", "stopped"))
     return parser
+
+
+def _add_reading_arguments(parser: argparse.ArgumentParser) -> None:
+    """``--temps``, ``--pause``, and ``--backdate`` for sensor and run."""
+
+    parser.add_argument(
+        "--temps",
+        default="8.1,8.6",
+        help="Comma-separated readings. Each one is stamped when it is published.",
+    )
+    parser.add_argument(
+        "--pause",
+        type=float,
+        default=4,
+        help="Seconds to wait between readings. That wait is the gap in the timestamps.",
+    )
+    parser.add_argument(
+        "--backdate",
+        action="store_true",
+        help=(
+            "Stamp the series thirty seconds apart, ending when the command starts. "
+            "--pause only spaces the publishes."
+        ),
+    )
 
 
 if __name__ == "__main__":
