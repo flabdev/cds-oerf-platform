@@ -393,37 +393,16 @@ def test_sensor_publishes_the_run_sheet_detail_and_hides_the_event_id(
     event_stub.assert_no_pending_responses()
 
 
-def test_sensor_detail_is_thirty_seconds_apart() -> None:
-    dynamo, dynamo_stub = _aws("dynamodb")
-    _stub_range(dynamo_stub)
-    steps, step_stub = _aws("stepfunctions")
-    step_stub.add_response("list_executions", {"executions": []})
-    step_stub.add_response(
-        "list_executions",
-        {"executions": [_execution_item("t1-INC-000003", COLD_ARN)]},
-    )
-    events, event_stub = _aws("events")
-    event_stub.add_response("put_events", {"FailedEntryCount": 0, "Entries": [{"EventId": "1"}]})
-    event_stub.add_response("put_events", {"FailedEntryCount": 0, "Entries": [{"EventId": "2"}]})
-    published = Capture(events)
-    clock = Timeline()
+def test_sensor_stamps_each_reading_when_it_is_published() -> None:
+    published = _publish_pair(pause=7)
 
-    publish_excursion(
-        _clients(dynamodb=dynamo, stepfunctions=steps),
-        published,
-        "t1",
-        "PH-2841",
-        "RF-7781",
-        (8.1, 8.6),
-        0,
-        clock,
-        clock.sleep,
-    )
-
-    details = [json.loads(call["Entries"][0]["Detail"]) for call in published.calls]
-    first = datetime.strptime(details[0]["ts"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
-    second = datetime.strptime(details[1]["ts"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
-    assert second - first == timedelta(seconds=30)
+    details = [json.loads(call["Entries"][0]["Detail"]) for call in published]
+    first = _reading_time(details[0]["ts"])
+    second = _reading_time(details[1]["ts"])
+    assert first == NOW
+    assert second - first == timedelta(seconds=7)
+    assert published[0]["Entries"][0]["Time"] == NOW
+    assert published[1]["Entries"][0]["Time"] == NOW + timedelta(seconds=7)
     assert details[0]["seq"] == 1
     assert details[1]["seq"] == 2
     assert details[0]["temperature_c"] == 8.1
@@ -433,12 +412,134 @@ def test_sensor_detail_is_thirty_seconds_apart() -> None:
     assert details[0]["tenant_id"] == "t1"
     assert details[0]["shipment_id"] == "PH-2841"
     assert details[0]["device_id"] == "RF-7781"
-    assert published.calls[0]["Entries"][0]["Source"] == "sim.reefer"
-    assert published.calls[0]["Entries"][0]["DetailType"] == "TemperatureReading"
-    assert published.calls[0]["Entries"][0]["EventBusName"] == "oerf-events"
-    dynamo_stub.assert_no_pending_responses()
-    step_stub.assert_no_pending_responses()
-    event_stub.assert_no_pending_responses()
+    assert published[0]["Entries"][0]["Source"] == "sim.reefer"
+    assert published[0]["Entries"][0]["DetailType"] == "TemperatureReading"
+    assert published[0]["Entries"][0]["EventBusName"] == "oerf-events"
+
+
+def test_sensor_backdate_keeps_a_thirty_second_grid_ending_at_the_start() -> None:
+    published = _publish_pair(pause=9, backdate=True)
+
+    details = [json.loads(call["Entries"][0]["Detail"]) for call in published]
+    first = _reading_time(details[0]["ts"])
+    second = _reading_time(details[1]["ts"])
+    assert first == NOW - timedelta(seconds=30)
+    assert second == NOW
+    assert published[0]["Entries"][0]["Time"] == NOW - timedelta(seconds=30)
+    assert published[1]["Entries"][0]["Time"] == NOW
+
+
+def test_sensor_help_describes_the_publish_stamp_and_backdate(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as caught:
+        main(["sensor", "--help"])
+
+    assert caught.value.code == 0
+    text = " ".join(capsys.readouterr().out.split())
+    assert "stamped when it is published" in text
+    assert "gap between those stamps" in text
+    assert "--backdate" in text
+    assert "thirty seconds apart" in text
+    assert "That wait is the gap in the timestamps." in text
+
+
+def test_run_help_has_the_same_stamp_flags(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as caught:
+        main(["run", "--help"])
+
+    assert caught.value.code == 0
+    text = " ".join(capsys.readouterr().out.split())
+    assert "--backdate" in text
+    assert "That wait is the gap in the timestamps." in text
+
+
+def test_sensor_and_run_pass_backdate(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+    monkeypatch.setattr("scripts.demo.require_demo_account", lambda *_a, **_k: None)
+    monkeypatch.setattr("scripts.demo._resources", lambda _session: object())
+    monkeypatch.setattr("scripts.demo._client", lambda *_a, **_k: object())
+
+    def capture_sensor(*args: object, **kwargs: object) -> str:
+        seen["sensor"] = (args, kwargs)
+        return "INC-000001"
+
+    monkeypatch.setattr("scripts.demo.publish_excursion", capture_sensor)
+    code = main(
+        [
+            "sensor",
+            "--profile",
+            "demo",
+            "--account",
+            ACCOUNT,
+            "--tenant",
+            "t1",
+            "--shipment",
+            "PH-2841",
+            "--device",
+            "RF-7781",
+            "--pause",
+            "12",
+            "--backdate",
+        ],
+        session_factory=lambda _profile: object(),
+    )
+
+    assert code == 0
+    sensor_args, sensor_kwargs = seen["sensor"]
+    assert isinstance(sensor_args, tuple)
+    assert isinstance(sensor_kwargs, dict)
+    assert sensor_args[6] == 12
+    assert sensor_kwargs["backdate"] is True
+
+    code = main(
+        [
+            "sensor",
+            "--profile",
+            "demo",
+            "--account",
+            ACCOUNT,
+            "--tenant",
+            "t1",
+            "--shipment",
+            "PH-2841",
+            "--device",
+            "RF-7781",
+        ],
+        session_factory=lambda _profile: object(),
+    )
+
+    assert code == 0
+    _plain_args, plain_kwargs = seen["sensor"]
+    assert isinstance(plain_kwargs, dict)
+    assert plain_kwargs["backdate"] is False
+
+    def capture_run(*_args: object, **kwargs: object) -> None:
+        seen["run"] = kwargs
+
+    monkeypatch.setattr("scripts.demo.rehearse", capture_run)
+    code = main(
+        [
+            "run",
+            "--profile",
+            "demo",
+            "--account",
+            ACCOUNT,
+            "--tenant",
+            "t1",
+            "--shipment",
+            "PH-2841",
+            "--device",
+            "RF-7781",
+            "--backdate",
+        ],
+        session_factory=lambda _profile: object(),
+    )
+
+    assert code == 0
+    run_kwargs = seen["run"]
+    assert isinstance(run_kwargs, dict)
+    assert run_kwargs["backdate"] is True
 
 
 def test_sensor_times_out_when_no_execution_opens(capsys: pytest.CaptureFixture[str]) -> None:
@@ -1196,6 +1297,44 @@ def test_demo_is_not_a_ci_step() -> None:
     assert "--decision $(DECISION)" in makefile
     assert "OERF_ID_TOKEN" in makefile
     assert "OERF_ACCESS_TOKEN is a deprecated alias" in makefile
+
+
+def _reading_time(stamp: str) -> datetime:
+    return datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+
+
+def _publish_pair(pause: float, *, backdate: bool = False) -> list[dict]:
+    dynamo, dynamo_stub = _aws("dynamodb")
+    _stub_range(dynamo_stub)
+    steps, step_stub = _aws("stepfunctions")
+    step_stub.add_response("list_executions", {"executions": []})
+    step_stub.add_response(
+        "list_executions",
+        {"executions": [_execution_item("t1-INC-000003", COLD_ARN)]},
+    )
+    events, event_stub = _aws("events")
+    event_stub.add_response("put_events", {"FailedEntryCount": 0, "Entries": [{"EventId": "1"}]})
+    event_stub.add_response("put_events", {"FailedEntryCount": 0, "Entries": [{"EventId": "2"}]})
+    published = Capture(events)
+    clock = Timeline()
+
+    publish_excursion(
+        _clients(dynamodb=dynamo, stepfunctions=steps),
+        published,
+        "t1",
+        "PH-2841",
+        "RF-7781",
+        (8.1, 8.6),
+        pause,
+        clock,
+        clock.sleep,
+        backdate=backdate,
+    )
+
+    dynamo_stub.assert_no_pending_responses()
+    step_stub.assert_no_pending_responses()
+    event_stub.assert_no_pending_responses()
+    return published.calls
 
 
 def _clients(**overrides: object) -> SimpleNamespace:
