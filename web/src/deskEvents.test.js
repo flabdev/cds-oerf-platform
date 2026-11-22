@@ -29,8 +29,9 @@ const update = {
 };
 
 test("subscribe bodies are the two frozen scopes", () => {
-  assert.deepEqual(subscribeBody("tenant"), { scope: "tenant" });
+  assert.deepEqual(subscribeBody("tenant"), { action: "subscribe", scope: "tenant" });
   assert.deepEqual(subscribeBody("incident", "INC-1"), {
+    action: "subscribe",
     scope: "incident",
     incident_id: "INC-1",
   });

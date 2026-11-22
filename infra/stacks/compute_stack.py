@@ -510,6 +510,8 @@ class OerfComputeStack(Stack):
             ),
         )
 
+        # Selection stays $request.body.action. The subscribe body has no
+        # action, so those frames hit $default. The handler stores either route.
         self.ws_api.add_route(
             "subscribe",
             integration=integrations.WebSocketLambdaIntegration(
