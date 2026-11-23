@@ -1,4 +1,4 @@
-"""Jev reply classifier and Interpret backend selection. No network, no AWS."""
+"""Jev reply classifier and the Jev-then-AgentCore cascade. No network, no AWS."""
 
 import json
 from typing import Any
@@ -241,13 +241,13 @@ def _tenant_policy(tenant_id: str) -> EvidencePolicy:
 @pytest.fixture
 def jev_backend(monkeypatch: pytest.MonkeyPatch) -> _Jev:
     jev = _Jev("unit_running", 0.91)
-    monkeypatch.setenv("INTERPRET_CLASSIFIER", "jev")
+    monkeypatch.delenv("AGENTCORE_ENABLED", raising=False)
     monkeypatch.setenv("JEV_API_KEY_PARAM", "/oerf/main/jev/api-key")
     monkeypatch.setattr(interpret, "_tenant_policy", _tenant_policy)
     monkeypatch.setattr(interpret, "_jev_api_key", lambda: "k")
 
     def refuse_agentcore(*_args: object) -> object:
-        raise AssertionError("the jev backend must not call AgentCore")
+        raise AssertionError("AgentCore is off, so it must not be called")
 
     monkeypatch.setattr(interpret, "_runtime_classifier", refuse_agentcore)
 
@@ -291,23 +291,156 @@ def test_jev_is_off_without_a_key_parameter(
     assert jev_backend.sent == []
 
 
-def test_an_unknown_backend_disables_free_text(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("INTERPRET_CLASSIFIER", "gpt")
-    monkeypatch.setenv("AGENTCORE_ENABLED", "true")
+def test_free_text_clarifies_with_neither_proposer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("JEV_API_KEY_PARAM", raising=False)
+    monkeypatch.delenv("AGENTCORE_ENABLED", raising=False)
 
     def refuse(*_args: object) -> object:
-        raise AssertionError("no classifier may run for an unknown backend")
+        raise AssertionError("no classifier and no tenant read without a proposer")
 
     monkeypatch.setattr(interpret, "_runtime_classifier", refuse)
     monkeypatch.setattr(interpret, "_tenant_policy", refuse)
 
-    assert interpret.handler(_event(), None)["response"]["intent"] == "clarify"
+    response = interpret.handler(_event(), None)["response"]
+
+    assert response["intent"] == "clarify" and "source" not in response
 
 
-def test_agentcore_stays_the_default_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("INTERPRET_CLASSIFIER", raising=False)
+class _AgentCore:
+    """Stands in for ``_runtime_classifier`` and records the attempt budget it ran with."""
 
-    assert interpret.classifier_backend() == "agentcore"
+    def __init__(self, proposal: dict[str, Any] | None = None, error: Exception | None = None):
+        self.proposal = proposal or {
+            "category": "answer",
+            "intent": "unit_stopped",
+            "fields": {},
+            "confidence": 0.9,
+        }
+        self.error = error
+        self.attempts: list[int] = []
+
+    def __call__(self, *_args: object) -> object:
+        self.attempts.append(interpret._agentcore_attempts())
+        if self.error is not None:
+            raise self.error
+        return dict(self.proposal)
+
+
+@pytest.fixture
+def cascade(jev_backend: _Jev, monkeypatch: pytest.MonkeyPatch) -> tuple[_Jev, _AgentCore]:
+    agentcore = _AgentCore()
+    monkeypatch.setenv("AGENTCORE_ENABLED", "true")
+    monkeypatch.setenv("AGENTCORE_MAX_ATTEMPTS", "2")
+    monkeypatch.setattr(interpret, "_runtime_classifier", agentcore)
+    return jev_backend, agentcore
+
+
+def _answer(jev: _Jev, choice: str, confidence: float) -> None:
+    jev.reply["answers"]["reply"] = {"type": "choice", "choice": choice, "confidence": confidence}
+
+
+def test_a_confident_jev_answer_never_calls_agentcore(cascade) -> None:
+    jev, agentcore = cascade
+
+    response = interpret.handler(_event("compressor e-17, still cooling"), None)["response"]
+
+    assert (response["intent"], response["valid"], response["source"]) == (
+        "unit_running",
+        True,
+        "jev",
+    )
+    assert len(jev.sent) == 1 and agentcore.attempts == []
+
+
+def test_a_confident_jev_decline_clarifies_without_agentcore(cascade) -> None:
+    jev, agentcore = cascade
+    _answer(jev, "decline", 0.95)
+
+    response = interpret.handler(_event("I will not do that"), None)["response"]
+
+    assert (response["intent"], response["category"], response["source"]) == (
+        "clarify",
+        "decline",
+        "jev",
+    )
+    assert agentcore.attempts == []
+
+
+def test_an_unsure_jev_answer_hands_over_to_agentcore_once(cascade) -> None:
+    jev, agentcore = cascade
+    _answer(jev, "unit_running", 0.55)
+
+    response = interpret.handler(_event(), None)["response"]
+
+    assert (response["intent"], response["valid"], response["source"]) == (
+        "unit_stopped",
+        True,
+        "llm",
+    )
+    assert agentcore.attempts == [1]
+    assert interpret._agentcore_attempts() == 2  # the cap ends with the call
+
+
+def test_a_failing_jev_hands_over_to_agentcore(cascade) -> None:
+    jev, agentcore = cascade
+    jev.status = 529
+
+    response = interpret.handler(_event(), None)["response"]
+
+    assert (response["valid"], response["source"]) == (True, "llm")
+    assert len(jev.sent) == 1 and agentcore.attempts == [1]
+
+
+def test_both_proposers_failing_clarifies(cascade) -> None:
+    jev, agentcore = cascade
+    jev.status = 529
+    agentcore.error = TimeoutError("read timeout")
+
+    response = interpret.handler(_event(), None)["response"]
+
+    assert response == {"intent": "clarify", "valid": False, "fields": {}, "evidence_refs": []}
+
+
+def test_an_unsure_jev_and_a_failing_agentcore_keep_the_jev_clarification(cascade) -> None:
+    jev, agentcore = cascade
+    _answer(jev, "unit_running", 0.55)
+    agentcore.error = TimeoutError("read timeout")
+
+    response = interpret.handler(_event(), None)["response"]
+
+    assert (response["intent"], response["confidence"], response["source"]) == (
+        "clarify",
+        0.55,
+        "jev",
+    )
+
+
+def test_with_jev_off_agentcore_runs_as_before(
+    cascade, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jev, agentcore = cascade
+    monkeypatch.delenv("JEV_API_KEY_PARAM")
+
+    response = interpret.handler(_event(), None)["response"]
+
+    assert (response["valid"], response["source"]) == (True, "llm")
+    assert jev.sent == [] and agentcore.attempts == [2]
+
+
+@pytest.mark.parametrize(
+    ("response", "floor", "unsure"),
+    [
+        ({"valid": True, "confidence": 0.5}, 0.8, False),
+        ({"valid": False, "confidence": 0.95}, 0.8, False),
+        ({"valid": False, "confidence": 0.79}, 0.8, True),
+        ({"valid": False}, 0.8, True),
+        ({"valid": False, "confidence": 0.5}, None, False),
+    ],
+)
+def test_only_a_rejected_low_or_missing_confidence_is_unsure(
+    response: dict[str, Any], floor: float | None, unsure: bool
+) -> None:
+    assert interpret.is_unsure(response, floor) is unsure
 
 
 class _Ssm:
