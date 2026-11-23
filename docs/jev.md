@@ -1,8 +1,8 @@
 # Jev decision model (free-text driver replies)
 
-Interpret can ask TypeSafe's Jev decision model, instead of the AgentCore runtime, to propose a classification for a free-text driver reply on `critical_field`. Jev only proposes. Interpret still decides with the same `validate_proposal`, tenant floor, and routing ([ADR-042](adr/ADR-042-driver-reply-classification.md), [ADR-043](adr/ADR-043-jev-reply-classifier.md)).
+Interpret can ask TypeSafe's Jev decision model first, before the AgentCore runtime (Nova), to propose a classification for a free-text driver reply on `critical_field`. AgentCore is asked only when Jev fails or is unsure. Jev only proposes. Interpret still decides with the same `validate_proposal`, tenant floor, and routing ([ADR-042](adr/ADR-042-driver-reply-classification.md), [ADR-043](adr/ADR-043-jev-reply-classifier.md)).
 
-This page is the operator runbook. AgentCore stays the default. See [agentcore.md](agentcore.md).
+This page is the operator runbook. Jev is off by default, so AgentCore alone stays the default. See [agentcore.md](agentcore.md).
 
 ## Where Jev helps, and where it does not
 
@@ -29,8 +29,10 @@ This page is the operator runbook. AgentCore stays the default. See [agentcore.m
    | `decline` | `decline` | `decline` | clarify (ResetLadder) |
    | `help` / `concern` / `unrelated` | same | `clarify` | clarify (ResetLadder) |
 
-5. `validate_proposal` applies the floor, the field rules, and the `critical_field` intent set. A Jev error of any kind (no key, timeout, non-200, malformed body, a different model version) is caught and the reply clarifies. The engagement never fails because of Jev.
-6. Each call writes a sanitized trace: model id, latency, token counts, and an outcome token (`OK`, `TIMEOUT`, `HTTP_429`, `MODEL_MISMATCH`, …). The reply text and the key are never logged.
+5. `validate_proposal` applies the floor, the field rules, and the `critical_field` intent set.
+6. **Fallback.** When Jev errors (no key, timeout, non-200, malformed body, a different model version) or its confidence is below the tenant floor, Interpret asks AgentCore, if `agentcore:enabled` is on, with one attempt. A confident Jev answer stops there, even a `decline` or `help` that clarifies. If AgentCore also fails, or is off, the reply clarifies. The engagement never fails because of Jev.
+7. The response carries `source`: `jev` or `llm` (AgentCore), whichever proposal decided it. Interpret sets it.
+8. Each Jev call writes a sanitized trace: model id, latency, token counts, and an outcome token (`OK`, `TIMEOUT`, `HTTP_429`, `MODEL_MISMATCH`, …). The reply text and the key are never logged.
 
 ## What deploys
 
@@ -38,14 +40,23 @@ Context `jev:enabled` defaults to **false**. When it is true, Interpret gets:
 
 | Variable | Value |
 | --- | --- |
-| `INTERPRET_CLASSIFIER` | `jev` |
 | `JEV_API_KEY_PARAM` | `/oerf/jev/api-key` on main, `/oerf/dev/jev/api-key` on dev |
 | `JEV_MODEL` | context `jev:model`, default `jev-1.14.0` |
 | `JEV_TIMEOUT_SECONDS` | `3` (Interpret accepts 1–5) |
 
 The Interpret role gets `ssm:GetParameter` on that one parameter. The key is read with decryption on first use and cached for the life of the container.
 
-`jev:enabled` and `agentcore:enabled` cannot both be true; synth fails. Dev deploys currently pass `-c agentcore:enabled=true`, so switching an environment to Jev means changing that flag too.
+`jev:enabled` works alone (Jev only, no fallback) or with `agentcore:enabled` (Jev, then AgentCore). The AgentCore settings are unchanged. Dev deploys already pass `-c agentcore:enabled=true`, so adding `-c jev:enabled=true` gives the cascade.
+
+Time budget, inside the unchanged 30-second Interpret timeout:
+
+| Step | Worst case |
+| --- | --- |
+| Tenant read | 3 s |
+| Jev key read (first call per container) | 3 s |
+| Jev call | 3 s (at most 5) |
+| AgentCore, one attempt after Jev | 11 s |
+| **Total** | **20 s (at most 22)** |
 
 ## Turning it on
 
@@ -56,29 +67,31 @@ The Interpret role gets `ssm:GetParameter` on that one parameter. The key is rea
    aws ssm put-parameter --name /oerf/dev/jev/api-key --type SecureString --value '<key>'
    ```
 
-3. **Score it beside Bedrock.** Both runs use the same corpus and the same validation gate:
+3. **Score it beside Bedrock.** All runs use the same corpus and the same validation gate:
 
    ```bash
    python -m scripts.eval_driver_replies_live --confirm-bedrock-call --json > nova.json
    JEV_API_KEY='<key>' python -m scripts.eval_driver_replies_live --backend jev --confirm-jev-call --json > jev.json
+   JEV_API_KEY='<key>' python -m scripts.eval_driver_replies_live --backend cascade \
+       --confirm-jev-call --confirm-bedrock-call --json > cascade.json
    ```
 
-   Compare `accuracy` (category), `by_asl_route` (route), and `by_confidence`. Switch only when Jev's category accuracy is at least Bedrock's and its `>=0.9` band is right about 90% of the time.
-4. **Deploy** with `-c jev:enabled=true -c agentcore:enabled=false`.
-5. **Check** an Interpret trace for a free-text reply shows `outcome: OK` and `model_id: jev-1.14.0`.
+   Compare `accuracy` (category), `by_asl_route` (route), `by_confidence`, and, for the cascade, `by_source`. Enable only when the cascade's category accuracy is at least Bedrock's and Jev's `>=0.9` band is right about 90% of the time.
+4. **Deploy** with `-c jev:enabled=true`, keeping `-c agentcore:enabled=true` for the fallback.
+5. **Check** an Interpret response for a free-text reply shows `source: jev`, and its trace shows `outcome: OK` and `model_id: jev-1.14.0`.
 
 ## Turning it off
 
-Deploy without `jev:enabled` (or with it false). Interpret goes back to AgentCore if `agentcore:enabled` is true, or to buttons and keywords only. No data migrates. The SSM parameter can stay or be deleted.
+Deploy without `jev:enabled` (or with it false). Interpret goes back to AgentCore alone if `agentcore:enabled` is true, or to buttons and keywords only. No data migrates. The SSM parameter can stay or be deleted.
 
 ## Upgrading the model
 
-The model is pinned. A response from another version is refused (`MODEL_MISMATCH`) and the reply clarifies. To move to a new version, re-run the scorer with `JEV_MODEL` set, then deploy with `-c jev:model=<version>`. If TypeSafe retires the pinned version, replies clarify until the pin moves.
+The model is pinned. A response from another version is refused (`MODEL_MISMATCH`), so the reply falls back to AgentCore, or clarifies without it. To move to a new version, re-run the scorer with `JEV_MODEL` set, then deploy with `-c jev:model=<version>`. If TypeSafe retires the pinned version, every reply goes to AgentCore (or clarifies) until the pin moves.
 
 ## Code
 
 - `oerf/platform/agent/jev.py`: the HTTP client. Standard library only, HTTPS only, no retries, strict parsing.
 - `oerf/platform/cadence/jev_classifier.py`: the question, the option mapping, and the fault-code check.
-- `oerf/platform/cadence/interpret.py`: backend selection and the key read.
+- `oerf/platform/cadence/interpret.py`: the proposer order, the fallback rule (`is_unsure`), `source`, and the key read.
 - `infra/stacks/compute_stack.py`: the `jev:enabled` flag, environment, and IAM.
-- `scripts/eval_driver_replies_live.py`: `--backend jev` scoring.
+- `scripts/eval_driver_replies_live.py`: `--backend jev` and `--backend cascade` scoring.
