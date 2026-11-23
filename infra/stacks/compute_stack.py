@@ -1048,20 +1048,15 @@ class OerfComputeStack(Stack):
                 "AGENTCORE_ENABLED": "true",
                 "AGENT_RUNTIME_ARN": self.agent_runtime_arn,
             }
-        # Jev (ADR-043) replaces the AgentCore call for driver free text. The
+        # Jev (ADR-043) is asked first for driver free text. With AgentCore
+        # also on, Interpret falls back to it when Jev fails or is unsure. The
         # key is a SecureString an operator puts at this path; it is never in
-        # the template. One backend at a time, so the choice is never implicit.
+        # the template.
         jev_key_param = None
         if _context_enabled(self, "jev:enabled", default=False):
-            if self.agent_runtime_arn is not None:
-                raise ValueError(
-                    "jev:enabled and agentcore:enabled are both true. "
-                    "Interpret uses one free-text classifier; enable only one."
-                )
             jev_key_param = self.stage.ssm("jev/api-key")
             environment = {
-                **shared,
-                "INTERPRET_CLASSIFIER": "jev",
+                **environment,
                 "JEV_API_KEY_PARAM": jev_key_param,
                 "JEV_MODEL": _context_str(self, "jev:model", "jev-1.14.0").strip()
                 or "jev-1.14.0",
