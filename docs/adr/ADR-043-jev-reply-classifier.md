@@ -26,6 +26,8 @@ TypeSafe's Jev is a decision model. It does not generate text: a `choice` questi
 - A Jev outage or a version retirement degrades to `clarify` and the existing ladder. It never blocks an engagement.
 - Fault-code extraction is narrower than the generative path: two-character-prefix codes in other formats are not found, and setpoints are not extracted.
 
+The operator runbook is [docs/jev.md](../jev.md).
+
 ## Alternatives considered
 
 - **Keep only AgentCore and Nova:** this is still the default. It keeps data in AWS but leaves the floor comparing against a self-reported number.

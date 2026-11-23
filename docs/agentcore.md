@@ -2,7 +2,7 @@
 
 Interpret may ask Bedrock AgentCore for an advisory on free-text driver replies. The runtime does not choose the intent, write the incident, send a channel message, or hold a task token ([ADR-007](adr/ADR-007-agent-advisory.md), interfaces § AgentCore).
 
-This page is the operator runbook (sheet G2). Image build and IAM are OERF-312. Live invocation smoke is C11 and waits on the first **dev** deploy (A6).
+This page is the operator runbook (sheet G2). To use the Jev decision model as the free-text proposer instead, see [jev.md](jev.md). Image build and IAM are OERF-312. Live invocation smoke is C11 and waits on the first **dev** deploy (A6).
 
 ## Adopted approach note
 
