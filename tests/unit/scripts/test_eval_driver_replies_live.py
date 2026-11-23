@@ -2,7 +2,9 @@
 
 import json
 
-from scripts.eval_driver_replies_live import main, score_rows
+import pytest
+
+from scripts.eval_driver_replies_live import cascade, main, score_rows
 
 
 def test_the_command_refuses_without_an_explicit_model_call() -> None:
@@ -136,3 +138,63 @@ def test_the_jev_backend_scores_the_corpus_through_the_same_gate(monkeypatch, ca
     assert report["invocations"] == len(sent) == report["count"]
     assert report["results"][0]["input_tokens"] == 50
     assert "test-key" not in json.dumps(report)
+
+
+def test_the_cascade_needs_both_confirmations(monkeypatch) -> None:
+    monkeypatch.setenv("JEV_API_KEY", "test-key")
+
+    assert main(["--backend", "cascade", "--confirm-jev-call"]) == 2
+    assert main(["--backend", "cascade", "--confirm-bedrock-call"]) == 2
+
+
+def _proposer(category: str, confidence: float, calls: list[str], name: str):
+    def classify(_text: str) -> tuple[dict, dict]:
+        calls.append(name)
+        intent = "unit_running" if category == "answer" else "clarify"
+        proposal = {"category": category, "intent": intent, "fields": {}, "confidence": confidence}
+        return proposal, {"latency_ms": 5, "input_tokens": 10, "output_tokens": 1}
+
+    return classify
+
+
+def _failing(calls: list[str], name: str):
+    def classify(_text: str) -> tuple[dict, dict]:
+        calls.append(name)
+        raise TimeoutError("timed out")
+
+    return classify
+
+
+@pytest.mark.parametrize(
+    ("first", "calls", "source"),
+    [
+        pytest.param(("answer", 0.95), ["jev"], "jev", id="confident"),
+        pytest.param(("decline", 0.95), ["jev"], "jev", id="confident-clarify"),
+        pytest.param(("answer", 0.5), ["jev", "llm"], "llm", id="unsure"),
+        pytest.param(None, ["jev", "llm"], "llm", id="failing"),
+    ],
+)
+def test_the_cascade_asks_bedrock_only_when_jev_fails_or_is_unsure(
+    first: tuple[str, float] | None, calls: list[str], source: str
+) -> None:
+    seen: list[str] = []
+    jev = _failing(seen, "jev") if first is None else _proposer(*first, seen, "jev")
+    classify = cascade(jev, _proposer("answer", 0.9, seen, "llm"))
+
+    _proposal, meta = classify("t")
+
+    assert seen == calls
+    assert meta["source"] == source
+    answered = [name for name in calls if not (name == "jev" and first is None)]
+    assert meta["input_tokens"] == 10 * len(answered)  # a failed call spends nothing
+
+
+def test_a_cascade_where_both_fail_is_an_unscored_row() -> None:
+    seen: list[str] = []
+    classify = cascade(_failing(seen, "jev"), _failing(seen, "llm"))
+    rows = [{"id": "DR-1", "text": "t", "lang": "en", "expected_intent": "answer"}]
+
+    [row] = score_rows(rows, classify, model_id="m", prompt_version="v")["results"]
+
+    assert seen == ["jev", "llm"]
+    assert row["predicted_label"] != "answer" and row["source"] == "none"
