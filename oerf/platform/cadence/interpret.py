@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import math
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
 from typing import Any, Protocol
 
 from botocore.config import Config
@@ -24,6 +25,11 @@ CLASSIFIER_CONFIDENCE_FLOOR: float | None = 0.8
 _AGENTCORE_CONNECT_TIMEOUT = 1
 _AGENTCORE_READ_TIMEOUT = 10
 _AGENTCORE_MAX_ATTEMPTS = 2
+#: Jev answers in well under a second. With Jev first, AgentCore gets one
+#: attempt: tenant read (3 s) + key read (3 s) + Jev (3 s, at most 5 s) +
+#: AgentCore (1 + 10 s) is 20 seconds, at most 22, under the 30-second Lambda.
+_JEV_TIMEOUT = 3
+_agentcore_attempt_cap: ContextVar[int | None] = ContextVar("agentcore_attempt_cap", default=None)
 CATEGORIES = frozenset({"answer", "decline", "help", "concern", "call-me", "unrelated"})
 INTENTS = frozenset({"unit_running", "unit_stopped", "unknown", "decline", "call_me", "clarify"})
 _PROPOSAL_KEYS = frozenset({"category", "intent", "fields", "confidence"})
@@ -63,6 +69,9 @@ _REPLIES_BY_POLICY: dict[str, dict[str, Reply]] = {
 #: Every other policy keeps the combined map these two used to share.
 _REPLIES: dict[str, Reply] = {**_CRITICAL_FIELD, **_PARTNER_REQUEST}
 
+#: A named proposer. Interpret stamps the name on the response as ``source``.
+Proposer = tuple[str, Classifier]
+
 Consult = Callable[[str, str], dict[str, Any] | None]
 
 
@@ -72,7 +81,9 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     workflow = event.get("workflow")
     if not isinstance(workflow, dict):
         raise ValueError("interpret needs a workflow")
-    enabled = os.environ.get("AGENTCORE_ENABLED", "false").strip().lower() == "true"
+    jev_on = _jev_enabled()
+    agentcore_on = _agentcore_enabled()
+    enabled = jev_on or agentcore_on
     tenant_id = workflow.get("tenant_id")
     reply = workflow.get("reply")
     text = reply.get("text") if isinstance(reply, dict) else None
@@ -88,12 +99,96 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         and map_reply(text if isinstance(text, str) else None, policy_id) is None
     )
     policy = _tenant_policy(tenant_id) if needs_policy else None
+
+    def knows_fault_code(checked: str, code: str) -> bool:
+        return _policy_knows(policy, checked, code)
+
+    # Jev first when it is configured; AgentCore (Nova) when Jev fails or is
+    # unsure. Each proposal goes through the same ``validate_proposal``.
+    proposers: list[Proposer] = []
+    if jev_on:
+        proposers.append(("jev", _jev_classifier(knows_fault_code)))
+    if agentcore_on:
+        proposers.append(("llm", _agentcore_after_jev if jev_on else _runtime_classifier))
     return interpret_workflow(
         workflow,
         enabled=enabled,
-        classify=_runtime_classifier,
+        proposers=proposers,
         confidence_floor=_floor_from_policy(policy),
-        knows_fault_code=lambda checked, code: _policy_knows(policy, checked, code),
+        knows_fault_code=knows_fault_code,
+    )
+
+
+def _jev_enabled() -> bool:
+    return bool(os.environ.get("JEV_API_KEY_PARAM", "").strip())
+
+
+def _agentcore_enabled() -> bool:
+    return os.environ.get("AGENTCORE_ENABLED", "false").strip().lower() == "true"
+
+
+def _agentcore_after_jev(
+    tenant_id: str, incident_id: str, reply_text: str, policy_id: str | None
+) -> object:
+    """AgentCore with one attempt, so the cascade stays inside the Lambda budget."""
+
+    token = _agentcore_attempt_cap.set(1)
+    try:
+        return _runtime_classifier(tenant_id, incident_id, reply_text, policy_id)
+    finally:
+        _agentcore_attempt_cap.reset(token)
+
+
+def _jev_classifier(knows_fault_code: Callable[[str, str], bool]) -> Classifier:
+    """The Jev classifier for this invocation, with the tenant catalog check."""
+
+    from oerf.platform.agent.jev import DEFAULT_ENDPOINT, DEFAULT_MODEL
+    from oerf.platform.cadence.jev_classifier import JevReplyClassifier
+
+    return JevReplyClassifier(
+        api_key=_jev_api_key,
+        knows_fault_code=knows_fault_code,
+        model=os.environ.get("JEV_MODEL", "").strip() or DEFAULT_MODEL,
+        endpoint=os.environ.get("JEV_ENDPOINT", "").strip() or DEFAULT_ENDPOINT,
+        timeout=float(_bounded_int("JEV_TIMEOUT_SECONDS", _JEV_TIMEOUT, low=1, high=5)),
+    )
+
+
+_jev_key_cache: dict[str, str] = {}
+
+
+def _jev_api_key() -> str:
+    """The Jev key from the SecureString ``JEV_API_KEY_PARAM`` names, cached per process.
+
+    A failed or empty read raises and is not cached, so Interpret clarifies and
+    the next invocation reads SSM again.
+    """
+
+    name = os.environ.get("JEV_API_KEY_PARAM", "").strip()
+    if not name:
+        raise RuntimeError("JEV_API_KEY_PARAM is not set")
+    cached = _jev_key_cache.get(name)
+    if cached:
+        return cached
+    import boto3
+
+    response = boto3.client("ssm", config=ssm_client_config()).get_parameter(
+        Name=name, WithDecryption=True
+    )
+    value = (response.get("Parameter") or {}).get("Value")
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError("the Jev API key parameter is empty")
+    _jev_key_cache[name] = value.strip()
+    return _jev_key_cache[name]
+
+
+def ssm_client_config() -> Config:
+    """One short read for the Jev key, inside the Interpret budget."""
+
+    return Config(
+        connect_timeout=1,
+        read_timeout=2,
+        retries={"max_attempts": 1, "mode": "standard"},
     )
 
 
@@ -102,10 +197,15 @@ def interpret_workflow(
     *,
     enabled: bool,
     classify: Classifier | None = None,
+    proposers: Sequence[Proposer] = (),
     confidence_floor: float | None = CLASSIFIER_CONFIDENCE_FLOOR,
     knows_fault_code: Callable[[str, str], bool] | None = None,
 ) -> dict[str, Any]:
-    """Map known words deterministically; validate any free-text proposal."""
+    """Map known words deterministically; validate any free-text proposal.
+
+    ``proposers`` are tried in order (see ``_classify_reply``). ``classify`` is
+    shorthand for a single ``llm`` proposer.
+    """
 
     reply = workflow.get("reply")
     text = reply.get("text") if isinstance(reply, dict) else None
@@ -121,12 +221,14 @@ def interpret_workflow(
             "evidence_refs": [],
         }
     else:
+        if classify is not None:
+            proposers = [*proposers, ("llm", classify)]
         response = _classify_reply(
             workflow,
             text,
             policy_id,
             enabled=enabled,
-            classify=classify,
+            proposers=proposers,
             confidence_floor=confidence_floor,
             knows_fault_code=knows_fault_code,
         )
@@ -153,10 +255,19 @@ def _classify_reply(
     policy_id: str | None,
     *,
     enabled: bool,
-    classify: Classifier | None,
+    proposers: Sequence[Proposer],
     confidence_floor: float | None,
     knows_fault_code: Callable[[str, str], bool] | None,
 ) -> dict[str, Any]:
+    """Try each proposer in order until one is not unsure; the rules decide.
+
+    A proposer that raises, or whose confidence is missing or below the floor,
+    hands over to the next one. A confident proposal stops the cascade even
+    when it clarifies (a confident ``decline`` is not re-asked). The response
+    carries the deciding proposer as ``source``. When every proposer fails,
+    the reply clarifies.
+    """
+
     # Facility, approval, and every unnamed policy stay on the keyword map.
     if policy_id != "critical_field":
         return _clarification()
@@ -166,23 +277,45 @@ def _classify_reply(
         or not text.strip()
         or len(text) > MAX_REPLY_TEXT
         or not enabled
-        or classify is None
+        or not proposers
         or not isinstance(tenant_id, str)
         or not tenant_id.strip()
         or not isinstance(incident_id, str)
         or not incident_id.strip()
     ):
         return _clarification()
-    try:
-        proposal = classify(tenant_id, incident_id, text, policy_id)
-    except Exception:  # noqa: BLE001 - failures never fail the engagement
-        return _clarification()
-    return validate_proposal(
-        proposal,
-        tenant_id=tenant_id,
-        confidence_floor=confidence_floor,
-        knows_fault_code=knows_fault_code,
-    )
+    decided: dict[str, Any] | None = None
+    for source, classify in proposers:
+        try:
+            proposal = classify(tenant_id, incident_id, text, policy_id)
+        except Exception:  # noqa: BLE001 - failures never fail the engagement
+            continue
+        decided = validate_proposal(
+            proposal,
+            tenant_id=tenant_id,
+            confidence_floor=confidence_floor,
+            knows_fault_code=knows_fault_code,
+        )
+        decided["source"] = source
+        if not is_unsure(decided, confidence_floor):
+            return decided
+    return decided if decided is not None else _clarification()
+
+
+def is_unsure(response: Mapping[str, Any], confidence_floor: float | None) -> bool:
+    """Whether a validated response should hand over to the next proposer.
+
+    Only a rejected proposal whose confidence is missing or below a usable
+    floor is unsure. Without a usable floor every proposal is rejected anyway,
+    so asking another model would only spend time.
+    """
+
+    if response.get("valid") is True:
+        return False
+    if not _finite_number(confidence_floor) or not 0 <= confidence_floor <= 1:
+        return False
+    confidence = response.get("confidence")
+    return not _finite_number(confidence) or confidence < confidence_floor
 
 
 def validate_proposal(
@@ -346,13 +479,14 @@ def agentcore_client_config() -> Config:
         read_timeout=_bounded_int(
             "AGENTCORE_READ_TIMEOUT", _AGENTCORE_READ_TIMEOUT, low=1, high=10
         ),
-        retries={
-            "max_attempts": _bounded_int(
-                "AGENTCORE_MAX_ATTEMPTS", _AGENTCORE_MAX_ATTEMPTS, low=1, high=2
-            ),
-            "mode": "standard",
-        },
+        retries={"max_attempts": _agentcore_attempts(), "mode": "standard"},
     )
+
+
+def _agentcore_attempts() -> int:
+    attempts = _bounded_int("AGENTCORE_MAX_ATTEMPTS", _AGENTCORE_MAX_ATTEMPTS, low=1, high=2)
+    cap = _agentcore_attempt_cap.get()
+    return attempts if cap is None else min(attempts, cap)
 
 
 def _bounded_int(name: str, default: int, *, low: int, high: int) -> int:

@@ -7,6 +7,17 @@ From the repository root, after credentials and Bedrock access are available:
 
     python -m scripts.eval_driver_replies_live --confirm-bedrock-call
 
+With ``--backend jev`` it scores the Jev decision model instead. That sends
+each corpus reply (synthetic text) to TypeSafe, so it needs its own flag and a
+key in ``JEV_API_KEY``:
+
+    JEV_API_KEY=... python -m scripts.eval_driver_replies_live --backend jev \
+        --confirm-jev-call
+
+``--backend cascade`` scores what Interpret runs with both flags on: Jev
+first, Bedrock when Jev fails or is unsure. It needs both confirmations, and
+each result row names the proposer that decided it (``source``).
+
 One run invokes the model once per corpus row (42). The report prints the
 model id, prompt version, predicted category, validity, and token or latency
 counts. It does not print reply text, prompts, or raw model output.
@@ -26,11 +37,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from oerf.platform.cadence.interpret import validate_proposal
+from oerf.platform.cadence.interpret import is_unsure, validate_proposal
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET = ROOT / "tests" / "ai-evals" / "driver_replies.jsonl"
-ProposalFn = Callable[[str], tuple[dict[str, Any] | None, dict[str, int]]]
+ProposalFn = Callable[[str], tuple[dict[str, Any] | None, dict[str, Any]]]
+#: The floor ``score_rows`` validates with, the tenant default.
+SCORE_FLOOR = 0.8
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -38,9 +51,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--json", action="store_true", help="print the full JSON report")
     parser.add_argument(
+        "--backend",
+        choices=("agentcore", "jev", "cascade"),
+        default="agentcore",
+        help="the classifier to score (default agentcore: Bedrock Nova via Strands)",
+    )
+    parser.add_argument(
         "--confirm-bedrock-call",
         action="store_true",
-        help="required. Without this flag the command makes no model call.",
+        help="required for agentcore. Without it the command makes no model call.",
+    )
+    parser.add_argument(
+        "--confirm-jev-call",
+        action="store_true",
+        help="required for jev and cascade. Without it nothing is sent to TypeSafe.",
     )
     parser.add_argument(
         "--fail-under",
@@ -49,25 +73,42 @@ def main(argv: list[str] | None = None) -> int:
         help="exit 1 when category accuracy is below this fraction",
     )
     args = parser.parse_args(argv)
-    if not args.confirm_bedrock_call:
-        print(
-            "refusing: pass --confirm-bedrock-call to score the live model",
-            file=sys.stderr,
-        )
+    needed = {
+        "agentcore": [("--confirm-bedrock-call", args.confirm_bedrock_call)],
+        "jev": [("--confirm-jev-call", args.confirm_jev_call)],
+        "cascade": [
+            ("--confirm-jev-call", args.confirm_jev_call),
+            ("--confirm-bedrock-call", args.confirm_bedrock_call),
+        ],
+    }[args.backend]
+    missing = [flag for flag, given in needed if not given]
+    if missing:
+        print(f"refusing: pass {' '.join(missing)} to score the live model", file=sys.stderr)
         return 2
     if args.fail_under is not None and not 0 <= args.fail_under <= 1:
         parser.error("--fail-under must be between 0 and 1")
     rows = _load(args.dataset)
-    classify = _live_classifier()
-    if classify is None:
-        print("classifier agent is unavailable", file=sys.stderr)
-        return 2
-    report = score_rows(
-        rows,
-        classify,
-        model_id=_model_id(),
-        prompt_version=_prompt_version(),
-    )
+    if args.backend in ("jev", "cascade"):
+        classify = _jev_classifier()
+        if classify is None:
+            print("set JEV_API_KEY to score Jev", file=sys.stderr)
+            return 2
+        model_id, prompt_version = _jev_model_id(), _jev_prompt_version()
+        if args.backend == "cascade":
+            fallback = _live_classifier()
+            if fallback is None:
+                print("classifier agent is unavailable", file=sys.stderr)
+                return 2
+            classify = cascade(classify, fallback)
+            model_id = f"{model_id} -> {_model_id()}"
+            prompt_version = f"{prompt_version} -> {_prompt_version()}"
+    else:
+        classify = _live_classifier()
+        if classify is None:
+            print("classifier agent is unavailable", file=sys.stderr)
+            return 2
+        model_id, prompt_version = _model_id(), _prompt_version()
+    report = score_rows(rows, classify, model_id=model_id, prompt_version=prompt_version)
     _print_report(report, as_json=args.json)
     if args.fail_under is not None and report["accuracy"] < args.fail_under:
         return 1
@@ -90,10 +131,11 @@ def score_rows(
         except Exception:  # noqa: BLE001 - a model failure is an unscored row
             proposal, meta = None, {"latency_ms": 0, "input_tokens": 0, "output_tokens": 0}
         predicted = _category(proposal)
+        confidence = _confidence(proposal)
         validated = validate_proposal(
             proposal if isinstance(proposal, dict) else {},
             tenant_id="live-score",
-            confidence_floor=0.8,
+            confidence_floor=SCORE_FLOOR,
             knows_fault_code=lambda _tenant, _code: False,
         )
         route = _route(validated)
@@ -104,12 +146,15 @@ def score_rows(
                 "lang": row.get("lang", ""),
                 "predicted_label": predicted,
                 "category_correct": predicted == row["expected_intent"],
+                "confidence": confidence,
+                "confidence_band": _band(confidence),
                 "valid": validated["valid"] is True,
                 "asl_route": route,
                 "route_correct": route == _expected_route(row["expected_intent"]),
                 "latency_ms": int(meta.get("latency_ms", 0)),
                 "input_tokens": int(meta.get("input_tokens", 0)),
                 "output_tokens": int(meta.get("output_tokens", 0)),
+                "source": meta.get("source") or "none",
             }
         )
     return {
@@ -123,8 +168,62 @@ def score_rows(
         "by_category": _breakdown(results, "expected_intent", "category_correct"),
         "by_language": _breakdown(results, "lang", "category_correct"),
         "by_asl_route": _breakdown(results, "asl_route", "route_correct"),
+        # Calibration: how often each confidence band was right. A calibrated
+        # model's ">=0.9" band should be right at least 90% of the time.
+        "by_confidence": _breakdown(results, "confidence_band", "category_correct"),
+        "by_source": _breakdown(results, "source", "category_correct"),
         "results": results,
     }
+
+
+def cascade(first: ProposalFn, second: ProposalFn) -> ProposalFn:
+    """Interpret's order: ``second`` runs only when ``first`` fails or is unsure.
+
+    Unsure is decided as Interpret decides it, through ``validate_proposal`` and
+    ``is_unsure`` at the scoring floor. Token and latency counts add up.
+    """
+
+    def classify(text: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        spent = {"latency_ms": 0, "input_tokens": 0, "output_tokens": 0}
+        proposal: dict[str, Any] | None = None
+        for source, proposer in (("jev", first), ("llm", second)):
+            try:
+                candidate, meta = proposer(text)
+            except Exception:  # noqa: BLE001 - a failure hands over, as in Interpret
+                continue
+            for key in spent:
+                spent[key] += int(meta.get(key, 0))
+            proposal, decided_by = candidate, source
+            validated = validate_proposal(
+                candidate if isinstance(candidate, dict) else {},
+                tenant_id="live-score",
+                confidence_floor=SCORE_FLOOR,
+                knows_fault_code=lambda _tenant, _code: False,
+            )
+            if not is_unsure(validated, SCORE_FLOOR):
+                break
+        if proposal is None:
+            raise RuntimeError("both proposers failed")
+        return proposal, {**spent, "source": decided_by}
+
+    return classify
+
+
+def _confidence(proposal: dict[str, Any] | None) -> float | None:
+    value = proposal.get("confidence") if isinstance(proposal, dict) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _band(confidence: float | None) -> str:
+    if confidence is None:
+        return "none"
+    if confidence >= 0.9:
+        return ">=0.9"
+    if confidence >= 0.8:
+        return "0.8-0.9"
+    return "<0.8"
 
 
 def _load(dataset: Path) -> list[dict[str, Any]]:
@@ -153,7 +252,8 @@ def _route(response: dict[str, Any]) -> str:
 def _expected_route(expected: str) -> str:
     if expected == "call-me":
         return "HandleCallback"
-    if expected in {"answer", "decline"}:
+    # A driver ``decline`` is not a diagnosis on critical_field (v1.58). It clarifies.
+    if expected == "answer":
         return "AcknowledgeReply → Answered"
     return "ResetLadder"
 
@@ -192,6 +292,7 @@ def _print_report(report: dict[str, Any], *, as_json: bool) -> None:
         ("Corpus categories", report["by_category"]),
         ("Languages", report["by_language"]),
         ("ASL routes", report["by_asl_route"]),
+        ("Confidence bands (category accuracy)", report["by_confidence"]),
     ):
         print(f"{title}:")
         for label, values in sorted(groups.items()):
@@ -242,6 +343,60 @@ def _live_classifier() -> ProposalFn | None:
         elapsed = max(int((time.monotonic() - started) * 1000), 0)
         return proposal, {
             "latency_ms": int(captured.get("latency_ms", elapsed)),
+            "input_tokens": int(captured.get("input_tokens", 0)),
+            "output_tokens": int(captured.get("output_tokens", 0)),
+        }
+
+    return classify
+
+
+def _jev_model_id() -> str:
+    import os
+
+    from oerf.platform.agent.jev import DEFAULT_MODEL
+
+    return os.environ.get("JEV_MODEL", "").strip() or DEFAULT_MODEL
+
+
+def _jev_prompt_version() -> str:
+    from oerf.platform.cadence.jev_classifier import PROMPT_VERSION
+
+    return PROMPT_VERSION
+
+
+def _jev_classifier() -> ProposalFn | None:
+    """Jev with the key from ``JEV_API_KEY``, or ``None`` when it is unset.
+
+    Like the Bedrock scorer, every candidate fault code is proposed, and the
+    production catalog gate in ``score_rows`` decides validity. Both backends
+    are then scored against the same gate.
+    """
+
+    import os
+
+    from oerf.platform.cadence.jev_classifier import JevReplyClassifier
+
+    key = os.environ.get("JEV_API_KEY", "").strip()
+    if not key:
+        return None
+    captured: dict[str, Any] = {}
+
+    def trace(metadata: dict[str, object]) -> None:
+        captured.clear()
+        captured.update(metadata)
+
+    classifier = JevReplyClassifier(
+        api_key=lambda: key,
+        knows_fault_code=lambda _tenant, _code: True,
+        model=_jev_model_id(),
+        trace=trace,
+    )
+
+    def classify(text: str) -> tuple[dict[str, Any] | None, dict[str, int]]:
+        captured.clear()
+        proposal = classifier("live-score", "live-score", text, "critical_field")
+        return proposal, {
+            "latency_ms": int(captured.get("latency_ms", 0)),
             "input_tokens": int(captured.get("input_tokens", 0)),
             "output_tokens": int(captured.get("output_tokens", 0)),
         }

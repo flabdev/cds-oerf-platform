@@ -73,6 +73,7 @@ def test_exact_text_and_tenant_scope_reach_classifier() -> None:
         "fields": {"setpoint_temp_c": 4.5},
         "confidence": 0.93,
         "evidence_refs": [],
+        "source": "llm",
     }
     assert result["reply"]["text"] == "The unit sounds like it is running."
 

@@ -18,6 +18,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    # Synth vendors Lambda wheels with ``python -m pip`` (infra/runtime_asset.py).
+    # uv-created environments do not include pip; CI and deploy installs have it.
+    "pip>=23",
     "pytest>=8",
     "ruff>=0.6",
 ]

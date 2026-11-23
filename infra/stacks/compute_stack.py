@@ -1048,6 +1048,20 @@ class OerfComputeStack(Stack):
                 "AGENTCORE_ENABLED": "true",
                 "AGENT_RUNTIME_ARN": self.agent_runtime_arn,
             }
+        # Jev (ADR-043) is asked first for driver free text. With AgentCore
+        # also on, Interpret falls back to it when Jev fails or is unsure. The
+        # key is a SecureString an operator puts at this path; it is never in
+        # the template.
+        jev_key_param = None
+        if _context_enabled(self, "jev:enabled", default=False):
+            jev_key_param = self.stage.ssm("jev/api-key")
+            environment = {
+                **environment,
+                "JEV_API_KEY_PARAM": jev_key_param,
+                "JEV_MODEL": _context_str(self, "jev:model", "jev-1.14.0").strip()
+                or "jev-1.14.0",
+                "JEV_TIMEOUT_SECONDS": "3",
+            }
         environment = _with_dev_name(
             self.stage,
             environment,
@@ -1064,6 +1078,16 @@ class OerfComputeStack(Stack):
             environment=environment,
         )
         data_stack.tenant_table.grant_read_data(interpret)
+        if jev_key_param is not None:
+            # The ARN drops the leading slash. aws/ssm decrypts for GetParameter.
+            interpret.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=["ssm:GetParameter"],
+                    resources=[
+                        f"arn:aws:ssm:{self.region}:{self.account}:parameter{jev_key_param}"
+                    ],
+                )
+            )
         if self.agent_runtime_arn is not None:
             interpret.add_to_role_policy(
                 iam.PolicyStatement(
