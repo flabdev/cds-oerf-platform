@@ -521,7 +521,8 @@ def test_verify_stabilizing_does_not_store_stale_result() -> None:
                 "allowance_minutes": 45,
                 "ship_time": "2026-10-20T10:00:00Z",
             },
-            "action": {"at": "2026-10-20T10:15:00Z"},
+            # Thirty seconds before NOW: under the pinned PT1M stable window.
+            "action": {"at": "2026-10-20T10:15:30Z"},
             "temperature_c": 5,
         },
     )
