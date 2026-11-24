@@ -77,6 +77,9 @@ def _row(item: dict[str, Any]) -> dict[str, Any]:
     approved = _bool(item, "approved")
     if approved is not None:
         row["approved"] = approved
+    fee = _number(item, "emergency_fee_usd")
+    if fee is not None:
+        row["emergency_fee_usd"] = fee
     contact_id = _text(item, "contact_id")
     if contact_id:
         row["contact_id"] = contact_id

@@ -70,8 +70,10 @@ def test_seed_round_trip_matches_the_workflow_readers() -> None:
     assert facilities["FAC-B"]["name"] == "Facility B (sample cold store)"
     assert facilities["FAC-A"]["approved"] is True
     assert facilities["FAC-A"]["capacity_available"] is True
+    assert facilities["FAC-A"]["emergency_fee_usd"] == 250.0
     assert facilities["FAC-B"]["approved"] is True
     assert facilities["FAC-B"]["capacity_available"] is True
+    assert facilities["FAC-B"]["emergency_fee_usd"] == 300.0
     shipment = DynamoShipmentReader(client, TABLE).get("t1", "PH-2841")
     assert shipment is not None
     assert shipment["product_profile"] == "PP-2-8-45"
