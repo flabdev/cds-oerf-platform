@@ -1,6 +1,7 @@
 """Handler contracts for cold-chain workflow steps."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -197,6 +198,29 @@ def test_assess_auto_proceeds_a_divert_inside_the_pre_approved_limits() -> None:
 
 
 @pytest.mark.parametrize(
+    ("fee", "route"),
+    [
+        pytest.param(Decimal("250"), "auto_proceed", id="t1-fac-a-fee-decimal"),
+        pytest.param(Decimal("600"), "approval", id="fee-over-limit-decimal"),
+    ],
+)
+def test_assess_routes_on_dynamodb_decimal_emergency_fees(fee: Decimal, route: str) -> None:
+    decision = _assess_with_facility({"approved": True, "emergency_fee_usd": fee})
+
+    assert decision["recommended_option"] == "FAC-A"
+    assert decision["route"] == route
+    assert decision["needs_approval"] is (route == "approval")
+
+
+def test_assess_asks_for_approval_when_dynamodb_fee_is_absent() -> None:
+    decision = _assess_with_facility({"approved": True})
+
+    assert decision["recommended_option"] == "FAC-A"
+    assert decision["needs_approval"] is True
+    assert decision["route"] == "approval"
+
+
+@pytest.mark.parametrize(
     "facility",
     [
         pytest.param({"approved": True, "emergency_fee_usd": 900}, id="fee-over-max-spend"),
@@ -252,6 +276,9 @@ def test_gather_context_carries_the_facility_fee() -> None:
     }
 
     assert _facility_candidate(row)["emergency_fee_usd"] == 250.0
+    decimal_row = {**row, "emergency_fee_usd": Decimal("250"), "drive_min": Decimal("9")}
+    assert _facility_candidate(decimal_row)["emergency_fee_usd"] == 250.0
+    assert _facility_candidate(decimal_row)["drive_min"] == 9.0
     assert "emergency_fee_usd" not in _facility_candidate(
         {key: value for key, value in row.items() if key != "emergency_fee_usd"}
     )

@@ -23,8 +23,10 @@ Two interfaces are owned elsewhere and are noted here so they are not missed:
 from __future__ import annotations
 
 import math
+import numbers
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from pydantic import ValidationError
@@ -73,6 +75,16 @@ Handler = Callable[[StepEnvelope, StepDependencies], StepEnvelope]
 
 #: State-machine ``step`` value to the function that serves it.
 HANDLERS: dict[str, Handler] = {}
+
+
+def _finite_float(value: Any) -> float | None:
+    """Coerce a DynamoDB numeric (``Decimal``, ``int``, ``float``) to a finite float."""
+    if isinstance(value, bool) or not isinstance(value, (numbers.Real, Decimal)):
+        return None
+    coerced = float(value)
+    if not math.isfinite(coerced):
+        return None
+    return coerced
 
 
 def handles(*steps: str) -> Callable[[Handler], Handler]:
@@ -247,17 +259,17 @@ def _facility_candidate(row: Mapping[str, Any]) -> dict[str, Any]:
     """Copy one catalog row. Drive time and identity stay the values on the row."""
 
     facility_id = text(row, "facility_id") or text(row, "id")
-    drive = field(row, "drive_min")
+    drive = _finite_float(field(row, "drive_min"))
     if facility_id is None:
         raise MissingStepInput("a facility row has no facility_id")
-    if isinstance(drive, bool) or not isinstance(drive, (int, float)):
+    if drive is None:
         raise MissingStepInput("a facility row has no drive_min")
     if "capacity_available" not in row or "approved" not in row:
         raise MissingStepInput("a facility row is missing capacity or approval")
     candidate = {
         "id": facility_id,
         "facility_id": facility_id,
-        "drive_min": float(drive),
+        "drive_min": drive,
         "capacity_available": bool(row["capacity_available"]),
         "approved": bool(row["approved"]),
     }
@@ -267,9 +279,9 @@ def _facility_candidate(row: Mapping[str, Any]) -> dict[str, Any]:
     contact_id = text(row, "contact_id")
     if contact_id is not None:
         candidate["contact_id"] = contact_id
-    fee = field(row, "emergency_fee_usd")
-    if not isinstance(fee, bool) and isinstance(fee, (int, float)):
-        candidate["emergency_fee_usd"] = float(fee)
+    fee = _finite_float(field(row, "emergency_fee_usd"))
+    if fee is not None:
+        candidate["emergency_fee_usd"] = fee
     return candidate
 
 
@@ -443,10 +455,10 @@ def _within_pre_approved_limits(limits: Any, facility: Mapping[str, Any] | None)
         return False
     if limits.currency.strip().upper() != "USD":
         return False
-    fee = field(facility, "emergency_fee_usd")
-    if isinstance(fee, bool) or not isinstance(fee, (int, float)) or not math.isfinite(fee):
+    fee = _finite_float(field(facility, "emergency_fee_usd"))
+    if fee is None:
         return False
-    return 0 <= float(fee) <= float(limits.max_spend)
+    return 0 <= fee <= float(limits.max_spend)
 
 
 def _engagement_intent(workflow: Mapping[str, Any]) -> str | None:
@@ -467,10 +479,8 @@ def _engagement_intent(workflow: Mapping[str, Any]) -> str | None:
 def _stopped_rise(assessment: Any) -> float | None:
     """The pinned faster rise for a stopped unit, when the config has one."""
 
-    rate = getattr(assessment, "stopped_rise_rate_c_per_min", None)
-    if isinstance(rate, bool) or not isinstance(rate, (int, float)):
-        return None
-    return float(rate)
+    rate = _finite_float(getattr(assessment, "stopped_rise_rate_c_per_min", None))
+    return rate
 
 
 @handles("Assess")
@@ -1040,8 +1050,8 @@ def secure_facility(envelope: StepEnvelope, dependencies: StepDependencies) -> S
             raise MissingStepInput(f"step {envelope.step} needs shipment.shipment_id")
         if facility_id is None:
             raise MissingStepInput(f"step {envelope.step} needs the selected facility's id")
-        drive_min = field(facility, "drive_min")
-        if isinstance(drive_min, bool) or not isinstance(drive_min, (int, float)):
+        drive_min = _finite_float(field(facility, "drive_min"))
+        if drive_min is None:
             raise MissingStepInput(f"step {envelope.step} needs the selected facility's drive_min")
         workflow["facility_request"] = {
             "engagement_id": f"ENG-{envelope.incident_id}-facility-{facility_id}-{_FACILITY_ASK}",
@@ -1055,7 +1065,7 @@ def secure_facility(envelope: StepEnvelope, dependencies: StepDependencies) -> S
                 "shipment_id": shipment_id,
                 "range": f"{format(lower_c, 'g')}–{format(upper_c, 'g')}°C",
                 "facility_name": text(facility, "name") or facility_id,
-                "minutes": format(float(drive_min), "g"),
+                "minutes": format(drive_min, "g"),
             },
         }
     return apply(
@@ -1266,14 +1276,13 @@ def _reading(workflow: Mapping[str, Any], context: Mapping[str, Any], step: str)
     """The latest temperature reading, from the workflow or the gathered context."""
     for section, key in _READING_PATHS:
         source = workflow if section is None else mapping(workflow, section)
-        found = field(source, key)
-        if isinstance(found, bool) or not isinstance(found, (int, float)):
-            continue
-        return float(found)
-    found = field(mapping(context, "trigger"), "temperature_c")
-    if isinstance(found, bool) or not isinstance(found, (int, float)):
+        found = _finite_float(field(source, key))
+        if found is not None:
+            return found
+    found = _finite_float(field(mapping(context, "trigger"), "temperature_c"))
+    if found is None:
         raise MissingStepInput(f"step {step} needs a temperature reading in the workflow")
-    return float(found)
+    return found
 
 
 def _latest_reading(
@@ -1292,21 +1301,21 @@ def _latest_reading(
 
     ordered = sorted(readings, key=lambda row: (text(row, "ts") or "", text(row, "sk") or ""))
     latest = ordered[-1]
-    latest_temperature = field(latest, "temperature_c")
-    if isinstance(latest_temperature, bool) or not isinstance(latest_temperature, (int, float)):
+    latest_temperature = _finite_float(field(latest, "temperature_c"))
+    if latest_temperature is None:
         raise MissingStepInput("the latest persisted reading has no numeric temperature_c")
     latest_at = _moment(text(latest, "ts"), "latest_reading.ts")
     lower, upper = limits
     stable_start = latest_at
-    if lower <= float(latest_temperature) <= upper:
+    if lower <= latest_temperature <= upper:
         for row in reversed(ordered[:-1]):
-            temperature = field(row, "temperature_c")
-            if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
+            temperature = _finite_float(field(row, "temperature_c"))
+            if temperature is None:
                 raise MissingStepInput("a persisted reading has no numeric temperature_c")
-            if not lower <= float(temperature) <= upper:
+            if not lower <= temperature <= upper:
                 break
             stable_start = _moment(text(row, "ts"), "reading.ts")
-    return float(latest_temperature), latest_at, stable_start
+    return latest_temperature, latest_at, stable_start
 
 
 def _minutes_duration(value: Any, what: str) -> float:
