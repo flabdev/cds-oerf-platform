@@ -29,6 +29,10 @@ on:
         description: Deploy the dashboard stack
         type: boolean
         default: true
+      jev:
+        description: Enable the Jev reply classifier path
+        type: boolean
+        default: false
       channels_live:
         description: Turn on live channel and Bedrock calls
         type: boolean
@@ -73,6 +77,7 @@ jobs:
       DEPLOY_MODE: ${{ github.event_name == 'push' && 'deploy' || inputs.mode }}
       AGENTCORE: ${{ github.event_name == 'push' && 'true' || ((inputs.agentcore == true || inputs.agentcore == 'true') && 'true' || 'false') }}
       DASHBOARD: ${{ github.event_name == 'push' && 'true' || ((inputs.dashboard == true || inputs.dashboard == 'true') && 'true' || 'false') }}
+      JEV: ${{ github.event_name == 'push' && (vars.JEV_ENABLED == 'true' && 'true' || 'false') || ((inputs.jev == true || inputs.jev == 'true') && 'true' || 'false') }}
       CHANNELS_LIVE: ${{ github.event_name == 'push' && (vars.CHANNELS_LIVE == 'true' && 'true' || 'false') || ((inputs.channels_live == true || inputs.channels_live == 'true') && 'true' || 'false') }}
       # Dev environment variable. Default false until both dev URL-button copies are APPROVED.
       STAGE_URL_TEMPLATES: ${{ vars.STAGE_URL_TEMPLATES == 'true' && 'true' || 'false' }}
@@ -183,6 +188,7 @@ jobs:
             printf '%s\n' "account=${AWS_ACCOUNT_ID}"
             printf '%s\n' "agentcore:enabled=${AGENTCORE}"
             printf '%s\n' "dashboard:enabled=${DASHBOARD}"
+            printf '%s\n' "jev:enabled=${JEV}"
             if [[ "${DASHBOARD}" == "true" ]]; then
               printf '%s\n' "desk:publish=true"
             fi
