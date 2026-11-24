@@ -37,7 +37,7 @@
     "escalation_chain": ["ops_manager", "ops_director"]
   },
   "verification": {
-    "stable_in_range": "PT5M",
+    "stable_in_range": "PT1M",
     "poll_interval": "PT30S",
     "reopen_on_rise": true,
     "max_attempts": 20

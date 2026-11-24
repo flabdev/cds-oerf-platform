@@ -2,9 +2,9 @@
 
 ![OERF on AWS](images/architecture.png)
 
-The drawing lists Assess before the driver engagement. The deployed `oerf-cold-chain` machine runs EngageDriver first, then Assess. The diagram below follows the machine.
+The drawing and the diagram below follow the deployed `oerf-cold-chain` machine. After Diagnose the machine runs EngageDriverDiagnosis, then Assess, then SecureFacility and EngageFacilityAccept, then Act, Verify, QA review, and Close.
 
-A reefer reading becomes an incident, a WhatsApp conversation, and a live desk. The sensor path is EventBridge, then ingest, then Step Functions. The channel router sends through AWS End User Messaging Social. The driver replies, inbound resumes the waiting step, and the workflow sends an acknowledgement and, after the rules choose, a decision notice. The incident stream updates the desk. Bedrock AgentCore interprets a free-text reply. Amazon Nova Lite on Bedrock reads evidence photos. Rules decide. The model advises.
+A reefer reading becomes an incident, a WhatsApp conversation, and a live desk. The sensor path is EventBridge, then ingest, then Step Functions. The channel router sends WhatsApp through AWS End User Messaging Social. SMS is `sns:Publish` and is mocked. Email is code ready and not live. Voice is a cadence rung and not live. The driver, the facility, or the ops manager replies, inbound resumes the waiting step, and the workflow sends an acknowledgement and, after the rules choose, a decision notice. The incident stream updates the desk. For a `critical_field` free-text reply, engage-interpret asks TypeSafe Jev first when `jev:enabled` is on, then Bedrock AgentCore. The runtime calls Amazon Nova Lite with a guardrail. Evidence photos reach the analyzer from an S3 Object Created event. Rules decide. The model advises.
 
 The same diagram as a drawing file: [SVG](images/architecture.svg).
 
@@ -15,14 +15,15 @@ flowchart LR
   %% ---------- Field ----------
   subgraph FIELD["Field"]
     SENSOR["Reefer sensor<br/>(simulator: sim.reefer)"]
-    DRIVER["Driver / supervisor<br/>WhatsApp"]
+    DRIVER["Driver · facility · ops manager<br/>WhatsApp"]
   end
 
   %% ---------- AWS End User Messaging ----------
-  subgraph EUM["AWS End User Messaging"]
+  subgraph EUM["Outbound channels"]
     EUMS["End User Messaging Social<br/>WhatsApp Business Account<br/>20 approved templates"]
-    EUMSMS["SMS (escalation rung)<br/>mocked: India DLT pending"]
-    SES["Amazon SES email<br/>planned: custom domain"]
+    EUMSMS["Amazon SNS<br/>sns:Publish · mocked"]
+    SES["Amazon SES email<br/>code ready, not live"]
+    VOICE["Voice rung<br/>not live · no provider"]
   end
 
   %% ---------- Ingest & orchestration ----------
@@ -30,8 +31,8 @@ flowchart LR
     EB["Amazon EventBridge<br/>bus: oerf-events"]
     INGEST["Lambda: ingest<br/>device registry · debounce · lock"]
     subgraph SFN["AWS Step Functions"]
-      CC["oerf-cold-chain<br/>GatherContext → Diagnose → EngageDriver<br/>→ Assess → Act → Verify"]
-      EP["oerf-engage-party<br/>cadence ladder · waitForTaskToken<br/>Interpret"]
+      CC["oerf-cold-chain<br/>OPEN → GatherContext → Diagnose<br/>→ EngageDriverDiagnosis → Assess<br/>→ SecureFacility → EngageFacilityAccept<br/>→ Act → Verify → QA review → Close"]
+      EP["oerf-engage-party<br/>cadence ladder · voice not live<br/>waitForTaskToken · Interpret"]
     end
     STEPS["Lambda step functions<br/>open · context · diagnose · assess · approval<br/>secure-facility · act · verify · record-containment<br/>begin-disposition · handle-reopen · generate-report<br/>qa · close · no-response · record-failure · escalate · cancel"]
     CAD["Lambda: engage-cadence<br/>Lambda: engage-interpret"]
@@ -46,14 +47,15 @@ flowchart LR
   %% ---------- AI ----------
   subgraph AI["AI (advises, rules decide)"]
     BEDROCK["Amazon Bedrock<br/>Nova Lite + Guardrail"]
-    AGENTCORE["Bedrock AgentCore runtime<br/>(ARM64, behind a flag)"]
+    AGENTCORE["Bedrock AgentCore runtime<br/>InvokeAgentRuntime · ARM64"]
+    JEV["TypeSafe Jev · external<br/>jev:enabled, off by default<br/>reply text leaves AWS"]
   end
 
   %% ---------- Data ----------
   subgraph DATA["Data (tenant-scoped keys)"]
     DDB[("Amazon DynamoDB<br/>tenant · incident (stream) · routing · platform")]
     S3E[("Amazon S3<br/>evidence · reports (SSE-KMS)")]
-    SSM["AWS Systems Manager<br/>Parameter Store<br/>demo numbers · phone id"]
+    SSM["AWS Systems Manager<br/>Parameter Store<br/>demo numbers · phone id<br/>Jev key · SecureString"]
   end
 
   %% ---------- Desk ----------
@@ -85,12 +87,15 @@ flowchart LR
   STEPS <--> DDB
   CC -->|startExecution.sync| EP
   EP --> CAD
-  CAD -. advisory .-> AGENTCORE
+  CAD -->|InvokeAgentRuntime · 2nd · critical_field| AGENTCORE
+  AGENTCORE -->|InvokeModel| BEDROCK
+  CAD -.->|1st · critical_field| JEV
   EP -->|SendViaRouter + task token| ROUTER
   CC -->|decision notice| ROUTER
   ROUTER -->|SendWhatsAppMessage| EUMS
-  ROUTER -.-> EUMSMS
-  ROUTER -.-> SES
+  ROUTER -.->|sns:Publish · mocked| EUMSMS
+  ROUTER -.->|not live| SES
+  ROUTER -.->|not live| VOICE
   ROUTER --> SSM
   EUMS <-->|templates / replies| DRIVER
   EUMS -->|event destination| SNSIN --> SQSIN --> INBOUND
@@ -99,7 +104,7 @@ flowchart LR
   INBOUND -->|resume / cancel| SFN
   INBOUND <--> DDB
   VISION --> BEDROCK
-  S3E --> VISION
+  S3E -->|Object Created · EventBridge| VISION
   REPORT --> S3E
 
   OPS --> CF
@@ -117,13 +122,13 @@ flowchart LR
   GHA -. deploys .-> OBS
 ```
 
-The cold-chain label follows the deployed state machine. Assess runs after the driver engagement returns. An earlier sketch put Assess first.
+The cold-chain label is the main line of `domains/cold_chain_excursion/statemachine.asl.json`. Diagnose goes to EngageDriverDiagnosis, and that engagement returns to Assess. SecureFacility then EngageFacilityAccept, then Act, Verify, the QA review, and Close. Approval is the branch in front of SecureFacility when the machine takes it. Notify, RecordContainment, BeginDisposition, and GenerateReport sit between Verify and Close and are not on the label.
 
 1. The simulator (`sim.reefer`) publishes `TemperatureReading` to the bus `oerf-events`.
 2. Ingest reads the device registry, debounces, takes the shipment lock, writes the incident, and starts `oerf-cold-chain`.
 3. After Diagnose, the cold-chain machine starts `oerf-engage-party` and waits for it. The engagement sends through the channel router and pauses on a task token.
 4. End User Messaging Social delivers the WhatsApp template. The driver's reply arrives on the inbound topic and queue.
-5. Inbound deduplicates, checks ownership, and calls `SendTaskSuccess`. Interpret maps buttons and keywords itself. Free text may ask AgentCore, which returns an advisory and does not choose the intent.
+5. Inbound deduplicates, checks ownership, and calls `SendTaskSuccess`. Interpret maps buttons and keywords itself. Only a `critical_field` free-text reply calls a model. With `jev:enabled`, engage-interpret asks TypeSafe Jev first. With `agentcore:enabled`, it then calls the AgentCore runtime (`InvokeAgentRuntime`), and that runtime calls Nova Lite with the guardrail. Interpret keeps the rule result.
 6. A valid reply gets an acknowledgement through the router (`Thanks, noted: …`). Assess then ranks options from the rules. Act follows that ranking. The router sends the decision notice: continue, or divert to a facility.
 7. The incident stream updates the desk over WebSocket. An operator can confirm, pick an option, or cancel. Those actions re-enter through the inbound queue. Cancel stops the execution.
 
@@ -151,11 +156,11 @@ Decisions are indexed in [docs/adr/README.md](adr/README.md). The wire contract 
 | WhatsApp | End User Messaging Social, sent only by the channel router. Mocked unless `channels:live` is true. The event destination is created when a WhatsApp Business account id is set. |
 | Acknowledgement and decision notice | The router sends them as one-way WhatsApp messages after a valid reply and after Act. |
 | Inbound resume and cancel | Live. Resume is `SendTaskSuccess`. Cancel is `StopExecution` on the cold-chain execution, then `CANCELLED` and the lock is released. |
-| SMS | Mocked unless channels are live. A live send is `sns:Publish` from the router (OERF-116; not Pinpoint). The diagram's dashed SMS rung is that escalation path. |
-| Email | The router can send with SESv2 when email is not mocked and a source address is set. A custom sending domain is not configured. |
-| Voice | The cadence can name a voice rung. The router does not place a call. The text tells the person to reply on WhatsApp. |
-| Evidence | Inbound stores media with `GetWhatsAppMessageMedia`. The analyzer calls Nova Lite and a guardrail when Bedrock is not mocked (`channels:live`). Otherwise it is mocked. |
-| AgentCore | Off unless `agentcore:enabled` is true (dev laptop and GitHub deploys pass true). The runtime is ARM64. It advises. Interpret keeps the rule result. |
+| SMS | Mocked unless channels are live. A live send is `sns:Publish` from the router (OERF-116; not End User Messaging SMS). The diagram's dashed SMS rung is that path. |
+| Email | The router can send with SESv2 when email is not mocked and a source address is set. The diagram says code ready, not live. A custom sending domain is not configured. |
+| Voice | The cadence names a voice rung. The router does not place a call (`voice_provider_not_configured`). The diagram shows that rung as not live. |
+| Evidence | Inbound stores media with `GetWhatsAppMessageMedia`. An S3 Object Created event on the default bus, not SNS and not `oerf-events`, invokes the analyzer. The analyzer calls Nova Lite and a guardrail when Bedrock is not mocked (`channels:live`). Otherwise it is mocked. |
+| AgentCore | Off unless `agentcore:enabled` is true (dev laptop and GitHub deploys pass true). engage-interpret is the caller (`InvokeAgentRuntime`). The runtime is ARM64 and calls Nova Lite. Jev, when `jev:enabled`, is asked first; that flag defaults off. The key is an SSM SecureString. Interpret keeps the rule result. |
 | Desk | The React desk, Cognito hosted UI, REST query and action, and the WebSocket updates. The API stack is behind `dashboard:enabled`. The incident header shows the driver name from `driver_label` and never the number. A stored evidence photo shows as a photo count. |
 | Audience drivers | Dev only (`SANDBOX_JOIN_ENABLED`). `JOIN DRIVER` adds a 24-hour t1 driver and assigns one free seeded shipment ([ADR-040](adr/ADR-040-audience-drivers.md)). Main ignores the keyword. |
 | Reports | `oerf-report-generator` publishes versioned HTML for one incident, or PDF when WeasyPrint is selected. The `GenerateReport` step invokes it through `oerf-step-generate-report`; the role reads the incident rows and writes the report bucket, and it does not send SES. |
